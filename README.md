@@ -5,15 +5,21 @@
 ## 总体架构
 
 ```
-[麦克风] → [fcitx5 C++ addon] ←D-Bus→ [Flutter UI：悬浮窗渲染 + 设置页]
-                │
-                ├── ASR 引擎抽象：FunASR 本地服务（WebSocket 流式），后续多引擎设置页可切换
-                ├── LLM 优化抽象：① OpenAI 兼容 API ② 本地小模型直连（llama.cpp 加载 Qwen，不走 HTTP）
-                └── 定位：addon 从 InputContext 取光标位置计算后下发，Flutter 只负责渲染
+[触发键 右Ctrl] → [fcitx5 C++ addon：状态机/配置/引擎抽象]
+                      │ TCP 127.0.0.1（行式 JSON 状态 + RGBA 帧）
+                      ▼
+              [Flutter voice_ui：MD3 浮窗，跑在 weston headless 上]
+                RepaintBoundary.toImage 快照 → 帧回传
+                      │
+                addon: wl_shm buffer → wl_surface
+                      → zwp_input_popup_surface_v2（借 waylandim 的 IM 连接，
+                        合成器自动定位光标附近，同 classicui）
+                      → 文本经 InputContext::commitString 落到光标处
 ```
 
-- addon 目录：fcitx5 插件（引擎侧：录音、ASR、LLM、提交文本、悬浮窗定位）
-- flutter 目录：UI 渲染 + 设置页
+- `addon/`：fcitx5 插件。配置（`voiceinput.conf.desc` → configtool 设置页，热改即时生效）、按键状态机（HoldRelease/Toggle 两模式 + 阈值）、ASR 引擎抽象（Dummy 流式已实现，FunASR 预留）、UiBridge（flutter 进程管理 + 帧接收）、VoicePopup（popup surface，纯 C libwayland）
+- `flutter/`：MD3 三态 UI（录音=mic+计时+流式 partial / 结果 / 候选），全官方组件，快照帧桥
+- 定位不由我们计算：popup 挂在 waylandim 的 `zwp_input_method_v2` 上，合成器按 text-input 光标矩形放置（协议规定一个 seat 仅一个 IM，必须复用 waylandim 的连接，不能自 bind）
 
 ## 测试环境（一个桌面 = 一个独立容器）
 
@@ -34,7 +40,9 @@
 - kwin/sway 自带 `cap_sys_nice` filecap → rootless 容器 exec EPERM → 镜像内 `setcap -r`
 - 双 GPU 机器只直通第一个渲染节点：NVIDIA 节点参与会跨设备 dmabuf 拷贝失败
 - wf-recorder 0.6.0 两个补丁（`containers/patches/`）：ffmpeg 9 API 适配（Arch 官方）+ dmabuf 绑定版本协商
-- weston headless 是 no-op 渲染器不驱动帧时钟，不能当无头宿主用
+- weston headless 是 no-op 渲染器不驱动帧时钟，不能当无头宿主用（但可以当 flutter 这类普通应用客户端的窗口宿主，应用自身 damage 驱动重绘）
+- niri 26.04 的 KDL 解析不接受旧版单行内联 `animations { workspace-switch { off } }` 写法（解析失败静默回退默认配置 + 弹错误提示窗）
+- 测试环境不设 `GTK_IM_MODULE`：应用必须走原生 text-input-v3（frontend=wayland_v2）才有 IM 激活与光标矩形；设 `=fcitx` 会走 dbus 前端，popup 取不到 IM proxy
 
 ## 使用
 
@@ -66,9 +74,29 @@ make compare             # 汇总历史报告，生成方案对比页（性能/�
 
 ## 当前进度
 
-- ✅ M0-M5：镜像体系、编译链（addon + GTK4/Qt6 测试应用）、三环境无头运行 + 录屏、D-Bus 测试钩子 E2E、用例管线 + 固定格式报告 + 基准对照、性能采样 + 对比页
-- ✅ 实验 001：Fun-ASR-Nano 本地部署验证（CPU 低内存矩阵 + GPU）
-- ⬜ 后续：FunASR 引擎接入（虚拟麦克风 → 流式识别）、LLM 双后端（OpenAI 兼容 API / 本地 Qwen 直连）、Flutter UI（悬浮窗渲染 + 设置页）、真实音频用例替换 Trigger 直通
+- ✅ M0-M5：镜像体系、编译链（addon + Flutter + GTK4/Qt6 测试应用）、三环境无头运行 + 录屏、D-Bus 测试钩子 E2E、用例管线 + 固定格式报告 + 基准对照、性能采样 + 对比页
+- ✅ 实验 001/002/003：FunASR-Nano 部署矩阵、Qwen3.5-0.8B 部署、LLM 直连 vs HTTP
+- ✅ F1-F5（分支 `feat/flutter-overlay-ui`，niri 容器实测）：
+  - F2 addon 核心：配置 schema（configtool 生成设置页）、按键状态机（HoldRelease/Toggle、阈值、触发键组合）、Dummy 流式引擎、SimulateKey 测试钩子
+  - F3 popup surface：借 waylandim IM 连接挂 `zwp_input_popup_surface_v2`，niri 光标附近显示验证通过
+  - F4 Flutter MD3 UI + 快照帧桥：toImage→TCP→wl_shm 全链路，录屏四项断言（录音期可见/内容实时变化/候选切换/idle 隐藏）连续通过
+  - F5 端到端 13/13：候选数字键落点、阈值透传、TriggerMode/LLMEnabled 配置热改即时生效、流式逐字单调递增
+- ⬜ 后续：FunASR 引擎接入（虚拟麦克风 → 流式识别）、LLM 双后端（OpenAI 兼容 API / 本地 Qwen 直连）、真实音频用例替换 Trigger 直通、kde/gnome 环境补测
+
+## Flutter UI 里程碑细节（F1-F5）
+
+- **帧桥**：`RepaintBoundary.toImage` 快照 → 行式 JSON 头 + RGBA 二进制 → addon `pushFrame`（尺寸变化自动重建 shm 池）。TCP 初版够用（360×200×4 ≈ 288KB/帧），unix socket + memfd 零拷贝留作优化
+- **窗口宿主**：flutter 进程由 addon 按需拉起（IC 激活预热，冷启动 ~3s），GTK 窗口开在 weston headless（`VOICEINPUT_UI_DISPLAY`）——cage 是单客户端 kiosk 不能用；weston headless 对普通应用客户端工作正常（此前"不能用"的结论仅限嵌套合成器场景）
+- **配置热改**：写 `conf/voiceinput.config` + D-Bus `org.fcitx.Fcitx.Controller1.ReloadAddonConfig voiceinput`（接口名**不带 5**）→ `reloadConfig` 即时生效
+- **测试触发**：`org.fcitx.VoiceInput.Test`（State/Candidates/SimulateKey/Trigger），确定性驱动状态机；跑 f4/f5 前屏蔽 `/usr/share/dbus-1/services/org.fcitx.Fcitx5.service`（portal/GTK 会 D-Bus 激活第二个 fcitx5 抢名）
+- **验证脚本**：`scripts/env/f3-test.sh`（popup 位置）、`f4-test.sh`（UI 视觉，时间线对齐全视频扫描断言，与实际帧率无关）、`f5-test.sh`（端到端 5 场景）
+
+### 已知限制（如实记录）
+
+- niri 不 clamp popup 在光标上方时的顶部越界（光标贴屏幕顶会裁掉上部）；popup 定位在焦点切换后不更新（niri#4063 类）
+- niri 对 IM popup 的 map/重绘由输出 damage 驱动：静止应用周期可长达 ~3.4s（map、hide 清除都滞后）；真实打字场景应用持续 damage，不受影响——testapp 用标题变化模拟
+- `text_input_rectangle` 事件未到达 addon 客户端（疑在 waylandim 内部事件队列，F4 指针路由若需要再处理）
+- 满栈负载下事件循环定时器节奏劣化 ~2.5x（120ms 配置实测 ~300ms/字，Dummy 流式变慢但不影响功能）
 
 ## 目录结构
 
