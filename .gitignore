@@ -1,0 +1,16 @@
+# 会话/工具
+.zcode/
+
+# 生成物（编译产物、测试报告、录屏、基准录屏 —— 全部不进 git）
+artifacts/
+build/
+dist/
+
+# 模型文件
+*.onnx
+*.gguf
+models/
+
+# 环境与日志
+.env
+*.log
