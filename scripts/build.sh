@@ -14,10 +14,11 @@ podman run --rm \
     "$IMAGE" \
     bash -c '
         set -euxo pipefail
-        cmake -S addon -B build/addon -DCMAKE_BUILD_TYPE=Release \
+        # 在容器内 /tmp 构建，避免挂载卷时间戳导致 make 跳过重编
+        cmake -S /work/addon -B /tmp/build-addon -DCMAKE_BUILD_TYPE=Release \
               -DCMAKE_INSTALL_PREFIX=/work/artifacts/dist
-        cmake --build build/addon -j"$(nproc)"
-        cmake --install build/addon
+        cmake --build /tmp/build-addon -j"$(nproc)"
+        cmake --install /tmp/build-addon
         cmake -S apps -B build/apps -DCMAKE_BUILD_TYPE=Release \
               -DCMAKE_INSTALL_PREFIX=/work/artifacts/dist
         cmake --build build/apps -j"$(nproc)"
