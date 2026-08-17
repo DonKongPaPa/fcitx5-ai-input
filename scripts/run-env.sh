@@ -11,14 +11,22 @@ IMAGE="localhost/voiceinput-${ENV_NAME}:latest"
 OUT="$ROOT/artifacts/envcheck/${ENV_NAME}"
 mkdir -p "$OUT"
 
-# 直通宿主机 GPU 渲染节点（只传第一个：实测传多个渲染节点会导致 wlroots 合成器
-# 创建输出失败 "no outputs available"）；无 GPU 时跳过走软渲染
+# 直通宿主机 GPU 渲染节点（只传第一个）：
+# - 传多个渲染节点会导致 wlroots(cage/sway) 跨 GPU dmabuf 拷贝失败
+#   （双显卡机器上 NVIDIA 节点参与时 screencopy 报 Failed to copy frame）
+# - kwin 用 KWIN_COMPOSE=Q 软件渲染后不再强求第二个节点
+DEV_MODE="${DEV_MODE:-first}"
 DEV_ARGS=()
 for d in /dev/dri/renderD*; do
-    if [ -e "$d" ]; then
-        DEV_ARGS+=(--device "$d")
-        break
-    fi
+    [ -e "$d" ] || continue
+    DEV_ARGS+=(--device "$d")
+    [ "$DEV_MODE" = "first" ] && break
+done
+DEV_ARGS=()
+for d in /dev/dri/renderD*; do
+    [ -e "$d" ] || continue
+    DEV_ARGS+=(--device "$d")
+    [ "$DEV_MODE" = "first" ] && break
 done
 
 podman run --rm \

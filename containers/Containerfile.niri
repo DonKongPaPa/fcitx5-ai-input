@@ -1,39 +1,13 @@
 # niri 测试环境（最小）
-# 无头方案：cage（wlroots headless 后端，60Hz 真实帧时钟）托管 niri 嵌套运行
-#（niri 官方不支持 headless 输出；weston no-op 渲染器不驱动帧时钟，嵌套渲染会卡死）
-# 录屏：wf-recorder（niri 实现 wlr-screencopy 协议）
-FROM voiceinput-base:latest
+# 无头方案：cage(wlroots headless, 60Hz 帧时钟) 托管 niri 嵌套运行
+#（niri 官方不支持 headless 输出，见 niri-wm/niri Discussion #714）
+FROM voiceinput-host:latest
 
 USER root
 
 RUN pacman -Syu --noconfirm --needed \
         niri \
-        cage \
-        weston \
-        meson \
-        ninja \
-        ffmpeg \
-        glm \
-        wayland-protocols \
         && pacman -Scc --noconfirm
-
-# wf-recorder 从 v0.6.0 源码构建 + 两个补丁：
-# 1. ffmpeg9 补丁（来自 Arch 官方打包）：适配 ffmpeg 7.1+ 移除的 AVCodec.pix_fmts 等字段
-# 2. dmabuf v3 补丁（本项目）：上游无条件绑定 dmabuf v4 并调用 v4 专属
-#    get_default_feedback，对只宣告 v3 的合成器（嵌套 niri，weston headless 为
-#    no-op 渲染器）触发协议错误导致输出枚举全废
-ARG WF_RECORDER_VER=0.6.0
-COPY patches/wf-recorder-ffmpeg9-arch.patch /tmp/ffmpeg9.patch
-COPY patches/wf-recorder-fix-dmabuf-v3-bind.patch /tmp/dmabuf.patch
-RUN curl -fsSL "https://codeload.github.com/ammen99/wf-recorder/tar.gz/v${WF_RECORDER_VER}" \
-        | tar xz -C /tmp/ \
-    && cd "/tmp/wf-recorder-${WF_RECORDER_VER}" \
-    && patch -p1 < /tmp/ffmpeg9.patch \
-    && patch -p1 < /tmp/dmabuf.patch \
-    && meson setup build --buildtype=release \
-    && ninja -C build \
-    && ninja -C build install \
-    && rm -rf "/tmp/wf-recorder-${WF_RECORDER_VER}" /tmp/ffmpeg9.patch /tmp/dmabuf.patch
 
 # niri 最小配置：关掉动画便于录屏对比
 RUN mkdir -p /home/testuser/.config/niri && \

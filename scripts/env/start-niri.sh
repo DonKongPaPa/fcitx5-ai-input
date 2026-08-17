@@ -24,7 +24,7 @@ done
 export WAYLAND_DISPLAY="$NIRI_SOCK"
 # 录屏对着 cage（另一个 socket）：嵌套 niri 的 screencopy 不出帧，
 # cage(wlroots) 的 screencopy 正常，画面内容即 niri 的输出
-CAGE_SOCK="$(ls "$XDG_RUNTIME_DIR" | grep -E '^wayland-[0-9]+$' | grep -v "^$NIRI_SOCK$" | head -1)"
+export CAGE_SOCK="$(ls "$XDG_RUNTIME_DIR" | grep -E '^wayland-[0-9]+$' | grep -v "^$NIRI_SOCK$" | head -1)"
 echo "niri 就绪：socket=$NIRI_SOCK（应用） / cage=$CAGE_SOCK（录屏）"
 
 # 2. 公共栈（音频/虚拟麦克风/fcitx5）；ENABLE_STACK=0 时跳过（M2 仅验证合成器+录屏）
@@ -35,10 +35,21 @@ if [ "${ENABLE_STACK:-1}" = "1" ]; then
 fi
 
 # 3. 动画窗口：保持持续重绘（niri 按需渲染，无变化时 screencopy 无帧）
-#    M2 用 weston-flower 占位；M3+ 换成 testapp（自带动画/光标闪烁）
-weston-flower >"$LOG_DIR/flower.log" 2>&1 &
-FLOWER_PID=$!
-sleep 1
+#    MODE=case 时由 case-driver 启动 testapp（自带重绘定时器）
+if [ "$MODE" != "case" ]; then
+    weston-flower >"$LOG_DIR/flower.log" 2>&1 &
+    FLOWER_PID=$!
+    sleep 1
+fi
+
+# 3.5 用例驱动模式：交给 case-driver（自管录屏/触发/采集）
+if [ "$MODE" = "case" ]; then
+    bash "$SCRIPT_DIR/case-driver.sh"
+    kill "$CAGE_PID" 2>/dev/null || true
+    cleanup_all
+    echo "niri 用例执行完成"
+    exit 0
+fi
 
 # 4. 录屏（对着 cage 的 wlr-screencopy；通过 WAYLAND_DISPLAY 指定显示）
 WAYLAND_DISPLAY="$CAGE_SOCK" wf-recorder --no-dmabuf --codec libx264 \

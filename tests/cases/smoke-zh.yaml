@@ -1,0 +1,8 @@
+{
+  "id": "smoke-zh",
+  "desc": "中文短句链路冒烟：D-Bus 触发 → addon 提交 → testapp 收到",
+  "trigger_text": "你好世界测试",
+  "expected": "你好世界测试",
+  "audio": null,
+  "params": {}
+}

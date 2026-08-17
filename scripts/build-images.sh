@@ -6,7 +6,7 @@ ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 CTX="$ROOT/containers"
 TARGETS=("${@:-}")
 if [ ${#TARGETS[@]} -eq 0 ] || [ "${TARGETS[0]}" = "all" ]; then
-    TARGETS=(base build niri kde gnome funasr)
+    TARGETS=(base host build niri kde gnome funasr)
 fi
 
 build() {
@@ -19,16 +19,29 @@ build() {
     podman build -t "$tag:latest" -f "$CTX/Containerfile.$name" "$CTX"
 }
 
-# 依赖顺序：base → build/桌面/funasr
+ensure_image() {
+    local name="$1"
+    if ! podman image exists "localhost/voiceinput-$name:latest"; then
+        echo ">> voiceinput-$name 不存在，先构建"
+        build "$name"
+    fi
+}
+
+# 依赖顺序：base → host → build/桌面/funasr
 for t in "${TARGETS[@]}"; do
     case "$t" in
         base) build base ;;
-        build|niri|kde|gnome|funasr)
-            # 依赖 base 先存在
-            if ! podman image exists localhost/voiceinput-base:latest; then
-                echo ">> voiceinput-base 不存在，先构建 base"
-                build base
-            fi
+        host)
+            ensure_image base
+            build host
+            ;;
+        build|funasr)
+            ensure_image base
+            build "$t"
+            ;;
+        niri|kde|gnome)
+            ensure_image base
+            ensure_image host
             build "$t"
             ;;
         *) echo "未知目标: $t"; exit 1 ;;

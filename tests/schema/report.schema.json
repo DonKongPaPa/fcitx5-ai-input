@@ -1,0 +1,77 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://github.com/DonKongPaPa/fcitx5-voice-input/report.schema.json",
+  "title": "fcitx5-voice-input 测试报告",
+  "description": "每份报告对应一个环境一次运行；schema_version 管理格式演进",
+  "type": "object",
+  "required": ["schema_version", "run_id", "git", "env", "build", "summary", "cases"],
+  "properties": {
+    "schema_version": { "type": "string", "const": "1" },
+    "run_id": { "type": "string", "pattern": "^[0-9]{8}-[0-9]{6}-(niri|kde|gnome)$" },
+    "created_at": { "type": "string", "format": "date-time" },
+    "git": {
+      "type": "object",
+      "required": ["commit", "branch", "dirty"],
+      "properties": {
+        "commit": { "type": "string" },
+        "branch": { "type": "string" },
+        "dirty": { "type": "boolean" }
+      }
+    },
+    "env": {
+      "type": "object",
+      "required": ["image"],
+      "properties": {
+        "image": { "type": "string" },
+        "compositor": { "type": "string" },
+        "fcitx5": { "type": "string" }
+      }
+    },
+    "build": {
+      "type": "object",
+      "properties": {
+        "addon": { "type": "string", "enum": ["ok", "fail", "skip"] },
+        "flutter": { "type": "string", "enum": ["ok", "fail", "skip"] }
+      }
+    },
+    "summary": {
+      "type": "object",
+      "required": ["total", "passed", "failed", "duration_s"],
+      "properties": {
+        "total": { "type": "integer", "minimum": 0 },
+        "passed": { "type": "integer", "minimum": 0 },
+        "failed": { "type": "integer", "minimum": 0 },
+        "duration_s": { "type": "number", "minimum": 0 }
+      }
+    },
+    "perf": {
+      "type": "object",
+      "description": "性能监控（M5 接入，可为 null）",
+      "properties": {
+        "system": { "type": "object" },
+        "processes": { "type": "object" },
+        "latency_ms": { "type": "object" }
+      }
+    },
+    "cases": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "required": ["id", "status", "expected", "actual"],
+        "properties": {
+          "id": { "type": "string" },
+          "status": { "type": "string", "enum": ["pass", "fail"] },
+          "expected": { "type": "string" },
+          "asr_raw": { "type": "string", "description": "ASR 原始输出（引擎接入后填写）" },
+          "llm_polished": { "type": "string", "description": "LLM 润色后输出（引擎接入后填写）" },
+          "actual": { "type": "string" },
+          "diff_note": { "type": "string" },
+          "recording": { "type": "string", "description": "相对 artifacts/ 的录屏路径" },
+          "baseline": { "type": "string", "description": "基准录屏路径（存在时填写）" },
+          "latency_ms": { "type": "object" },
+          "duration_s": { "type": "number" }
+        }
+      }
+    }
+  }
+}

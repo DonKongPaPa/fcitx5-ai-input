@@ -1,0 +1,43 @@
+# 共享宿主镜像：cage(wlroots headless) + 补丁版 wf-recorder
+# 三个桌面环境（niri/kwin/gnome-shell）都以嵌套客户端运行在 cage 里，
+# 录屏统一走 cage 的 wlr-screencopy（画面即被测合成器的输出）。
+FROM voiceinput-base:latest
+
+USER root
+
+RUN pacman -Syu --noconfirm --needed \
+        cage \
+        sway \
+        weston \
+        meson \
+        ninja \
+        ffmpeg \
+        glm \
+        wayland-protocols \
+        && pacman -Scc --noconfirm
+
+# cage/sway/kwin 等合成器自带 cap_sys_nice 文件能力，rootless 容器缺该能力会 exec EPERM；
+# 该能力只用于实时调度优先级，测试环境不需要，统一移除
+RUN setcap -r /usr/sbin/sway /usr/sbin/kwin_wayland 2>/dev/null || true
+
+# wf-recorder 从 v0.6.0 源码构建 + 两个补丁：
+# 1. ffmpeg9 补丁（来自 Arch 官方打包）：适配 ffmpeg 7.1+ 移除的 AVCodec.pix_fmts 等字段
+# 2. dmabuf v3 补丁（本项目）：上游无条件绑定 dmabuf v4 并调用 v4 专属
+#    get_default_feedback，对只宣告 v3 的合成器触发协议错误导致输出枚举全废
+ARG WF_RECORDER_VER=0.6.0
+COPY patches/wf-recorder-ffmpeg9-arch.patch /tmp/ffmpeg9.patch
+COPY patches/wf-recorder-fix-dmabuf-v3-bind.patch /tmp/dmabuf.patch
+RUN curl -fsSL "https://codeload.github.com/ammen99/wf-recorder/tar.gz/v${WF_RECORDER_VER}" \
+        | tar xz -C /tmp/ \
+    && cd "/tmp/wf-recorder-${WF_RECORDER_VER}" \
+    && patch -p1 < /tmp/ffmpeg9.patch \
+    && patch -p1 < /tmp/dmabuf.patch \
+    && meson setup build --buildtype=release \
+    && ninja -C build \
+    && ninja -C build install \
+    && rm -rf "/tmp/wf-recorder-${WF_RECORDER_VER}" /tmp/ffmpeg9.patch /tmp/dmabuf.patch
+
+USER testuser
+WORKDIR /home/testuser
+
+CMD ["/bin/bash"]
