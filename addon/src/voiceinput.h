@@ -15,6 +15,7 @@
 namespace fcitx {
 
 class VoicePopup;
+class UiBridge;
 class VoiceInputEngine;
 
 /**
@@ -103,6 +104,7 @@ private:
     Instance *instance_;
     VoiceInputConfig config_;
     std::unique_ptr<VoicePopup> popup_;
+    std::unique_ptr<UiBridge> bridge_; // F4：flutter UI 桥
     dbus::Bus *bus_ = nullptr;
     std::unique_ptr<TestService> testService_;
 
@@ -115,6 +117,7 @@ private:
     std::string partial_;                 // 当前流式中间文本
     std::string finalText_;              // ASR 最终文本
     std::vector<std::string> candidates_; // LLM 候选（[0]=润色 [1]=原始 ...）
+    uint64_t recordStartUs_ = 0;          // 录音起点（推 elapsed_ms）
 };
 
 class VoiceInputEngineFactory : public AddonFactory {

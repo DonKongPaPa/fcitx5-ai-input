@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# 在编译容器中构建 addon（后续接入 flutter / testapp），产物装入 artifacts/dist/
+# 在编译容器中构建 addon + flutter UI + testapp，产物装入 artifacts/dist/
 set -euo pipefail
 
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
@@ -19,10 +19,19 @@ podman run --rm \
               -DCMAKE_INSTALL_PREFIX=/work/artifacts/dist
         cmake --build /tmp/build-addon -j"$(nproc)"
         cmake --install /tmp/build-addon
-        cmake -S apps -B build/apps -DCMAKE_BUILD_TYPE=Release \
+        # flutter UI（linux desktop, release）→ dist/lib/fcitx5-voiceinput/ui/bundle
+        export PATH=/opt/flutter/bin:$PATH
+        cd /work/flutter
+        flutter build linux --release
+        rm -rf /work/artifacts/dist/lib/fcitx5-voiceinput
+        mkdir -p /work/artifacts/dist/lib/fcitx5-voiceinput/ui
+        cp -r build/linux/x64/release/bundle \
+              /work/artifacts/dist/lib/fcitx5-voiceinput/ui/
+        # testapp
+        cmake -S /work/apps -B /tmp/build/apps -DCMAKE_BUILD_TYPE=Release \
               -DCMAKE_INSTALL_PREFIX=/work/artifacts/dist
-        cmake --build build/apps -j"$(nproc)"
-        cmake --install build/apps
+        cmake --build /tmp/build/apps -j"$(nproc)"
+        cmake --install /tmp/build/apps
     '
 
 echo ">> 产物："

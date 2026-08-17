@@ -53,8 +53,15 @@ static void on_focus_in(GtkEventControllerFocus *ctrl, gpointer user_data) {
     emit_json(GTK_ENTRY(user_data), "focus-in");
 }
 
-/* 持续重绘：保证录屏帧连续（wlroots/niri 按需渲染） */
+/* 持续重绘：保证录屏帧连续（wlroots/niri 按需渲染）。
+ * 注意 queue_draw 内容不变时 GTK4 不产生真实 damage，niri 对静止应用
+ * 的输出重绘周期可长达 ~3.4s（IM popup 等 overlay 更新被拖慢）——
+ * 用标题变化制造每秒真实 damage，模拟真实打字应用 */
 static gboolean on_tick(gpointer user_data) {
+    static int sec = 0;
+    char buf[64];
+    snprintf(buf, sizeof(buf), "voiceinput-testapp-gtk %d", sec++);
+    gtk_window_set_title(GTK_WINDOW(user_data), buf);
     gtk_widget_queue_draw(GTK_WIDGET(user_data));
     return G_SOURCE_CONTINUE;
 }

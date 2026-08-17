@@ -57,11 +57,18 @@ public:
     ~VoicePopup();
 
     bool ready();
-    // 显示（F3：色块；F4：Flutter 帧）。ic 用于取 waylandim 的 IM proxy
+    // 预建：IC 激活时创建 popup 并提交透明帧（niri 对 IM popup 的 map 有
+    // ~2s 延迟，提前走完 map 流水线，录音开始即可实时换帧）
+    void prepare(InputContext *ic);
+    // 显示（ic 用于取 waylandim 的 IM proxy）。
+    // flutter 模式：只确保 popup 就绪，等首帧 commit；色块模式（桥不可用
+    // 时的回退）立即绘制测试帧
     void show(InputContext *ic);
     void hide();
-    // F4 帧桥入口：写入一帧 RGBA（w×h），尺寸变化时自动重建 buffer
+    // F4 帧桥入口：写入一帧 RGBA（w×h），尺寸变化时自动重建 shm 池
     void pushFrame(const uint8_t *rgba, int w, int h);
+    void resize(int w, int h); // 重建 shm 池（帧尺寸变化）
+    void setPatternMode(bool p) { patternMode_ = p; } // 桥不可用回退色块
 
     // wayland C 回调（public：listener 结构需要函数指针）
     static void registryGlobalImpl(void *data, wl_registry *reg, uint32_t name,
@@ -101,6 +108,7 @@ private:
     int width_ = 0, height_ = 0;
 
     bool visible_ = false;
+    bool patternMode_ = false; // 桥不可用时回退 F3 色块
     bool isImConnection_ = false; // registry 见到 IM manager 即 waylandim 连接
     int cursorX_ = 0, cursorY_ = 0, cursorW_ = 0, cursorH_ = 0; // 光标矩形
 

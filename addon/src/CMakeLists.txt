@@ -2,7 +2,14 @@ add_library(voiceinput MODULE)
 target_sources(voiceinput PRIVATE
     voiceinput.cpp
     popup_surface.cpp
+    ui_bridge.cpp
 )
+# flutter bundle 安装位置（build.sh 拷入 dist；容器侧 /usr/lib/fcitx5-voiceinput/ui/bundle）
+# 注意：不能用 CMAKE_INSTALL_FULL_LIBDIR——构建时 prefix 是 dist 暂存目录，
+# 会把暂存路径编进二进制；这里要的是目标系统的运行时路径
+set(VOICEINPUT_UI_LIBDIR "/usr/lib" CACHE STRING "Runtime libdir of flutter UI bundle")
+target_compile_definitions(voiceinput PRIVATE
+    VOICEINPUT_UI_PATH="${VOICEINPUT_UI_LIBDIR}/fcitx5-voiceinput/ui/bundle/voice_ui")
 target_link_libraries(voiceinput PRIVATE Fcitx5::Core)
 find_package(Fcitx5ModuleDBus CONFIG REQUIRED)
 target_link_libraries(voiceinput PRIVATE Fcitx5::Module::DBus)

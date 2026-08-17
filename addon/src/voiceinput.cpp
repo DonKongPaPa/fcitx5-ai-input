@@ -1,5 +1,6 @@
 #include "voiceinput.h"
 #include "popup_surface.h"
+#include "ui_bridge.h"
 
 #include <fcitx-config/iniparser.h>
 #include <fcitx-utils/keysym.h>
@@ -25,6 +26,7 @@ VoiceInputEngine::VoiceInputEngine(Instance *instance)
 
     asr_ = std::make_unique<DummyAsrEngine>();
     popup_ = std::make_unique<VoicePopup>(instance_);
+    bridge_ = std::make_unique<UiBridge>(instance_, popup_.get());
 
     // 注册测试 D-Bus 服务（addon 加载期 dbus 未就绪时由 activate 补注册）
     ensureTestService();
@@ -67,8 +69,16 @@ void VoiceInputEngine::ensureTestService() {
 void VoiceInputEngine::activate(const InputMethodEntry & /*entry*/,
                                 InputContextEvent &event) {
     ensureTestService();
+    // 预热 flutter UI：IC 首次激活即拉起（冷启动 ~3s，等录音才拉就晚了）
+    if (bridge_) {
+        bridge_->ensureStarted();
+    }
     if (state_ == State::Idle) {
         sessionIc_ = event.inputContext();
+        // 预建 popup（透明帧提前走完 niri ~2s 的 map 流水线）
+        if (popup_ && sessionIc_) {
+            popup_->prepare(sessionIc_);
+        }
     }
     uiNotify("activated");
 }
@@ -201,8 +211,18 @@ void VoiceInputEngine::startThresholdTimer() {
 void VoiceInputEngine::beginRecording(InputContext *ic) {
     state_ = State::Recording;
     toggleReleased_ = false;
+    recordStartUs_ = nowUs();
     if (popup_) {
-        popup_->show(ic); // F3 色块验证；F4 换 Flutter 帧
+        popup_->show(ic);
+    }
+    if (bridge_ && bridge_->ensureStarted()) {
+        bridge_->sendRecording("", 0);
+    } else {
+        // 桥不可用：回退 F3 色块（popup 直接绘制）
+        if (popup_) {
+            popup_->setPatternMode(true);
+            popup_->show(ic);
+        }
     }
     partial_.clear();
     finalText_.clear();
@@ -231,6 +251,9 @@ void VoiceInputEngine::onAsrPartial(const std::string &text) {
         return;
     }
     partial_ = text;
+    if (bridge_) {
+        bridge_->sendRecording(partial_, (nowUs() - recordStartUs_) / 1000);
+    }
     uiNotify("partial", text);
 }
 
@@ -243,9 +266,16 @@ void VoiceInputEngine::onAsrFinish(const std::string &text) {
         // Dummy 阶段：候选 = [润色版, 原始版]（润色=保尾标点，真实 LLM 后替换）
         candidates_ = {polish(finalText_), finalText_};
         state_ = State::Candidates;
+        if (bridge_) {
+            bridge_->sendCandidates(finalText_, candidates_);
+        }
         uiNotify("candidates", joinCandidates());
     } else {
         state_ = State::Result;
+        if (bridge_) {
+            bridge_->sendResult(finalText_,
+                                config_.popupTimeoutMs.value());
+        }
         uiNotify("result", finalText_);
         startResultTimer();
     }
@@ -285,6 +315,9 @@ void VoiceInputEngine::commitCandidate(size_t index, InputContext *ic) {
 void VoiceInputEngine::enterIdle() {
     if (popup_) {
         popup_->hide();
+    }
+    if (bridge_) {
+        bridge_->sendIdle();
     }
     state_ = State::Idle;
     thresholdTimer_.reset();

@@ -220,47 +220,121 @@ static void paintTestPattern(uint8_t *argb, int w, int h) {
     }
 }
 
+void VoicePopup::prepare(InputContext *ic) {
+    std::lock_guard<std::mutex> lock(mutex_);
+    if (!ensurePopup(ic)) {
+        return;
+    }
+    // 全透明首帧：触发 map 流水线（内容仍不可见）
+    size_t bufSize = static_cast<size_t>(width_) * height_ * 4;
+    uint8_t *dst = pixels_ + cur_ * bufSize;
+    memset(dst, 0, bufSize);
+    wl_surface_attach(surface_, buffers_[cur_], 0, 0);
+    damageSurface(surface_, compositorVersion_, width_, height_);
+    wl_surface_commit(surface_);
+    cur_ = 1 - cur_;
+    wl_display_flush(display_);
+}
+
 void VoicePopup::show(InputContext *ic) {
     std::lock_guard<std::mutex> lock(mutex_);
     if (!ensurePopup(ic)) {
         FCITX_WARN() << "VoicePopup::show but popup not ready";
         return;
     }
-    size_t bufSize = width_ * height_ * 4;
-    uint8_t *dst = pixels_ + cur_ * bufSize;
-    paintTestPattern(dst, width_, height_);
-    wl_surface_attach(surface_, buffers_[cur_], 0, 0);
-    damageSurface(surface_, compositorVersion_, width_, height_);
-    wl_surface_commit(surface_);
-    cur_ = 1 - cur_;
+    if (patternMode_) {
+        size_t bufSize = width_ * height_ * 4;
+        uint8_t *dst = pixels_ + cur_ * bufSize;
+        paintTestPattern(dst, width_, height_);
+        wl_surface_attach(surface_, buffers_[cur_], 0, 0);
+        damageSurface(surface_, compositorVersion_, width_, height_);
+        wl_surface_commit(surface_);
+        cur_ = 1 - cur_;
+        wl_display_flush(display_);
+    }
+    // flutter 模式：不主动 commit，等 UiBridge 首帧（无 buffer 不 map）
     visible_ = true;
-    wl_display_flush(display_);
 }
 
 void VoicePopup::hide() {
     std::lock_guard<std::mutex> lock(mutex_);
-    // 照抄 classicui：隐藏即销毁 popup+surface（pool 复用）
-    destroyPopupSurface();
-    im_ = nullptr;
-    icRef_ = {};
+    // 不销毁 surface：销毁不产生 damage，niri 会残留旧画面数秒；
+    // 提交全透明帧用自己的 damage 立即清掉内容，popup 保留复用（已预热）
+    if (surface_ && buffers_[0]) {
+        size_t bufSize = static_cast<size_t>(width_) * height_ * 4;
+        memset(pixels_ + cur_ * bufSize, 0, bufSize);
+        wl_surface_attach(surface_, buffers_[cur_], 0, 0);
+        damageSurface(surface_, compositorVersion_, width_, height_);
+        wl_surface_commit(surface_);
+        cur_ = 1 - cur_;
+    }
     visible_ = false;
     if (display_) {
         wl_display_flush(display_);
     }
 }
 
-void VoicePopup::pushFrame(const uint8_t *rgba, int w, int h) {
+// 重建 shm 池（帧尺寸变化时）；surface/popup 不动
+void VoicePopup::resize(int w, int h) {
     std::lock_guard<std::mutex> lock(mutex_);
-    if (!surface_ || !buffers_[0] || !popup_) {
+    if (!pool_ || (w == width_ && h == height_)) {
         return;
     }
-    // F4：尺寸变化时暂不重建（Flutter 侧固定逻辑分辨率），仅拷贝
+    for (auto &b : buffers_) {
+        if (b) {
+            wl_buffer_destroy(b);
+            b = nullptr;
+        }
+    }
+    wl_shm_pool_destroy(pool_);
+    munmap(pixels_, static_cast<size_t>(width_) * height_ * 4 * 2);
+    close(poolFd_);
+
+    width_ = w;
+    height_ = h;
+    size_t stride = static_cast<size_t>(w) * 4;
+    size_t bufSize = stride * h;
+    size_t poolSize = bufSize * 2;
+    poolFd_ = memfd_create("vi-popup", MFD_CLOEXEC);
+    ftruncate(poolFd_, poolSize);
+    pixels_ = static_cast<uint8_t *>(
+        mmap(nullptr, poolSize, PROT_READ | PROT_WRITE, MAP_SHARED, poolFd_, 0));
+    pool_ = wl_shm_create_pool(shm_, poolFd_, poolSize);
+    for (int i = 0; i < 2; ++i) {
+        buffers_[i] = wl_shm_pool_create_buffer(
+            pool_, i * bufSize, w, h, stride, WL_SHM_FORMAT_ARGB8888);
+    }
+    cur_ = 0;
+    FCITX_INFO() << "VoicePopup: shm pool resized to " << w << "x" << h;
+}
+
+void VoicePopup::pushFrame(const uint8_t *rgba, int w, int h) {
     if (w != width_ || h != height_) {
-        FCITX_WARN() << "VoicePopup: frame size mismatch " << w << "x" << h
-                     << " != " << width_ << "x" << height_;
+        resize(w, h);
+    }
+    std::lock_guard<std::mutex> lock(mutex_);
+    // 隐藏后丢弃迟到帧（hide 已提交透明帧，idle 态的帧会把它覆盖回来）
+    if (!visible_ || !surface_ || !buffers_[0] || !popup_) {
         return;
     }
-    size_t bufSize = width_ * height_ * 4;
+    static int frameLogCount = 0; // 调试：前3帧记日志
+    if (frameLogCount < 3) {
+        ++frameLogCount;
+        size_t nz = 0, alpha0 = 0;
+        for (size_t i = 0; i < static_cast<size_t>(w) * h; ++i) {
+            if (rgba[i * 4] | rgba[i * 4 + 1] | rgba[i * 4 + 2]) {
+                ++nz;
+            }
+            if (rgba[i * 4 + 3] == 0) {
+                ++alpha0;
+            }
+        }
+        FCITX_INFO() << "VoicePopup: frame #" << frameLogCount << " " << w
+                     << "x" << h << " 非零像素=" << nz << " 全透明=" << alpha0
+                     << " surface=" << (surface_ ? 1 : 0)
+                     << " popup=" << (popup_ ? 1 : 0);
+    }
+    size_t bufSize = static_cast<size_t>(width_) * height_ * 4;
     uint8_t *dst = pixels_ + cur_ * bufSize;
     // RGBA→BGRA（WL_SHM_FORMAT_ARGB8888 小端即 BGRA 字节序）
     for (int i = 0; i < w * h; ++i) {
