@@ -1,0 +1,9 @@
+[Addon]
+Name=Voice Input
+Category=InputMethod
+Version=@PROJECT_VERSION@
+Type=SharedLibrary
+Library=voiceinput
+Depends=
+Priority=Default
+Enabled=True

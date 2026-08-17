@@ -1,0 +1,62 @@
+# 公共基础镜像：Arch + 中国镜像源 + 三个桌面环境共享的运行时
+FROM archlinux:base-devel
+
+COPY scripts/setup-mirrors.sh /tmp/setup-mirrors.sh
+RUN sh /tmp/setup-mirrors.sh && rm /tmp/setup-mirrors.sh
+
+# 公共运行时：fcitx5 全家桶 + CJK 字体 + 音频(pipewire) + dbus + 软渲染 + 测试应用依赖
+RUN pacman -Syu --noconfirm --needed \
+        fcitx5 \
+        fcitx5-gtk \
+        fcitx5-qt \
+        fcitx5-configtool \
+        noto-fonts-cjk \
+        noto-fonts-emoji \
+        fontconfig \
+        dbus \
+        pipewire \
+        pipewire-pulse \
+        wireplumber \
+        libpulse \
+        pipewire-audio \
+        mesa \
+        gst-plugins-base \
+        gst-plugins-good \
+        gst-plugins-bad \
+        gtk4 \
+        gtk3 \
+        qt6-base \
+        qt6-wayland \
+        wayland \
+        xdg-desktop-portal \
+        python \
+        ripgrep \
+        jq \
+        vim \
+        less \
+        procps-ng \
+        net-tools \
+        iproute2 \
+        && pacman -Scc --noconfirm
+
+# 中文 locale：官方镜像 NoExtract 裁掉了 locale 源文件（setup-mirrors.sh 已删 NoExtract），
+# 从 glibc 包里直接解出 zh_CN 源文件再生成
+RUN sed -i 's/^#zh_CN.UTF-8/zh_CN.UTF-8/' /etc/locale.gen && \
+        pacman -Sw --noconfirm glibc && \
+        bsdtar -xpf /var/cache/pacman/pkg/glibc-*.pkg.tar.zst \
+            -C / usr/share/i18n/locales/zh_CN usr/share/i18n/locales/zh_TW && \
+        locale-gen
+
+# 非 root 测试用户（uid/gid 固定，方便挂载目录权限）
+RUN useradd -m -u 1000 -s /bin/bash testuser && \
+        mkdir -p /run/user/1000 && chown testuser:testuser /run/user/1000
+
+ENV XDG_RUNTIME_DIR=/run/user/1000 \
+    XDG_SESSION_TYPE=wayland \
+    LANG=zh_CN.UTF-8 \
+    LC_ALL=zh_CN.UTF-8
+
+USER testuser
+WORKDIR /home/testuser
+
+CMD ["/bin/bash"]

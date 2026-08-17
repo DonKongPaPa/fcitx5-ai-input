@@ -1,0 +1,22 @@
+# KDE 测试环境（最小：仅 kwin，不装完整 Plasma 会话）
+# 无头方案：kwin_wayland --virtual 虚拟输出（KWin 内置 CI/云端测试后端）
+# 录屏：gpu-screen-recorder（AUR，portal 方式，KDE 下可用）；Spectacle 作为备选
+FROM voiceinput-base:latest
+
+USER root
+
+RUN pacman -Syu --noconfirm --needed \
+        kwin \
+        spectacle \
+        plasma-integration \
+        xdg-desktop-portal-kde \
+        && pacman -Scc --noconfirm
+
+# gpu-screen-recorder 从 AUR 构建（官方仓库没有）
+COPY scripts/build-aur.sh /tmp/build-aur.sh
+RUN sh /tmp/build-aur.sh gpu-screen-recorder && rm /tmp/build-aur.sh && pacman -Scc --noconfirm
+
+USER testuser
+WORKDIR /home/testuser
+
+CMD ["/bin/bash"]

@@ -1,0 +1,17 @@
+# GNOME 测试环境（最小：gnome-shell，不装完整 GNOME 会话套件）
+# 无头方案：gnome-shell --wayland --headless（mutter/gnome-shell 为 CI 提供的无头模式）
+# 录屏：gnome-shell 内置 org.gnome.Shell.Screencast D-Bus API（直接写 webm 文件）
+FROM voiceinput-base:latest
+
+USER root
+
+RUN pacman -Syu --noconfirm --needed \
+        gnome-shell \
+        gnome-session \
+        xdg-desktop-portal-gnome \
+        && pacman -Scc --noconfirm
+
+USER testuser
+WORKDIR /home/testuser
+
+CMD ["/bin/bash"]

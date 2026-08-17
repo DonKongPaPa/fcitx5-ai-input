@@ -1,0 +1,44 @@
+# 编译镜像：base + 构建工具链 + Flutter SDK（中国镜像下载）
+# 依赖 voiceinput-base 先构建
+FROM voiceinput-base:latest
+
+USER root
+
+# fcitx5 插件编译链（base-devel 已含 gcc/make；补 ninja/ECM 及 flutter 所需工具）
+RUN pacman -Syu --noconfirm --needed \
+        ninja \
+        cmake \
+        extra-cmake-modules \
+        clang \
+        gettext \
+        git \
+        unzip \
+        zip \
+        && pacman -Scc --noconfirm
+
+# Flutter SDK（flutter-io.cn 中国镜像；版本与 sha256 固定保证可重现）
+ARG FLUTTER_VERSION=3.47.0
+ARG FLUTTER_SHA256=26cd99d3d94b1367e6b50535a18aeef0282c10a535bbe3ec493534dcdab75296
+ARG FLUTTER_MIRROR=https://storage.flutter-io.cn/flutter_infra_release/releases
+RUN curl -fsSL -o /tmp/flutter.tar.xz \
+        "${FLUTTER_MIRROR}/stable/linux/flutter_linux_${FLUTTER_VERSION}-stable.tar.xz" \
+    && echo "${FLUTTER_SHA256}  /tmp/flutter.tar.xz" | sha256sum -c - \
+    && tar -xJf /tmp/flutter.tar.xz -C /opt/ \
+    && rm /tmp/flutter.tar.xz \
+    && chown -R testuser:testuser /opt/flutter \
+    && su testuser -c 'git config --global --add safe.directory /opt/flutter'
+
+ENV PATH="/opt/flutter/bin:${PATH}" \
+    FLUTTER_STORAGE_BASE_URL=https://storage.flutter-io.cn \
+    PUB_HOSTED_URL=https://pub.flutter-io.cn
+
+USER testuser
+
+# 预热：接受许可并拉取 linux 桌面工件（构建时走中国镜像）
+RUN flutter config --no-analytics \
+    && flutter precache --linux \
+    && flutter --version
+
+WORKDIR /work
+
+CMD ["/bin/bash"]

@@ -1,0 +1,59 @@
+# fcitx5-voice-input 构建测试管线
+# 用法示例：
+#   make images            # 构建全部镜像
+#   make build             # 编译 addon/flutter/testapp → artifacts/dist/
+#   make test ENV=niri     # 单环境测试（kde/gnome 同理）
+#   make test-all          # 依次运行三个独立容器
+#   make shell ENV=niri    # 交互式进入环境容器调试
+#   make baseline ENV=niri # 将通过用例录屏存为本地基准
+#   make compare           # 汇总历史报告生成方案对比页
+
+ENV ?= niri
+RUN_ID ?=
+
+.PHONY: images image-base image-build image-niri image-kde image-gnome image-funasr \
+        build test test-all shell envcheck baseline report compare
+
+images:
+	./scripts/build-images.sh all
+
+image-base:
+	./scripts/build-images.sh base
+image-build:
+	./scripts/build-images.sh build
+image-niri:
+	./scripts/build-images.sh niri
+image-kde:
+	./scripts/build-images.sh kde
+image-gnome:
+	./scripts/build-images.sh gnome
+image-funasr:
+	./scripts/build-images.sh funasr
+
+build:
+	./scripts/build.sh
+
+# M2：单环境无头/录屏验证（不出正式报告）
+envcheck:
+	./scripts/run-env.sh $(ENV)
+
+# M4+：正式测试管线
+test:
+	./scripts/run-test.sh $(ENV)
+
+test-all:
+	./scripts/run-test.sh niri
+	./scripts/run-test.sh kde
+	./scripts/run-test.sh gnome
+
+shell:
+	MODE=shell DURATION=0 ./scripts/run-env.sh $(ENV)
+
+baseline:
+	./scripts/baseline.sh $(ENV)
+
+report:
+	./scripts/report.sh $(RUN_ID)
+
+compare:
+	./scripts/compare.py

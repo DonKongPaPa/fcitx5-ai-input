@@ -1,0 +1,34 @@
+# niri 测试环境（最小）
+# 无头方案：weston headless 后端作为宿主，niri 以嵌套客户端运行
+#（niri 官方不支持 headless 输出，见 niri-wm/niri Discussion #714）
+# 录屏：wf-recorder（niri 实现 wlr-screencopy 协议）
+FROM voiceinput-base:latest
+
+USER root
+
+RUN pacman -Syu --noconfirm --needed \
+        niri \
+        weston \
+        wf-recorder \
+        && pacman -Scc --noconfirm
+
+# niri 最小配置：关掉动画便于录屏对比
+RUN mkdir -p /home/testuser/.config/niri && \
+    printf '%s\n' \
+        'input {' \
+        '}' \
+        'animations {' \
+        '    workspace-switch {' \
+        '        off' \
+        '    }' \
+        '    window-open {' \
+        '        off' \
+        '    }' \
+        '}' \
+        > /home/testuser/.config/niri/config.kdl && \
+    chown -R testuser:testuser /home/testuser/.config
+
+USER testuser
+WORKDIR /home/testuser
+
+CMD ["/bin/bash"]

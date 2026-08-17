@@ -1,0 +1,6 @@
+[InputMethod]
+Name=Voice Input
+Icon=fcitx-voiceinput
+Label=语
+LangCode=zh
+Addon=voiceinput

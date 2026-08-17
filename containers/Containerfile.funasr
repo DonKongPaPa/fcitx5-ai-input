@@ -1,0 +1,27 @@
+# FunASR 运行时镜像（真实引擎，手动测试用；自动化管线使用 tests/mock 的确定性 Mock）
+# 注意：体积大（torch + 模型），按需构建：scripts/build-images.sh funasr
+FROM archlinux:base-devel
+
+COPY scripts/setup-mirrors.sh /tmp/setup-mirrors.sh
+RUN sh /tmp/setup-mirrors.sh && rm /tmp/setup-mirrors.sh
+
+RUN pacman -Syu --noconfirm --needed python python-pip && pacman -Scc --noconfirm
+
+# pypi 走 TUNA 镜像
+RUN pip config set global.index-url https://pypi.tuna.tsinghua.edu.cn/simple
+
+# FunASR + torch（tuna 源的 torch 为 CUDA 合包，仅 CPU 运行也可用，只是体积大；
+# 如需 CPU 精简版可改用 --index-url https://download.pytorch.org/whl/cpu）
+RUN pip install --no-cache-dir funasr torch torchaudio
+
+# 模型运行时从 ModelScope（国内源）自动下载到 /models
+ENV MODELS_DIR=/models
+RUN useradd -m -u 1000 testuser && mkdir -p /models && chown testuser:testuser /models
+USER testuser
+WORKDIR /home/testuser
+
+# 入口：FunASR WebSocket 流式服务（M3+ 接入真实引擎时补全为正式服务脚本）
+COPY --chown=testuser:testuser scripts/funasr-entrypoint.py /home/testuser/funasr-entrypoint.py
+EXPOSE 10095
+
+CMD ["python", "/home/testuser/funasr-entrypoint.py"]
