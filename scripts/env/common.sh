@@ -60,9 +60,16 @@ start_audio() {
 # 用法：play_to_mic file.wav —— 将测试音频作为麦克风输入播放
 setup_virtual_mic() {
     VIRTUAL_MIC_SINK="vi_mic"
-    pactl load-module module-null-sink sink_name="$VIRTUAL_MIC_SINK" \
-        sink_properties=device.description=voiceinput-test-mic \
-        >"$LOG_DIR/pactl-load.log"
+    # pipewire 刚启动时 load-module 可能报 Not supported，重试
+    local tries=0 id=""
+    while [ $tries -lt 10 ]; do
+        id="$(pactl load-module module-null-sink sink_name="$VIRTUAL_MIC_SINK" \
+            sink_properties=device.description=voiceinput-test-mic 2>>"$LOG_DIR/pactl-load.log" || true)"
+        [ -n "$id" ] && break
+        tries=$((tries + 1))
+        sleep 1
+    done
+    [ -n "$id" ] || { echo "虚拟麦克风创建失败"; return 1; }
     pactl set-default-source "${VIRTUAL_MIC_SINK}.monitor"
     echo "$VIRTUAL_MIC_SINK"
 }

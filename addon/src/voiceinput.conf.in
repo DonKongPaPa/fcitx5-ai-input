@@ -4,6 +4,6 @@ Category=InputMethod
 Version=@PROJECT_VERSION@
 Type=SharedLibrary
 Library=voiceinput
-Depends=
+Depends=dbus
 Priority=Default
 Enabled=True

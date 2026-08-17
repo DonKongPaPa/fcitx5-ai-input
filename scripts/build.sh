@@ -18,6 +18,10 @@ podman run --rm \
               -DCMAKE_INSTALL_PREFIX=/work/artifacts/dist
         cmake --build build/addon -j"$(nproc)"
         cmake --install build/addon
+        cmake -S apps -B build/apps -DCMAKE_BUILD_TYPE=Release \
+              -DCMAKE_INSTALL_PREFIX=/work/artifacts/dist
+        cmake --build build/apps -j"$(nproc)"
+        cmake --install build/apps
     '
 
 echo ">> 产物："

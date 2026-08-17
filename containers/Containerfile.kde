@@ -10,6 +10,9 @@ RUN pacman -Syu --noconfirm --needed \
         spectacle \
         plasma-integration \
         xdg-desktop-portal-kde \
+        meson \
+        ninja \
+        vulkan-headers \
         && pacman -Scc --noconfirm
 
 # gpu-screen-recorder 从 AUR 构建（官方仓库没有）

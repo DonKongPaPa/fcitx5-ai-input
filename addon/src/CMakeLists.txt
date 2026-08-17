@@ -3,6 +3,8 @@ target_sources(voiceinput PRIVATE
     voiceinput.cpp
 )
 target_link_libraries(voiceinput PRIVATE Fcitx5::Core)
+find_package(Fcitx5ModuleDBus CONFIG REQUIRED)
+target_link_libraries(voiceinput PRIVATE Fcitx5::Module::DBus)
 set_target_properties(voiceinput PROPERTIES PREFIX "")
 
 install(TARGETS voiceinput LIBRARY DESTINATION "${FCITX_INSTALL_ADDONDIR}")
