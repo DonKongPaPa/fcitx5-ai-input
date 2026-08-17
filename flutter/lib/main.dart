@@ -1,8 +1,14 @@
 // voice_ui：fcitx5-voiceinput 的浮窗 UI（MD3）
 //
-// 运行方式：由 addon 拉起的独立进程，窗口开在专用无头合成器（cage2）上；
-// 本进程不直接上屏——用 RepaintBoundary.toImage 快照出 RGBA 帧，
-// 经 TCP 桥发给 addon，addon 写入 zwp_input_popup_surface_v2 的 shm buffer。
+// 运行方式：由 addon 拉起的独立进程，窗口开在专用无头合成器（weston
+// headless）上；本进程不直接上屏——用 RepaintBoundary.toImage 快照出 RGBA
+// 帧，经 TCP 桥发给 addon，addon 写入 zwp_input_popup_surface_v2 的 shm
+// buffer（帧尺寸变化时 addon 自动重建池）。
+//
+// 尺寸策略（vision 反馈：与文本框等宽显"抢眼"，故收窄）：
+//   宽度 clamp(TextPainter 实测内容宽, 280, 420)；录音态固定 280；
+//   高度按状态：录音 104 / 结果按行数 / 候选按条数。
+//   流式 partial 尾部优先（放不下截头加省略号，最新内容始终可见）。
 //
 // 协议（TCP，行式 JSON + 二进制帧）：
 //   addon→ui : {"type":"state","state":"recording","partial":"..","elapsed_ms":0}
@@ -19,11 +25,54 @@ import 'dart:ui' as ui;
 import 'package:flutter/material.dart';
 import 'package:flutter/rendering.dart';
 
-const double kUiWidth = 360;
-const double kUiHeight = 200;
+const double kMinW = 280;
+const double kMaxW = 420;
 
 void main() {
   runApp(const VoiceUiApp());
+}
+
+// ---------------------------------------------------------------------------
+// 文本测量（TextPainter，官方 API）
+// ---------------------------------------------------------------------------
+double measureWidth(String text, TextStyle style) {
+  if (text.isEmpty) return 0;
+  final tp = TextPainter(
+    text: TextSpan(text: text, style: style),
+    textDirection: TextDirection.ltr,
+    maxLines: 1,
+  )..layout();
+  return tp.width;
+}
+
+int lineCount(String text, TextStyle style, double maxWidth) {
+  if (text.isEmpty) return 1;
+  final tp = TextPainter(
+    text: TextSpan(text: text, style: style),
+    textDirection: TextDirection.ltr,
+  )..layout(maxWidth: maxWidth);
+  return tp.computeLineMetrics().length;
+}
+
+/// 尾部优先：maxLines 行内放不下时截头加省略号（流式最新内容优先可见）
+String tailFit(String text, TextStyle style, double maxWidth, int maxLines) {
+  if (text.isEmpty) return text;
+  bool fits(String s) {
+    final tp = TextPainter(
+      text: TextSpan(text: s, style: style),
+      textDirection: TextDirection.ltr,
+      maxLines: maxLines,
+    )..layout(maxWidth: maxWidth);
+    return !tp.didExceedMaxLines;
+  }
+
+  if (fits(text)) return text;
+  // 粗定位：按比例跳到后半段，再逐字精调
+  var start = text.length ~/ 2;
+  while (start < text.length && !fits('…${text.substring(start)}')) {
+    start += 1;
+  }
+  return start >= text.length ? '…${text.substring(text.length ~/ 4)}' : '…${text.substring(start)}';
 }
 
 // ---------------------------------------------------------------------------
@@ -54,6 +103,15 @@ class Bridge {
     }
   }
 
+  void _reconnect() {
+    if (_closing) return;
+    _sub?.cancel();
+    _sock?.destroy();
+    _sock = null;
+    _retry?.cancel();
+    _retry = Timer(const Duration(seconds: 1), start);
+  }
+
   // 行式 JSON：自行缓冲按 \n 切分（不用 transform，避免类型协变问题）
   final BytesBuilder _buf = BytesBuilder(copy: true);
   void _onData(Uint8List chunk) {
@@ -69,15 +127,6 @@ class Bridge {
       data = data.sublist(idx + 1);
       _onLine(line);
     }
-  }
-
-  void _reconnect() {
-    if (_closing) return;
-    _sub?.cancel();
-    _sock?.destroy();
-    _sock = null;
-    _retry?.cancel();
-    _retry = Timer(const Duration(seconds: 1), start);
   }
 
   void _onLine(String line) {
@@ -111,7 +160,7 @@ enum UiState { idle, recording, result, candidates }
 
 class SessionData {
   final UiState state;
-  final String partial; // 流式中间结果（灰字实时显示）
+  final String partial; // 流式中间结果（尾部优先实时显示）
   final String resultText; // 最终文本
   final List<String> candidates; // 候选（首个=润色版）
   final int elapsedMs; // 录音计时
@@ -143,6 +192,44 @@ class VoiceUiApp extends StatelessWidget {
       ),
       home: const VoiceUiHome(),
     );
+  }
+}
+
+/// 面板尺寸决策：宽度 TextPainter 实测（280–420），高度按状态
+Size panelSizeFor(ThemeData theme, SessionData d) {
+  switch (d.state) {
+    case UiState.recording:
+      return const Size(280, 104);
+    case UiState.result:
+      {
+        // 3 行放不下就加宽（步进 40），仍放不下按 3 行截断
+        var w = kMinW;
+        var lines = lineCount(d.resultText, theme.textTheme.titleMedium!,
+            w - 24 /* 左右 padding */);
+        while (lines > 3 && w < kMaxW) {
+          w += 40;
+          lines =
+              lineCount(d.resultText, theme.textTheme.titleMedium!, w - 24);
+        }
+        return Size(w, 60 + lines.clamp(1, 3) * 24);
+      }
+    case UiState.candidates:
+      {
+        // 最长候选一行实测（润色版另留 subtitle 余量；徽标 22 + 间距 16 + padding 24）
+        final items = d.candidates.take(2).toList();
+        double textW = 0;
+        for (var i = 0; i < items.length; i++) {
+          final style = i == 0
+              ? theme.textTheme.titleSmall!
+              : theme.textTheme.bodyMedium!;
+          final need = measureWidth(items[i], style) + (i == 0 ? 24 : 0);
+          if (need > textW) textW = need;
+        }
+        final w = (textW + 22 + 16 + 24 + 8).clamp(kMinW, kMaxW);
+        return Size(w, 44 + items.length * 52 + 8 /* 首条 subtitle */);
+      }
+    case UiState.idle:
+      return const Size(280, 64);
   }
 }
 
@@ -222,23 +309,24 @@ class _VoiceUiHomeState extends State<VoiceUiHome> {
     _scheduleSnapshot();
   }
 
-  // 快照：帧渲染完成后截 RepaintBoundary → RGBA → 发 addon
+  // 快照：帧渲染完成后截 RepaintBoundary → RGBA → 发 addon（尺寸取实际值）
   int _frameCount = 0;
   void _scheduleSnapshot() {
     WidgetsBinding.instance.addPostFrameCallback((_) async {
       final ro = _rbKey.currentContext?.findRenderObject();
-      if (ro is! RenderRepaintBoundary) return;
+      if (ro is! RenderRepaintBoundary || !ro.attached) return;
+      final w = ro.size.width.round();
+      final h = ro.size.height.round();
       final image = await ro.toImage(pixelRatio: 1.0);
       final bytes = await image.toByteData(format: ui.ImageByteFormat.rawRgba);
       image.dispose();
-      if (bytes != null) {
-        _bridge.sendFrame(
-            bytes.buffer.asUint8List(), kUiWidth.toInt(), kUiHeight.toInt());
+      if (bytes != null && w > 0 && h > 0) {
+        _bridge.sendFrame(bytes.buffer.asUint8List(), w, h);
         // 容器内可观测性：每 10 帧打一行（release 下 print 仍输出）
         _frameCount++;
         if (_frameCount == 1 || _frameCount % 10 == 0) {
           // ignore: avoid_print
-          print('ui-frame #$_frameCount state=${_data.state.name}');
+          print('ui-frame #$_frameCount ${w}x$h ${_data.state.name}');
         }
       }
     });
@@ -246,14 +334,15 @@ class _VoiceUiHomeState extends State<VoiceUiHome> {
 
   @override
   Widget build(BuildContext context) {
+    final size = panelSizeFor(Theme.of(context), _data);
     return Scaffold(
       backgroundColor: Colors.transparent,
       body: Center(
         child: RepaintBoundary(
           key: _rbKey,
           child: SizedBox(
-            width: kUiWidth,
-            height: kUiHeight,
+            width: size.width,
+            height: size.height,
             child: VoicePanel(data: _data),
           ),
         ),
@@ -275,14 +364,14 @@ class VoicePanel extends StatelessWidget {
     return Container(
       decoration: BoxDecoration(
         color: cs.surfaceContainerHigh,
-        borderRadius: BorderRadius.circular(16),
+        borderRadius: BorderRadius.circular(14),
         border: Border.all(color: cs.outlineVariant, width: 1),
         boxShadow: const [
-          BoxShadow(color: Color(0x33000000), blurRadius: 12, spreadRadius: 1),
+          BoxShadow(color: Color(0x33000000), blurRadius: 10, spreadRadius: 1),
         ],
       ),
       child: ClipRRect(
-        borderRadius: BorderRadius.circular(16),
+        borderRadius: BorderRadius.circular(14),
         child: switch (data.state) {
           UiState.recording => _RecordingBody(data: data),
           UiState.result => _ResultBody(data: data),
@@ -299,42 +388,46 @@ String _fmtMs(int ms) {
   return '${(s ~/ 60).toString().padLeft(2, '0')}:${(s % 60).toString().padLeft(2, '0')}';
 }
 
-// —— 录音态：麦克风 + 计时 + 流式 partial + 底部指示条 ——
+// —— 录音态：麦克风 + 计时 + 流式 partial（尾部优先）+ 底部指示条 ——
 class _RecordingBody extends StatelessWidget {
   final SessionData data;
   const _RecordingBody({required this.data});
 
   @override
   Widget build(BuildContext context) {
-    final cs = Theme.of(context).colorScheme;
+    final theme = Theme.of(context);
+    final cs = theme.colorScheme;
+    final partialStyle =
+        theme.textTheme.bodyMedium?.copyWith(color: cs.onSurfaceVariant);
+    final shown = tailFit(
+        data.partial, partialStyle!, 280 - 24 /* 左右 padding */, 2);
     return Column(
       crossAxisAlignment: CrossAxisAlignment.stretch,
       children: [
         Padding(
-          padding: const EdgeInsets.fromLTRB(16, 12, 16, 0),
+          padding: const EdgeInsets.fromLTRB(12, 8, 12, 0),
           child: Row(
             children: [
               Container(
-                width: 40,
-                height: 40,
+                width: 36,
+                height: 36,
                 decoration: BoxDecoration(
                   color: cs.errorContainer,
                   shape: BoxShape.circle,
                 ),
-                child: Icon(Icons.mic, color: cs.onErrorContainer, size: 22),
+                child: Icon(Icons.mic, color: cs.onErrorContainer, size: 20),
               ),
-              const SizedBox(width: 12),
+              const SizedBox(width: 10),
               Column(
                 crossAxisAlignment: CrossAxisAlignment.start,
                 children: [
                   Text(_fmtMs(data.elapsedMs),
-                      style: Theme.of(context)
-                          .textTheme
-                          .titleLarge
-                          ?.copyWith(fontFeatures: [
-                        ui.FontFeature.tabularFigures(),
-                      ])),
-                  Text('正在听…', style: Theme.of(context).textTheme.bodySmall),
+                      style: theme.textTheme.titleMedium?.copyWith(
+                        fontFeatures: [ui.FontFeature.tabularFigures()],
+                      )),
+                  Text('正在听…',
+                      style: theme.textTheme.labelSmall?.copyWith(
+                          color: cs.onSurfaceVariant)),
                 ],
               ),
             ],
@@ -342,17 +435,14 @@ class _RecordingBody extends StatelessWidget {
         ),
         Expanded(
           child: Padding(
-            padding: const EdgeInsets.symmetric(horizontal: 16),
+            padding: const EdgeInsets.symmetric(horizontal: 12),
             child: Align(
               alignment: Alignment.centerLeft,
               child: Text(
-                data.partial.isEmpty ? ' ' : data.partial,
+                shown.isEmpty ? ' ' : shown,
                 maxLines: 2,
                 overflow: TextOverflow.ellipsis,
-                style: Theme.of(context)
-                    .textTheme
-                    .bodyMedium
-                    ?.copyWith(color: cs.onSurfaceVariant),
+                style: partialStyle,
               ),
             ),
           ),
@@ -375,18 +465,18 @@ class _ResultBody extends StatelessWidget {
       crossAxisAlignment: CrossAxisAlignment.stretch,
       children: [
         Padding(
-          padding: const EdgeInsets.fromLTRB(16, 12, 16, 8),
+          padding: const EdgeInsets.fromLTRB(12, 8, 12, 4),
           child: Row(
             children: [
-              Icon(Icons.check_circle, color: cs.primary, size: 20),
-              const SizedBox(width: 8),
+              Icon(Icons.check_circle, color: cs.primary, size: 18),
+              const SizedBox(width: 6),
               Text('识别结果', style: Theme.of(context).textTheme.labelMedium),
             ],
           ),
         ),
         Expanded(
           child: Padding(
-            padding: const EdgeInsets.symmetric(horizontal: 16),
+            padding: const EdgeInsets.symmetric(horizontal: 12),
             child: Align(
               alignment: Alignment.centerLeft,
               child: Text(
@@ -416,24 +506,22 @@ class _CandidatesBody extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     final cs = Theme.of(context).colorScheme;
+    final theme = Theme.of(context);
     final items = data.candidates.take(2).toList();
     return Column(
       crossAxisAlignment: CrossAxisAlignment.stretch,
       children: [
         Padding(
-          padding: const EdgeInsets.fromLTRB(16, 10, 16, 4),
+          padding: const EdgeInsets.fromLTRB(12, 8, 12, 2),
           child: Row(
             children: [
-              Icon(Icons.auto_awesome, size: 16, color: cs.primary),
-              const SizedBox(width: 6),
-              Text('LLM 优化',
-                  style: Theme.of(context).textTheme.labelMedium),
+              Icon(Icons.auto_awesome, size: 14, color: cs.primary),
+              const SizedBox(width: 4),
+              Text('LLM 优化', style: theme.textTheme.labelSmall),
               const Spacer(),
               Text('数字选择 · Enter=1 · Esc=取消',
-                  style: Theme.of(context)
-                      .textTheme
-                      .labelSmall
-                      ?.copyWith(color: cs.onSurfaceVariant)),
+                  style: theme.textTheme.labelSmall?.copyWith(
+                      color: cs.onSurfaceVariant)),
             ],
           ),
         ),
@@ -441,9 +529,10 @@ class _CandidatesBody extends StatelessWidget {
           ListTile(
             dense: true,
             visualDensity: VisualDensity.compact,
+            contentPadding: const EdgeInsets.symmetric(horizontal: 12),
             leading: Container(
-              width: 22,
-              height: 22,
+              width: 20,
+              height: 20,
               alignment: Alignment.center,
               decoration: BoxDecoration(
                 color: i == 0 ? cs.primary : cs.surfaceContainerHighest,
@@ -451,7 +540,7 @@ class _CandidatesBody extends StatelessWidget {
               ),
               child: Text('${i + 1}',
                   style: TextStyle(
-                    fontSize: 12,
+                    fontSize: 11,
                     color: i == 0 ? cs.onPrimary : cs.onSurfaceVariant,
                   )),
             ),
@@ -459,15 +548,11 @@ class _CandidatesBody extends StatelessWidget {
               items[i],
               maxLines: 1,
               overflow: TextOverflow.ellipsis,
-              style: i == 0
-                  ? Theme.of(context).textTheme.titleSmall
-                  : Theme.of(context).textTheme.bodyMedium,
+              style: i == 0 ? theme.textTheme.titleSmall : theme.textTheme.bodyMedium,
             ),
             subtitle: i == 0
                 ? Text('润色版',
-                    style: Theme.of(context)
-                        .textTheme
-                        .labelSmall
+                    style: theme.textTheme.labelSmall
                         ?.copyWith(color: cs.primary))
                 : null,
           ),
@@ -484,7 +569,7 @@ class _IdleBody extends StatelessWidget {
   Widget build(BuildContext context) {
     return Center(
       child: Icon(Icons.graphic_eq,
-          color: Theme.of(context).colorScheme.outline, size: 32),
+          color: Theme.of(context).colorScheme.outline, size: 28),
     );
   }
 }

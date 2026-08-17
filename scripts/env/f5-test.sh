@@ -125,6 +125,93 @@ case "$st" in *idle*) ok "超时自动上屏 → idle ($st)";; *) bad "超时未
 txt=$(last_text)
 case "$txt" in *直接上屏) ok "自动落点文本=[$txt]（追加到已有文本后）";; *) bad "落点异常=[$txt]";; esac
 
+# ============================ S6 连续三轮触发 ============================
+echo "S6 连续三轮触发（popup 复用 + 落点依次追加）"
+set_cfg "TriggerMode=HoldRelease" "TriggerThresholdMs=300" "LLMEnabled=True" \
+        "DummyText=第一轮内容" "DummyStream=True" "DummyStreamIntervalMs=120" \
+        "PopupTimeoutMs=1500"
+s6_base=$(grep -ac "partial:" /tmp/fcitx5.log || true)
+r1_text="第一轮内容。"   # 数字 1 → 润色版
+call SimulateKey Control_R true >/dev/null; sleep 1.3
+call SimulateKey Control_R false >/dev/null; sleep 0.5
+call SimulateKey 1 true >/dev/null; sleep 0.4
+st=$(call State)
+case "$st" in *idle*) ok "轮1 完成 ($st)";; *) bad "轮1 未完成：$st";; esac
+txt=$(last_text)
+case "$txt" in *"$r1_text") ok "轮1 落点=[$txt]";; *) bad "轮1 落点异常=[$txt]";; esac
+
+set_cfg "TriggerMode=HoldRelease" "TriggerThresholdMs=300" "LLMEnabled=True" \
+        "DummyText=第二轮不同文本" "DummyStream=True" "PopupTimeoutMs=1500"
+call SimulateKey Control_R true >/dev/null; sleep 1.3
+call SimulateKey Control_R false >/dev/null; sleep 0.5
+call SimulateKey 2 true >/dev/null; sleep 0.4   # 数字 2 → 原始版
+st=$(call State)
+case "$st" in *idle*) ok "轮2 完成 ($st)";; *) bad "轮2 未完成：$st";; esac
+txt=$(last_text)
+case "$txt" in *"第二轮不同文本") ok "轮2 落点(原始版)=[$txt]";; *) bad "轮2 落点异常=[$txt]";; esac
+
+set_cfg "TriggerMode=HoldRelease" "TriggerThresholdMs=300" "LLMEnabled=True" \
+        "DummyText=第三轮再换" "DummyStream=True" "PopupTimeoutMs=1500"
+call SimulateKey Control_R true >/dev/null; sleep 1.3
+call SimulateKey Control_R false >/dev/null; sleep 0.5
+call SimulateKey 1 true >/dev/null; sleep 0.4
+st=$(call State)
+case "$st" in *idle*) ok "轮3 完成 ($st)";; *) bad "轮3 未完成：$st";; esac
+txt=$(last_text)
+case "$txt" in *"第三轮再换。") ok "轮3 落点=[$txt]（三轮依次追加）";; *) bad "轮3 落点异常=[$txt]";; esac
+# popup 复用：桥只连接一次（无重复拉起）
+spawn_cnt=$(grep -ac "flutter UI spawned" /tmp/fcitx5.log || true)
+[ "$spawn_cnt" -le 1 ] && ok "flutter 进程单实例复用（spawned=$spawn_cnt）" || bad "重复拉起 spawned=$spawn_cnt"
+# 每轮 partial 独立
+s6_now=$(grep -ac "partial:" /tmp/fcitx5.log || true)
+n=$((s6_now - s6_base))
+[ "$n" -ge 3 ] && ok "三轮 partial 累计 $n 步（每轮独立流动）" || bad "三轮 partial 异常 $n 步"
+
+# ============================ S7 长文本 ============================
+echo "S7 长文本（135 字，非流式保全文完整）"
+LONG="语音输入法正在处理一段很长的中文文本用来验证长文本场景下悬浮窗的显示与提交行为包括流式识别过程中尾部优先的截断策略候选列表的单行省略以及最终提交到输入框的完整一致性这是一段超过一百二十个字符的测试数据"
+set_cfg "TriggerMode=HoldRelease" "TriggerThresholdMs=300" "LLMEnabled=True" \
+        "DummyText=$LONG" "DummyStream=False" "PopupTimeoutMs=1500"
+call SimulateKey Control_R true >/dev/null; sleep 1.0
+call SimulateKey Control_R false >/dev/null; sleep 0.6
+st=$(call State)
+case "$st" in *candidates*) ok "长文本 → candidates ($st)";; *) bad "长文本状态异常：$st";; esac
+cand=$(call Candidates)
+long_chars=$(echo -n "$LONG" | wc -m)
+case "$cand" in *"$LONG"*) ok "候选含长文本全文（${long_chars} 字符）";; *) bad "候选缺全文：${cand:0:60}...";; esac
+call SimulateKey 1 true >/dev/null; sleep 0.5
+txt=$(last_text)
+tail10="${LONG: -10}"
+nchars=$(echo -n "$txt" | wc -m)
+case "$txt" in *"$tail10"*) tail_ok=0;; *) tail_ok=1;; esac
+if [ "$tail_ok" -eq 0 ] && [ "$nchars" -ge "$long_chars" ]; then
+    ok "长文本落点完整（${nchars} 字符，尾部精确匹配）"
+else
+    bad "长文本落点异常（${nchars} 字符 tail_ok=$tail_ok）"
+fi
+
+# ============================ S8 录音中取消 + 复用 ============================
+echo "S8 录音中 Esc 取消 + 立即复用"
+set_cfg "TriggerMode=HoldRelease" "TriggerThresholdMs=300" "LLMEnabled=True" \
+        "DummyText=取消场景不应提交" "DummyStream=True" "PopupTimeoutMs=1500"
+before_cnt=$(wc -l < "$TEST_RESULT_FILE")
+call SimulateKey Control_R true >/dev/null; sleep 0.9
+call SimulateKey Escape true >/dev/null; sleep 0.4
+st=$(call State)
+case "$st" in *idle*) ok "录音中 Esc → idle ($st)";; *) bad "取消失败：$st";; esac
+after_cnt=$(wc -l < "$TEST_RESULT_FILE")
+[ "$after_cnt" -eq "$before_cnt" ] && ok "取消后无落点" || bad "取消仍落点（$before_cnt→$after_cnt）"
+# 立即复用：马上再来一轮完整流程
+set_cfg "TriggerMode=HoldRelease" "TriggerThresholdMs=300" "LLMEnabled=True" \
+        "DummyText=取消后复用正常" "DummyStream=True" "PopupTimeoutMs=1500"
+call SimulateKey Control_R true >/dev/null; sleep 1.2
+call SimulateKey Control_R false >/dev/null; sleep 0.5
+call SimulateKey 1 true >/dev/null; sleep 0.4
+st=$(call State)
+case "$st" in *idle*) ok "取消后立即复用成功 ($st)";; *) bad "复用失败：$st";; esac
+txt=$(last_text)
+case "$txt" in *"取消后复用正常。") ok "复用轮落点=[$txt]";; *) bad "复用轮落点异常=[$txt]";; esac
+
 # ============================ 收尾 ============================
 sleep 1
 kill -INT $REC 2>/dev/null; sleep 2

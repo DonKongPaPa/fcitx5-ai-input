@@ -33,6 +33,9 @@ public:
     virtual void start(EventLoop *loop, const VoiceInputConfig *config,
                        Callbacks cbs) = 0;
     virtual void stop() = 0;
+    // 取消会话：不触发 onFinish/onCancel 之外的收尾副作用
+    //（stop 的语义是"正常收尾出最终文本"，cancel 是"全部丢弃"）
+    virtual void cancel() { stop(); }
 };
 
 /** 调试用 Dummy 引擎：完全跳过音频，按配置逐字/延迟吐出固定文本。 */
@@ -62,10 +65,10 @@ public:
     }
 
     void stop() override {
-        streaming_ = false;
         if (streamTimer_) {
             streamTimer_.reset();
         }
+        deferNext_.reset();
         if (finished_) {
             return;
         }
@@ -73,6 +76,15 @@ public:
         if (cbs_.onFinish) {
             cbs_.onFinish(text_);
         }
+    }
+
+    void cancel() override {
+        // 丢弃一切：定时器停掉、不再回调（onFinish/onPartial 都不出）
+        if (streamTimer_) {
+            streamTimer_.reset();
+        }
+        deferNext_.reset();
+        finished_ = true;
     }
 
 private:

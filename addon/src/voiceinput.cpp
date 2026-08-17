@@ -152,6 +152,15 @@ bool VoiceInputEngine::handleKey(const Key &key, bool pressed,
         break;
 
     case State::Recording:
+        if (pressed && key.check(FcitxKey_Escape)) {
+            // 录音中取消：中止会话，不产生任何提交
+            if (asr_) {
+                asr_->cancel();
+            }
+            uiNotify("cancelled");
+            enterIdle();
+            return true;
+        }
         if (config_.triggerMode.value() == TriggerMode::HoldRelease) {
             if (trigger && !pressed) {
                 finishRecording();

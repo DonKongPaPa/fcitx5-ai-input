@@ -9,6 +9,9 @@ dist/
 # 实验验证总结（一个想法一个文件夹，整体不追踪）
 experiments/
 
+# 语音测试集（用户真实录音，隐私——整体不追踪；16k 派生副本在 artifacts/voice-samples/）
+语音测试集/
+
 # 模型文件
 *.onnx
 *.gguf

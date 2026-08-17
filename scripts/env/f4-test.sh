@@ -97,11 +97,13 @@ vis_counts = []
 proc = subprocess.Popen(["ffmpeg", "-v", "error", "-i", "/tmp/f4.mp4",
     "-f", "rawvideo", "-pix_fmt", "rgb24", "-"], stdout=subprocess.PIPE)
 fs = W * H * 3
+# 光亮面板检测：全屏扫（popup 位置由合成器决定——窗口居中时在光标下方，
+# 贴顶时在上方，位置无关；基线相对判定排除 testapp 自身亮区）
 def panel_count(buf):
     cnt = 0
-    for y in range(30, 260, 12):
+    for y in range(30, 690, 12):
         base = y * W
-        for x in range(60, 560, 12):
+        for x in range(100, 900, 12):
             i = (base + x) * 3
             if buf[i] > 195 and buf[i+1] > 195 and buf[i+2] > 195:
                 cnt += 1
@@ -120,9 +122,10 @@ def sec2frame(s):
     return max(0, min(N - 1, int((s - t['recorder']) * fps)))
 
 # 基线：触发前的检测计数（testapp 自身浅灰区有非零基线）
+# 面板已缩小（录音态 280x104），阈值相应下调
 f_pre = sec2frame(t['press'] - 0.4)
 base = sorted(vis_counts[:max(3, f_pre - 2)])[len(vis_counts[:max(3, f_pre - 2)])//2]
-TH = base + 150
+TH = base + 60
 def visible(i):
     return vis_counts[i] > TH
 
@@ -136,9 +139,9 @@ c1 = len(rec_vis) > 5
 # 2) 录音期内容变化（计时/流式）
 def bbox_diff(a, b):
     d = 0
-    for y in range(20, 280, 4):
+    for y in range(30, 690, 6):
         base = y * W
-        for x in range(40, 600, 4):
+        for x in range(100, 900, 6):
             i = (base + x) * 3
             d += abs(a[i]-b[i]) + abs(a[i+1]-b[i+1]) + abs(a[i+2]-b[i+2])
     return d

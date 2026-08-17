@@ -57,6 +57,13 @@ make report RUN_ID=xxx   # 重新渲染报告
 make compare             # 汇总历史报告，生成方案对比页（性能/干扰评估）
 ```
 
+## 测试资产：真实语音样本
+
+`语音测试集/`（**不进 git**，用户真实录音）：`中文测试.flac` / `英语测试.flac`，各约 6.3–6.5s（44.1kHz 立体声 FLAC）。
+
+- 派生 16kHz 单声道 wav 副本在 `artifacts/voice-samples/`（`make` 外手动转换，同样不进 git），FunASR 引擎接入里程碑直接可用作识别输入
+- 真实音频 E2E（录音→虚拟麦→ASR→候选→落点）属于 FunASR 接入里程碑；当前管线用 Dummy 引擎确定性驱动，长文本场景（f5 S7）的字数规模已按真实语速校准（6.5s 中文 ≈ 100 字）
+
 ## 测试报告
 
 - 固定格式：`tests/schema/report.schema.json` 约束（schema_version 版本化）
@@ -80,12 +87,14 @@ make compare             # 汇总历史报告，生成方案对比页（性能/�
   - F2 addon 核心：配置 schema（configtool 生成设置页）、按键状态机（HoldRelease/Toggle、阈值、触发键组合）、Dummy 流式引擎、SimulateKey 测试钩子
   - F3 popup surface：借 waylandim IM 连接挂 `zwp_input_popup_surface_v2`，niri 光标附近显示验证通过
   - F4 Flutter MD3 UI + 快照帧桥：toImage→TCP→wl_shm 全链路，录屏四项断言（录音期可见/内容实时变化/候选切换/idle 隐藏）连续通过
-  - F5 端到端 13/13：候选数字键落点、阈值透传、TriggerMode/LLMEnabled 配置热改即时生效、流式逐字单调递增
+  - F5 端到端 28/28：候选数字键落点、阈值透传、TriggerMode/LLMEnabled 配置热改即时生效、流式逐字单调递增、连续三轮触发（popup 复用）、100 字长文本全文提交、录音中 Esc 取消+立即复用
+- ✅ 视觉验证改用 vision subagent（能真实感知录屏帧，替代像素取证）：确认 MD3 风格渲染正确、自适应尺寸观感合适、发现并关闭 niri hotkey-overlay 干扰
 - ⬜ 后续：FunASR 引擎接入（虚拟麦克风 → 流式识别）、LLM 双后端（OpenAI 兼容 API / 本地 Qwen 直连）、真实音频用例替换 Trigger 直通、kde/gnome 环境补测
 
 ## Flutter UI 里程碑细节（F1-F5）
 
-- **帧桥**：`RepaintBoundary.toImage` 快照 → 行式 JSON 头 + RGBA 二进制 → addon `pushFrame`（尺寸变化自动重建 shm 池）。TCP 初版够用（360×200×4 ≈ 288KB/帧），unix socket + memfd 零拷贝留作优化
+- **尺寸自适应**（vision 复核后调整）：宽度 `TextPainter` 实测 clamp(280,420)——录音态固定 280、候选态按最长候选加宽；高度按状态（录音 104/结果按行数/候选按条数）；流式 partial 尾部优先（截头加省略号，最新内容始终可见）；快照尺寸取 boundary 实际值，addon 侧 resize 自动重建 shm 池
+- **帧桥**：`RepaintBoundary.toImage` 快照 → 行式 JSON 头 + RGBA 二进制 → addon `pushFrame`（尺寸变化自动重建 shm 池）。TCP 初版够用（≤420×200×4 ≈ 336KB/帧），unix socket + memfd 零拷贝留作优化
 - **窗口宿主**：flutter 进程由 addon 按需拉起（IC 激活预热，冷启动 ~3s），GTK 窗口开在 weston headless（`VOICEINPUT_UI_DISPLAY`）——cage 是单客户端 kiosk 不能用；weston headless 对普通应用客户端工作正常（此前"不能用"的结论仅限嵌套合成器场景）
 - **配置热改**：写 `conf/voiceinput.config` + D-Bus `org.fcitx.Fcitx.Controller1.ReloadAddonConfig voiceinput`（接口名**不带 5**）→ `reloadConfig` 即时生效
 - **测试触发**：`org.fcitx.VoiceInput.Test`（State/Candidates/SimulateKey/Trigger），确定性驱动状态机；跑 f4/f5 前屏蔽 `/usr/share/dbus-1/services/org.fcitx.Fcitx5.service`（portal/GTK 会 D-Bus 激活第二个 fcitx5 抢名）
