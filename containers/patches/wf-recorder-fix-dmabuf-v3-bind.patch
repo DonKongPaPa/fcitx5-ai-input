@@ -1,0 +1,27 @@
+--- a/src/main.cpp	2025-10-17 16:25:02.000000000 +0800
++++ b/src/main.cpp	2026-08-17 14:19:56.662577719 +0800
+@@ -523,7 +523,7 @@
+ };
+ 
+ static void handle_global(void*, struct wl_registry *registry,
+-    uint32_t name, const char *interface, uint32_t) {
++    uint32_t name, const char *interface, uint32_t version) {
+ 
+     if (strcmp(interface, wl_output_interface.name) == 0)
+     {
+@@ -549,9 +549,13 @@
+     }
+     else if (strcmp(interface, zwp_linux_dmabuf_v1_interface.name) == 0)
+     {
++        // Bind at the server-advertised version (capped at 4). Binding v4
++        // unconditionally is a protocol error against v3-only servers (e.g.
++        // compositors without a GPU render node) and kills the connection.
++        uint32_t dmabuf_version = version < 4 ? version : 4;
+         dmabuf = (zwp_linux_dmabuf_v1*) wl_registry_bind(registry, name,
+-            &zwp_linux_dmabuf_v1_interface, 4);
+-        if (dmabuf) {
++            &zwp_linux_dmabuf_v1_interface, dmabuf_version);
++        if (dmabuf && dmabuf_version >= 4) {
+             struct zwp_linux_dmabuf_feedback_v1 *feedback =
+                 zwp_linux_dmabuf_v1_get_default_feedback(dmabuf);
+             zwp_linux_dmabuf_feedback_v1_add_listener(feedback, &dmabuf_feedback_listener, NULL);
