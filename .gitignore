@@ -6,6 +6,9 @@ artifacts/
 build/
 dist/
 
+# 实验验证总结（一个想法一个文件夹，整体不追踪）
+experiments/
+
 # 模型文件
 *.onnx
 *.gguf

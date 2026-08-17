@@ -58,10 +58,17 @@ make compare             # 汇总历史报告，生成方案对比页（性能/�
 - `make compare` 生成历史运行对比页（各环境/方案的干扰评估）
 - **报告与全部录屏都在 `artifacts/` 下，不进 git**；基准录屏仅本地保留
 
+## 实验验证
+
+方案讨论与验证实验放在 `experiments/`（**不进 git**）：一个想法一个文件夹（`NNN-kebab-slug/`），按 `_template/README.md` 固定格式记录，索引在 `experiments/_INDEX.md`。已完成：
+
+- **001 Fun-ASR-Nano 本地部署**：GPU 免 sudo 直通可行（RTF 0.07、显存 3.4G、流式首包 1s）；CPU 内存最优 llama.cpp/GGUF（1.4G、RTF 0.16，暂仅 zh/en/ja）；31 语种 MLT 需 torch（int8 提速 3 倍）。建议 ASR 引擎做 gguf/torch-cpu/torch-gpu 三 provider。
+
 ## 当前进度
 
 - ✅ M0-M5：镜像体系、编译链（addon + GTK4/Qt6 测试应用）、三环境无头运行 + 录屏、D-Bus 测试钩子 E2E、用例管线 + 固定格式报告 + 基准对照、性能采样 + 对比页
-- ⬜ 后续：FunASR WebSocket 引擎接入（虚拟麦克风 → 流式识别）、LLM 双后端（OpenAI 兼容 API / 本地 Qwen 直连）、Flutter UI（悬浮窗渲染 + 设置页）、真实音频用例替换 Trigger 直通
+- ✅ 实验 001：Fun-ASR-Nano 本地部署验证（CPU 低内存矩阵 + GPU）
+- ⬜ 后续：FunASR 引擎接入（虚拟麦克风 → 流式识别）、LLM 双后端（OpenAI 兼容 API / 本地 Qwen 直连）、Flutter UI（悬浮窗渲染 + 设置页）、真实音频用例替换 Trigger 直通
 
 ## 目录结构
 
