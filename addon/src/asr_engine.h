@@ -79,8 +79,19 @@ private:
     static std::vector<std::string> splitTexts(const std::string &joined) {
         std::vector<std::string> out;
         std::string cur;
-        for (char c : joined) {
-            if (c == ';' || c == '；') {
+        for (size_t i = 0; i < joined.size(); ++i) {
+            char c = joined[i];
+            bool sep = false;
+            if (c == ';') {
+                sep = true;
+            } else if (static_cast<unsigned char>(c) == 0xEF &&
+                       i + 2 < joined.size() &&
+                       static_cast<unsigned char>(joined[i + 1]) == 0xBC &&
+                       static_cast<unsigned char>(joined[i + 2]) == 0x9B) {
+                sep = true; // 全角分号 U+FF1B（3 字节，不能与 char 直接比较）
+                i += 2;
+            }
+            if (sep) {
                 if (!cur.empty()) {
                     out.push_back(cur);
                 }
