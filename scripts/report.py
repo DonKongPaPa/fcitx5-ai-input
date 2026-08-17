@@ -72,6 +72,19 @@ def main():
         c["baseline"] = f"reference/{env}/{c['id']}.mp4" if baseline.exists() else ""
 
     passed = sum(1 for c in cases if c["status"] == "pass")
+    perf = None
+    perf_file = run_dir / "perf-summary.json"
+    if perf_file.exists():
+        try:
+            perf = json.loads(perf_file.read_text(encoding="utf-8"))
+            lat = [c["latency_ms"] for c in cases if c.get("latency_ms") is not None]
+            if lat:
+                perf["latency_ms"] = {
+                    "trigger_avg": round(sum(lat) / len(lat), 1),
+                    "trigger_max": max(lat),
+                }
+        except json.JSONDecodeError:
+            pass
     report = {
         "schema_version": SCHEMA_VERSION,
         "run_id": run_id,
@@ -85,7 +98,7 @@ def main():
             "failed": len(cases) - passed,
             "duration_s": duration_s,
         },
-        "perf": None,
+        "perf": perf,
         "cases": cases,
     }
 

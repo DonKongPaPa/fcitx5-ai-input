@@ -53,7 +53,8 @@ baseline:
 	./scripts/baseline.sh $(ENV)
 
 report:
-	./scripts/report.sh $(RUN_ID)
+	@latest=$$(ls -1 artifacts/reports 2>/dev/null | sort | tail -1); \
+	echo "最新报告: artifacts/reports/$$latest/report.html"
 
 compare:
-	./scripts/compare.py
+	python3 scripts/compare.py

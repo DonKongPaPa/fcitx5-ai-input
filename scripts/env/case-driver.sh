@@ -25,6 +25,11 @@ export TEST_RESULT_FILE="$OUT_DIR/testapp.jsonl"
 RESULTS="$OUT_DIR/case-results.jsonl"
 : >"$RESULTS"
 
+# 性能采样（容器内 /proc 轻量采样器，覆盖全部用例运行区间）
+python3 /scripts/perf/sampler.py --out "$OUT_DIR/perf.csv" \
+    --summary "$OUT_DIR/perf-summary.json" >"$LOG_DIR/sampler.log" 2>&1 &
+SAMPLER_PID=$!
+
 for case_file in "$CASES_DIR"/*.yaml; do
     [ -e "$case_file" ] || continue
     id="$(jq -r '.id' "$case_file")"
@@ -90,6 +95,13 @@ for case_file in "$CASES_DIR"/*.yaml; do
     echo "   → $status (latency $((t1 - t0))ms)"
 
     kill "$APP_PID" 2>/dev/null || true
+done
+
+# 停采样器并等它写出 summary
+kill -TERM "$SAMPLER_PID" 2>/dev/null || true
+for _ in $(seq 1 10); do
+    kill -0 "$SAMPLER_PID" 2>/dev/null || break
+    sleep 0.5
 done
 
 echo "== 用例执行完毕：$RESULTS"
