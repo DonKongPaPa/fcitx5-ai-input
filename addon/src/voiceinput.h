@@ -14,6 +14,7 @@
 
 namespace fcitx {
 
+class VoicePopup;
 class VoiceInputEngine;
 
 /**
@@ -101,6 +102,7 @@ private:
 
     Instance *instance_;
     VoiceInputConfig config_;
+    std::unique_ptr<VoicePopup> popup_;
     dbus::Bus *bus_ = nullptr;
     std::unique_ptr<TestService> testService_;
 

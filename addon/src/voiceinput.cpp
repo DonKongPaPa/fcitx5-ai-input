@@ -1,4 +1,5 @@
 #include "voiceinput.h"
+#include "popup_surface.h"
 
 #include <fcitx-config/iniparser.h>
 #include <fcitx-utils/keysym.h>
@@ -23,6 +24,7 @@ VoiceInputEngine::VoiceInputEngine(Instance *instance)
     reloadConfig();
 
     asr_ = std::make_unique<DummyAsrEngine>();
+    popup_ = std::make_unique<VoicePopup>(instance_);
 
     // 注册测试 D-Bus 服务（addon 加载期 dbus 未就绪时由 activate 补注册）
     ensureTestService();
@@ -199,6 +201,9 @@ void VoiceInputEngine::startThresholdTimer() {
 void VoiceInputEngine::beginRecording(InputContext *ic) {
     state_ = State::Recording;
     toggleReleased_ = false;
+    if (popup_) {
+        popup_->show(ic); // F3 色块验证；F4 换 Flutter 帧
+    }
     partial_.clear();
     finalText_.clear();
     candidates_.clear();
@@ -278,6 +283,9 @@ void VoiceInputEngine::commitCandidate(size_t index, InputContext *ic) {
 }
 
 void VoiceInputEngine::enterIdle() {
+    if (popup_) {
+        popup_->hide();
+    }
     state_ = State::Idle;
     thresholdTimer_.reset();
     resultTimer_.reset();

@@ -9,18 +9,15 @@ RUN pacman -Syu --noconfirm --needed \
         niri \
         && pacman -Scc --noconfirm
 
-# niri 最小配置：关掉动画便于录屏对比
+# niri 最小配置：
+# - gaps 200 让窗口内缩，文本框光标落在屏幕中部（模拟真实几何，也避免
+#   input popup 放在光标上方时顶部越界被裁——niri 不 clamp 该越界）
+# - 注意：niri 26.04 的 KDL 解析不接受旧版 `animations { workspace-switch { off } }`
+#   单行内联写法（解析失败会静默回退默认配置+弹错误提示窗），故移除
 RUN mkdir -p /home/testuser/.config/niri && \
     printf '%s\n' \
-        'input {' \
-        '}' \
-        'animations {' \
-        '    workspace-switch {' \
-        '        off' \
-        '    }' \
-        '    window-open {' \
-        '        off' \
-        '    }' \
+        'layout {' \
+        '    gaps 200' \
         '}' \
         > /home/testuser/.config/niri/config.kdl && \
     chown -R testuser:testuser /home/testuser/.config
