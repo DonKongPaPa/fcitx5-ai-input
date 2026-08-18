@@ -63,8 +63,8 @@ jobs:
           SRC: ${{ github.workspace }}
           VERSION: ${{ github.event.inputs.version || github.ref_name }}
         run: |
-          V="${VERSION#v}"
-          echo "VERSION=$V" >> "$GITHUB_ENV"
+          # GITHUB_ENV 下一步才生效：本步内直接 export
+          export VERSION="${VERSION#v}"
           bash packaging/${{ matrix.id }}/build.sh
           # 版本号归一（去 v 前缀的文件名统一）
           cd artifacts/packages
