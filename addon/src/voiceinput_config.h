@@ -22,6 +22,14 @@ FCITX_CONFIG_ENUM(AsrEngineKind, Dummy, FunASR, FunASRLocal);
 FCITX_CONFIG_ENUM_I18N_ANNOTATION(AsrEngineKind, "Dummy", "FunASR",
                                   "FunASRLocal");
 
+// 模型部署设备档（自动拉起服务时的参数）
+FCITX_CONFIG_ENUM(FunASRDeviceKind, Auto, Gpu, Cpu);
+FCITX_CONFIG_ENUM_I18N_ANNOTATION(FunASRDeviceKind, "Auto", "Gpu", "Cpu");
+
+// 量化档（CPU 提速：实验 001 实测 RTF 0.43→0.185；GPU 无收益）
+FCITX_CONFIG_ENUM(FunASRQuantKind, None, Int8);
+FCITX_CONFIG_ENUM_I18N_ANNOTATION(FunASRQuantKind, "None", "Int8");
+
 // configtool 由该 Configuration 自动生成设置页；保存后经 D-Bus 触发
 // reloadConfig()，参数即时生效（无需重启 fcitx5）
 FCITX_CONFIGURATION(
@@ -57,6 +65,23 @@ FCITX_CONFIGURATION(
     Option<std::string> funasrLanguage{
         this, "FunASRLanguage", "识别语言（中文/英文/日文…，MLT 31 语种）",
         "中文"};
+
+    // —— 组2.1.1 模型部署（服务自动拉起；产品=宿主原生进程）——
+    Option<bool> funasrAutoStart{
+        this, "FunASRAutoStart",
+        "自动启动识别服务（连接失败且未运行时按下方设备/量化档拉起）",
+        false};
+    Option<FunASRDeviceKind, NoConstrain<FunASRDeviceKind>, DefaultMarshaller<FunASRDeviceKind>, FunASRDeviceKindI18NAnnotation> funasrDevice{
+        this, "FunASRDevice", "部署设备（自动/优先GPU/CPU）",
+        FunASRDeviceKind::Auto};
+    Option<FunASRQuantKind, NoConstrain<FunASRQuantKind>, DefaultMarshaller<FunASRQuantKind>, FunASRQuantKindI18NAnnotation> funasrQuant{
+        this, "FunASRQuant", "量化（CPU 提速档，GPU 无收益）",
+        FunASRQuantKind::None};
+    Option<std::string> funasrServerCmd{
+        this, "FunASRServerCmd",
+        "服务启动脚本路径（如 /opt/fcitx5-voice-input/scripts/funasr-serve.sh，"
+        "支持 FUNASR_PORT/FUNASR_DEVICE/FUNASR_QUANT 环境变量）",
+        ""};
 
     // —— 组2.2 FunASR 本地（GGUF 档）——
     Option<std::string> funasrLocalCmd{

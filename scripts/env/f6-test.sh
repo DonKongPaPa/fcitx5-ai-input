@@ -30,7 +30,8 @@ set_cfg() {
     sleep 0.4
 }
 
-FUNASR_URL="${FUNASR_URL:-ws://host.containers.internal:10095}"
+# 默认指向容器网 funasr-gpu（编排见 run-f6.sh；宿主 127.0.0.1 形态用 env 覆盖）
+FUNASR_URL="${FUNASR_URL:-ws://funasr-gpu:10095}"
 # 鼠标点击坐标（输出空间 1280x720）。校准依据：text_input_rectangle 实测
 # 窗口局部 (199,52)，窗口原点 gaps=200 → 光标全局 (399,252)，popup 顶部
 # ≈302 → 候选1行中心 ≈(440,355)、候选2行 ≈(440,410)
@@ -115,7 +116,7 @@ set_cfg "AsrEngine=FunASR" "FunASRUrl=$FUNASR_URL" "FunASRLanguage=中文" \
         "TriggerMode=HoldRelease" "TriggerThresholdMs=300" "LLMEnabled=True" \
         "PopupTimeoutMs=3000"
 base=$(record_and_play /samples/中文测试-16k.wav 8)
-if wait_state candidates 15; then ok "release → candidates"; else bad "未到 candidates: $(call State)"; fi
+if wait_state candidates 45; then ok "release → candidates"; else bad "未到 candidates: $(call State)"; fi
 n_partial=$(( "$(grep -ac "partial:" /tmp/fcitx5.log || true)" - base ))
 if [ "$n_partial" -ge 2 ] && grep -a "partial:" /tmp/fcitx5.log | tail -"$n_partial" | grep -aq "你"; then
     ok "录音期真实中文 partial ${n_partial} 条"
@@ -135,7 +136,7 @@ echo "S2 英语 WS（Enter=选第一个）"
 set_cfg "AsrEngine=FunASR" "FunASRUrl=$FUNASR_URL" "FunASRLanguage=英文" \
         "LLMEnabled=True" "PopupTimeoutMs=3000"
 base=$(record_and_play /samples/英语测试-16k.wav 8)
-if wait_state candidates 15; then ok "英语 → candidates"; else bad "英语未到 candidates: $(call State)"; fi
+if wait_state candidates 45; then ok "英语 → candidates"; else bad "英语未到 candidates: $(call State)"; fi
 cand=$(call Candidates)
 case "$cand" in *"English voice input test"*) ok "英语识别正确";; *) bad "英语候选异常: $cand";; esac
 sleep 2.5   # 候选停留
@@ -197,7 +198,7 @@ echo "S5 LLM 关 + 真实音频（result 态自动上屏）"
 set_cfg "AsrEngine=FunASR" "FunASRUrl=$FUNASR_URL" "FunASRLanguage=中文" \
         "LLMEnabled=False" "PopupTimeoutMs=2500"
 base=$(record_and_play /samples/中文测试-16k.wav 8)
-if wait_state result 15; then ok "LLM 关 → result 态"; else bad "未到 result: $(call State)"; fi
+if wait_state result 45; then ok "LLM 关 → result 态"; else bad "未到 result: $(call State)"; fi
 sleep 3.5   # 超过 PopupTimeoutMs=2500 → 自动上屏
 case "$(call State)" in *idle*) ok "超时自动上屏 → idle";; *) bad "超时未上屏: $(call State)";; esac
 txt=$(last_text)

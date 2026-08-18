@@ -18,7 +18,7 @@
 
 namespace fcitx {
 
-static constexpr int kFinalTimeoutSec = 10;
+static constexpr int kFinalTimeoutSec = 30; // 容器 GPU 首推理 JIT 慢（实测 final 14s）
 
 static uint64_t nowUs() {
     struct timespec ts;
@@ -70,34 +70,18 @@ void FunAsrWsEngine::start(EventLoop *loop, const VoiceInputConfig *config,
 
     std::string host;
     int port = 0;
-    if (!parseUrl(config->funasrUrl.value(), &host, &port) ||
-        !connectServer(host, port) || !wsHandshake()) {
-        FCITX_WARN() << "FunAsrWs: connect " << config->funasrUrl.value()
-                     << " failed（服务未启动？scripts/funasr-serve.sh start）";
+    if (!parseUrl(config->funasrUrl.value(), &host, &port)) {
+        FCITX_WARN() << "FunAsrWs: URL 无效 " << config->funasrUrl.value();
         finishSession("");
         return;
     }
-    // 握手完成后转非阻塞：服务端推理忙时接收缓冲满，阻塞 write 会冻住
-    // fcitx5 主循环（实测冻结 31s）——音频块宁可丢弃（final 兜底），
-    // 控制帧走定时重试
-    {
-        int nb = fcntl(sockFd_, F_GETFL);
-        fcntl(sockFd_, F_SETFL, nb | O_NONBLOCK);
-    }
-    FCITX_INFO() << "FunAsrWs: connected " << host << ":" << port;
-
-    // 首帧：语言配置
-    sendText("{\"language\":\"" + config->funasrLanguage.value() + "\"}");
-
-    sockEv_ = loop_->addIOEvent(
-        sockFd_, IOEventFlag::In,
-        [this](EventSourceIO *, int, IOEventFlags) {
-            onSocketReadable();
-            return true;
-        });
-
+    // 采集立即启动：连接建立前的音频缓存（preConnAudio_），不丢开头
     capture_ = std::make_unique<AudioCapture>();
     if (!capture_->start(loop_, [this](const uint8_t *d, size_t n) {
+            if (sockFd_ < 0) {
+                preConnAudio_.insert(preConnAudio_.end(), d, d + n);
+                return;
+            }
             // 攒 ~100ms（3200 字节）发一帧，减少 syscall；
             // 发送失败（服务端忙、缓冲满）丢弃该块（final 兜底全量识别）
             pending_.insert(pending_.end(), d, d + n);
@@ -117,7 +101,129 @@ void FunAsrWsEngine::start(EventLoop *loop, const VoiceInputConfig *config,
         })) {
         FCITX_WARN() << "FunAsrWs: parec 启动失败";
         finishSession("");
+        return;
     }
+
+    if (!connectServer(host, port) || !wsHandshake()) {
+        close(sockFd_);
+        sockFd_ = -1;
+        // FunASRAutoStart：按配置拉起服务后异步重连（模型加载 ~15-60s）
+        if (config->funasrAutoStart.value() &&
+            !config->funasrServerCmd.value().empty()) {
+            trySpawnServer();
+            scheduleReconnect();
+            return;
+        }
+        FCITX_WARN() << "FunAsrWs: connect " << config->funasrUrl.value()
+                     << " failed（服务未启动？scripts/funasr-serve.sh start）";
+        finishSession("");
+        return;
+    }
+    onConnected();
+}
+
+void FunAsrWsEngine::onConnected() {
+    std::string host;
+    int port = 0;
+    parseUrl(config_->funasrUrl.value(), &host, &port);
+    // 握手完成后转非阻塞：服务端推理忙时接收缓冲满，阻塞 write 会冻住
+    // fcitx5 主循环（实测冻结 31s）——音频块宁可丢弃（final 兜底），
+    // 控制帧走定时重试
+    {
+        int nb = fcntl(sockFd_, F_GETFL);
+        fcntl(sockFd_, F_SETFL, nb | O_NONBLOCK);
+    }
+    FCITX_INFO() << "FunAsrWs: connected " << host << ":" << port;
+
+    // 首帧：语言配置
+    sendText("{\"language\":\"" + config_->funasrLanguage.value() + "\"}");
+
+    sockEv_ = loop_->addIOEvent(
+        sockFd_, IOEventFlag::In,
+        [this](EventSourceIO *, int, IOEventFlags) {
+            onSocketReadable();
+            return true;
+        });
+
+    // 连接前缓存的音频补发
+    if (!preConnAudio_.empty()) {
+        sendWsFrame(false, preConnAudio_.data(), preConnAudio_.size());
+        preConnAudio_.clear();
+    }
+}
+
+void FunAsrWsEngine::trySpawnServer() {
+    if (spawned_) {
+        return;
+    }
+    spawned_ = true;
+    std::string host;
+    int port = 0;
+    parseUrl(config_->funasrUrl.value(), &host, &port);
+    const char *dev = "auto";
+    switch (config_->funasrDevice.value()) {
+    case FunASRDeviceKind::Gpu: dev = "gpu"; break;
+    case FunASRDeviceKind::Cpu: dev = "cpu"; break;
+    default: break;
+    }
+    std::string quant =
+        config_->funasrQuant.value() == FunASRQuantKind::Int8 ? "int8" : "";
+    pid_t pid = fork();
+    if (pid == 0) {
+        setsid();
+        int devnull = open("/dev/null", O_WRONLY);
+        if (devnull >= 0) {
+            dup2(devnull, 1);
+            dup2(devnull, 2);
+        }
+        std::string p = std::to_string(port);
+        std::string qs = quant;
+        const std::string &cmd = config_->funasrServerCmd.value();
+        char *const argv[] = {const_cast<char *>(cmd.c_str()), nullptr};
+        // 传参约定见 funasr-serve.sh（FUNASR_PORT/DEVICE/QUANT）
+        setenv("FUNASR_PORT", p.c_str(), 1);
+        setenv("FUNASR_DEVICE", dev, 1);
+        setenv("FUNASR_QUANT", qs.c_str(), 1);
+        execv(cmd.c_str(), argv);
+        _exit(127);
+    }
+    FCITX_INFO() << "FunAsrWs: FunASRAutoStart 拉起服务 pid=" << pid
+                 << " device=" << dev << " quant=" << (quant.empty() ? "无" : quant)
+                 << " cmd=" << config_->funasrServerCmd.value()
+                 << "（模型加载 ~15-60s，期间音频缓存）";
+}
+
+void FunAsrWsEngine::scheduleReconnect() {
+    if (finished_) {
+        return;
+    }
+    // 2s 周期重连，~45s 上限（CPU 档加载 60s+ 时留给 final 超时兜底）
+    if (++reconnectCount_ > 22) {
+        FCITX_WARN() << "FunAsrWs: 自动拉起后重连超时";
+        finishSession("");
+        return;
+    }
+    reconnectTimer_ = loop_->addTimeEvent(
+        CLOCK_MONOTONIC, nowUs() + 2 * 1000000, 0,
+        [this](EventSourceTime *, uint64_t) {
+            std::string host;
+            int port = 0;
+            if (parseUrl(config_->funasrUrl.value(), &host, &port) &&
+                connectServer(host, port) && wsHandshake()) {
+                onConnected();
+                return false;
+            }
+            if (sockFd_ >= 0) {
+                close(sockFd_);
+                sockFd_ = -1;
+            }
+            // 时间事件严格一次性：defer 链再挂下一个
+            reconnectDefer_ = loop_->addDeferEvent([this](EventSource *) {
+                scheduleReconnect();
+                return true;
+            });
+            return false;
+        });
 }
 
 bool FunAsrWsEngine::connectServer(const std::string &host, int port) {
@@ -442,6 +548,8 @@ void FunAsrWsEngine::teardownAll() {
     finalTimer_.reset();
     stopRetryTimer_.reset();
     stopDefer_.reset();
+    reconnectTimer_.reset();
+    reconnectDefer_.reset();
     sockEv_.reset();
     if (capture_) {
         capture_->stop();

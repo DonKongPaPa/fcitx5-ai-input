@@ -105,15 +105,26 @@ make compare             # 汇总历史报告，生成方案对比页（性能/�
 - ✅ 视觉验证改用 vision subagent（能真实感知录屏帧，替代像素取证）：确认 MD3 风格渲染正确、自适应尺寸观感合适、发现并关闭 niri hotkey-overlay 干扰
 - ⬜ 后续：LLM 双后端（OpenAI 兼容 API / 本地 Qwen 直连）替换 Dummy 润色、真实音频进 case-driver 管线（audio 字段）与报告 asr_raw、kde/gnome 环境补测
 
-## FunASR 使用
+## FunASR 使用（两种运行形态）
+
+**产品形态 = 宿主原生**：模型服务跑在用户机器上（GPU 原生驱动无容器），
+在 configtool「模型部署」组配置：
+- `FunASRAutoStart` 开 + `FunASRServerCmd` 指向 funasr-serve.sh → addon
+  连接失败时自动拉起（按 `FunASRDevice`/`FunASRQuant` 传参，模型加载
+  ~15-60s 期间音频自动缓存不丢开头）
+- 引擎选 `FunASR`（流式 31 语种）/ `FunASRLocal`（GGUF 本地档 zh/en/ja）
 
 ```bash
-scripts/funasr-serve.sh start   # 宿主 WS 识别服务（GPU 原生；FUNASR_DEVICE=cpu 可切）
-# configtool（或写 conf/voiceinput.config）：
-#   AsrEngine=FunASR      流式档（FunASRUrl=ws://127.0.0.1:10095，容器内 ws://host.containers.internal:10095）
-#   AsrEngine=FunASRLocal GGUF 本地档（llama-funasr-cli + gguf 目录，zh/en/ja 非流式）
-scripts/env/f6-test.sh          # 真实音频 E2E（需在 niri 容器编排内运行，见提交历史）
-scripts/run-f7.sh               # 部署矩阵×configtool 测试（GPU/CPU 两档 + GUI 冒烟）
+scripts/funasr-serve.sh start   # 手动起（AutoStart 关时）；FUNASR_DEVICE/QUANT/PORT 可覆盖
+```
+
+**测试形态 = 容器自含**：模型服务跑在 podman 容器（GPU 直通复用实验 001
+免 sudo 模式），测试结束即销毁、宿主不留常驻进程：
+
+```bash
+scripts/funasr-container.sh start-gpu|start-cpu [quant]|status|stop
+scripts/run-f6.sh               # 真实音频 E2E（funasr-gpu 容器 → niri 容器）
+scripts/run-f7.sh               # 部署矩阵×configtool 深测（GPU/CPU 双容器）
 ```
 
 ### 部署档实测（f7，6.5s 中文样本，宿主直连冒烟）
@@ -121,8 +132,9 @@ scripts/run-f7.sh               # 部署矩阵×configtool 测试（GPU/CPU 两�
 | 档 | 首包 | 最终 | 会话(press→候选) | 资源 | 说明 |
 |---|---|---|---|---|---|
 | GPU（RTX 3060 Laptop, cuda:0） | **0.72s** | 4.48s | 10.2s | VRAM 3962MiB | 默认档 |
-| CPU int8 量化（FUNASR_QUANT=int8） | 0.78-1.39s | 6.2-6.6s | 13.7s | RSS ~6.5-7GB | 多语种无 GPU 兜底；量化提速（实验 001：fp32→int8 RTF 0.43→0.185），dynamic 量化不省权重内存 |
-| GGUF 本地（llama-funasr-cli） | —（非流式） | ~1.3s | ~11s | RSS ~1.5GB | **内存最小**，zh/en/ja |
+| CPU int8 量化（FUNASR_QUANT=int8） | 0.78-1.39s | 6.2-6.6s | 13.7s | RSS ~6.5-7GB | 31 语种无 GPU 兜底；量化提速（实验 001：fp32→int8 RTF 0.43→0.185），dynamic 量化不省权重内存 |
+| GGUF 本地（llama-funasr-cli） | —（非流式） | ~1.3s | ~11s | RSS ~1.5GB | zh/en/ja 非流式 |
+| sherpa-onnx paraformer int8（实验 004） | **0.07s** | — | — | **RSS 412MB** | **CPU 低内存流式**（zh/en，增量流式）；第四引擎档候选，见 experiments/004 |
 
 ### configtool 配置链路（f7 S1/S2）
 

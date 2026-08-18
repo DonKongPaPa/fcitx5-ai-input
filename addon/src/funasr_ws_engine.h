@@ -45,6 +45,10 @@ private:
     void finishSession(const std::string &text);
     void teardownAll();
     void scheduleFinalTimeout();
+    // 自动拉起（FunASRAutoStart）：spawn 服务脚本后异步重连
+    void trySpawnServer();
+    void scheduleReconnect();
+    void onConnected(); // 握手完成后的公共初始化（配置帧+IO+采集）
 
     EventLoop *loop_ = nullptr;
     const VoiceInputConfig *config_ = nullptr;
@@ -64,6 +68,13 @@ private:
     uint64_t chunkAccum_ = 0; // 攒 ~100ms 再发一帧
     std::vector<uint8_t> pending_;
     int dropCount_ = 0;       // 音频块丢弃计数（节流日志用）
+
+    // 自动拉起状态
+    bool spawned_ = false;   // 已尝试 spawn（防重复）
+    int reconnectCount_ = 0; // 异步重连计数（2s×N 上限 ~45s）
+    std::unique_ptr<EventSourceTime> reconnectTimer_;
+    std::unique_ptr<EventSource> reconnectDefer_;
+    std::vector<uint8_t> preConnAudio_; // 连接前音频缓存（不丢开头）
 
     void scheduleStopRetry();
 };
