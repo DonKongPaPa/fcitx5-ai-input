@@ -43,7 +43,9 @@ set_target_properties(voiceinput PROPERTIES PREFIX "")
 install(TARGETS voiceinput LIBRARY DESTINATION "${FCITX_INSTALL_ADDONDIR}")
 
 # addon 描述文件 → share/fcitx5/addon/
-fcitx5_translate_desktop_file(voiceinput.conf.in voiceinput.conf)
+# fcitx5_translate_desktop_file 只做 i18n 不替换 @VAR@——直接 configure_file
+# （addon conf 不需要 i18n 翻译，Version 必须被替换）
+configure_file(voiceinput.conf.in voiceinput.conf @ONLY)
 install(FILES "${CMAKE_CURRENT_BINARY_DIR}/voiceinput.conf"
         DESTINATION "${FCITX_INSTALL_PKGDATADIR}/addon")
 
