@@ -1,6 +1,6 @@
 # fcitx5-voice-input
 
-基于 fcitx5 的语音输入法：ASR 识别语音，LLM 优化输出结果（标点、纠错、分段），文本提交到光标处。
+基于 fcitx5 的语音输入模块：**任何输入法激活时**（rime/pinyin…无需切换）长按右 Ctrl 说话，ASR 识别 + LLM 优化（标点、纠错、分段），文本提交到光标处。Flutter UI 以 raw embedder 进程内嵌入（软渲染），无独立窗口/进程。
 
 ## 总体架构
 
@@ -15,10 +15,11 @@
                       │     llama-funasr-cli 子进程（zh/en/ja 非流式，CPU ~1.5G）
                       │   · Dummy（调试/管线确定性回归）
                       │
-                      │ TCP 127.0.0.1（行式 JSON 状态 + RGBA 帧）
+                      │ MethodChannel 'fcitx5/flutterui'（JSONMethodCodec）
                       ▼
-              [Flutter voice_ui：MD3 浮窗，跑在 weston headless 上]
-                RepaintBoundary.toImage 快照 → 帧回传
+              [Flutter 引擎进程内嵌入（raw embedder API）：
+                kSoftware 软渲染 → present 回调（raster 线程）→
+                单锁快照 → eventfd 唤醒主线程，无窗口/无独立进程]
                       │
                 addon: wl_shm buffer → wl_surface
                       → zwp_input_popup_surface_v2（借 waylandim 的 IM 连接，
@@ -26,8 +27,9 @@
                       → 文本经 InputContext::commitString 落到光标处
 ```
 
-- `addon/`：fcitx5 插件。配置（`voiceinput.conf.desc` → configtool 设置页，热改即时生效）、按键状态机（HoldRelease/Toggle 两模式 + 阈值 + 录音中 Esc 取消）、AsrEngine 抽象（Dummy/FunASR WS/FunASR GGUF 三实现）、UiBridge（flutter 进程管理 + 帧接收）、VoicePopup（popup surface，纯 C libwayland）
-- `flutter/`：MD3 三态 UI（录音=mic+计时+流式 partial 尾部优先 / 结果 / 候选），全官方组件，自适应尺寸（宽 280–420 实测），快照帧桥
+- `addon/`：fcitx5 模块（Category=Module，无输入法条目——`watchEvent(InputContextKeyEvent, PreInputMethod)` 全局拦截触发键，官方"独立模式 addon"工作流，与任意输入法共存）。配置（configtool 设置页，热改即时生效）、按键状态机（HoldRelease/Toggle + 阈值 + Esc 取消 + 候选态方向键导航）、AsrEngine 抽象（Dummy/FunASR WS/FunASR GGUF）、FlutterEngineHost（raw embedder 进程内嵌入）、VoicePopup（popup surface，纯 C libwayland）
+- `flutter/`：MD3 三态 UI（录音=mic+计时+流式 partial 尾部优先 / 结果 / 候选），全官方组件，自适应尺寸（宽 280–420 实测），resize 协议消息回报；GTK runner 仅保留作 `flutter run` 开发调试
+- `addon/third_party/` + `scripts/fetch-flutter-embedder.sh`：Flutter embedder C API 头文件（vendor）与 libflutter_engine.so（按引擎 hash 锁定下载；官方工件仅 JIT 变体，配 `flutter build bundle` 的 kernel_blob）
 - `scripts/funasr-server/`：宿主 WS 识别服务（uv venv python3.12 + funasr/torch-CUDA，`scripts/funasr-serve.sh start` 管理）
 - 定位不由我们计算：popup 挂在 waylandim 的 `zwp_input_method_v2` 上，合成器按 text-input 光标矩形放置（协议规定一个 seat 仅一个 IM，必须复用 waylandim 的连接，不能自 bind）
 
@@ -50,7 +52,7 @@
 - kwin/sway 自带 `cap_sys_nice` filecap → rootless 容器 exec EPERM → 镜像内 `setcap -r`
 - 双 GPU 机器只直通第一个渲染节点：NVIDIA 节点参与会跨设备 dmabuf 拷贝失败
 - wf-recorder 0.6.0 两个补丁（`containers/patches/`）：ffmpeg 9 API 适配（Arch 官方）+ dmabuf 绑定版本协商
-- weston headless 是 no-op 渲染器不驱动帧时钟，不能当无头宿主用（但可以当 flutter 这类普通应用客户端的窗口宿主，应用自身 damage 驱动重绘）
+- weston headless 是 no-op 渲染器不驱动帧时钟，不能当无头宿主用——v0.1 曾用它当 Flutter GTK 窗口宿主；0.2 起改 raw embedder 进程内软渲染，不再需要
 - niri 26.04 的 KDL 解析不接受旧版单行内联 `animations { workspace-switch { off } }` 写法（解析失败静默回退默认配置 + 弹错误提示窗）
 - 测试环境不设 `GTK_IM_MODULE`：应用必须走原生 text-input-v3（frontend=wayland_v2）才有 IM 激活与光标矩形；设 `=fcitx` 会走 dbus 前端，popup 取不到 IM proxy
 
@@ -146,7 +148,7 @@ scripts/run-f7.sh               # 部署矩阵×configtool 深测（GPU/CPU 双�
 ## Flutter UI 里程碑细节（F1-F5）
 
 - **尺寸自适应**（vision 复核后调整）：宽度 `TextPainter` 实测 clamp(280,420)——录音态固定 280、候选态按最长候选加宽；高度按状态（录音 104/结果按行数/候选按条数）；流式 partial 尾部优先（截头加省略号，最新内容始终可见）；快照尺寸取 boundary 实际值，addon 侧 resize 自动重建 shm 池
-- **帧桥**：`RepaintBoundary.toImage` 快照 → 行式 JSON 头 + RGBA 二进制 → addon `pushFrame`（尺寸变化自动重建 shm 池）。TCP 初版够用（≤420×200×4 ≈ 336KB/帧），unix socket + memfd 零拷贝留作优化
+- **UI 嵌入**（0.2 重构，按 v1 实现报告路线）：Flutter raw embedder API 进程内嵌入——kSoftware 软渲染、present 回调（raster 线程）单锁快照后 eventfd 唤醒主线程写 wl_shm、自定义 platform task runner 把 Dart 任务投回 fcitx5 主循环、vsync baton 统一在主循环回 OnVsync。跨线程唤醒用 eventfd+addIOEvent（addAsyncEvent 是 5.1.13+ API，bookworm 5.0.21 没有）
 - **窗口宿主**：flutter 进程由 addon 按需拉起（IC 激活预热，冷启动 ~3s），GTK 窗口开在 weston headless（`VOICEINPUT_UI_DISPLAY`）——cage 是单客户端 kiosk 不能用；weston headless 对普通应用客户端工作正常（此前"不能用"的结论仅限嵌套合成器场景）
 - **配置热改**：写 `conf/voiceinput.config` + D-Bus `org.fcitx.Fcitx.Controller1.ReloadAddonConfig voiceinput`（接口名**不带 5**）→ `reloadConfig` 即时生效
 - **测试触发**：`org.fcitx.VoiceInput.Test`（State/Candidates/SimulateKey/Trigger），确定性驱动状态机；跑 f4/f5 前屏蔽 `/usr/share/dbus-1/services/org.fcitx.Fcitx5.service`（portal/GTK 会 D-Bus 激活第二个 fcitx5 抢名）

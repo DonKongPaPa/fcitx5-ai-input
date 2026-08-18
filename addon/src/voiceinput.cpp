@@ -22,20 +22,25 @@ static uint64_t nowUs() {
     return static_cast<uint64_t>(ts.tv_sec) * 1000000 + ts.tv_nsec / 1000;
 }
 
-// Flutter 资产发现：env 覆盖 → 打包安装路径
+// Flutter 资产发现：env 覆盖 → 用户级（~/.local/share）→ 系统包安装路径
 static bool findFlutterAssets(std::string *assetsDir, std::string *icuPath) {
     if (const char *env = getenv("VOICEINPUT_FLUTTER_DIR"); env && *env) {
         *assetsDir = std::string(env) + "/flutter_assets";
         *icuPath = std::string(env) + "/icudtl.dat";
         return true;
     }
-    static const char *candidates[] = {
-        "/usr/share/fcitx5-voiceinput/flutter",
-        "/usr/local/share/fcitx5-voiceinput/flutter",
-    };
-    for (const char *dir : candidates) {
-        std::string assets = std::string(dir) + "/flutter_assets";
-        std::string icu = std::string(dir) + "/icudtl.dat";
+    std::vector<std::string> candidates;
+    if (const char *xdg = getenv("XDG_DATA_HOME"); xdg && *xdg) {
+        candidates.push_back(std::string(xdg) + "/fcitx5-voiceinput/flutter");
+    } else if (const char *home = getenv("HOME"); home && *home) {
+        candidates.push_back(std::string(home) +
+                             "/.local/share/fcitx5-voiceinput/flutter");
+    }
+    candidates.push_back("/usr/share/fcitx5-voiceinput/flutter");
+    candidates.push_back("/usr/local/share/fcitx5-voiceinput/flutter");
+    for (const auto &dir : candidates) {
+        std::string assets = dir + "/flutter_assets";
+        std::string icu = dir + "/icudtl.dat";
         if (access(assets.c_str(), F_OK) == 0 && access(icu.c_str(), R_OK) == 0) {
             *assetsDir = assets;
             *icuPath = icu;
