@@ -47,6 +47,9 @@ for i in $(seq 1 30); do [ -S "$XDG_RUNTIME_DIR/flutter-hd" ] && break; sleep 0.
 LOG_DIR=/tmp/logs; mkdir -p "$LOG_DIR"
 # shellcheck disable=SC1091
 source /scripts/env/common.sh >/dev/null 2>&1 || true
+# common.sh 为 M 时代 Trigger 注入 export 了 GTK_IM_MODULE=fcitx——那会让
+# testapp 走 dbus 前端、popup 拿不到 waylandim IM proxy（UI 不显示，F3 踩过）
+unset GTK_IM_MODULE QT_IM_MODULE
 start_audio >/dev/null 2>&1 || true
 # 虚拟麦有启动竞态（pipewire 就绪前后 null-sink 加载可能失败）：重试到就绪
 defsrc=""
@@ -153,6 +156,36 @@ case "$txt" in *"回归正常"*) ok "Dummy 落点 ✓";; *) bad "Dummy 落点异
 sleep 1
 kill -INT $REC 2>/dev/null; sleep 2
 kill %1 %2 %3 2>/dev/null
+
+# UI 可见性防回归：录屏中应出现悬浮面板（防 IM 前端/桥断裂类回归）
+if command -v ffmpeg >/dev/null && [ -f /tmp/f6.mp4 ]; then
+    vis=$(python3 - <<'PYEOF'
+import subprocess
+W, H = 1280, 720
+p = subprocess.Popen(["ffmpeg","-v","error","-i","/tmp/f6.mp4",
+    "-f","rawvideo","-pix_fmt","rgb24","-"], stdout=subprocess.PIPE)
+fs = W*H*3; counts=[]
+while True:
+    b = p.stdout.read(fs)
+    if len(b) < fs: break
+    c = 0
+    for y in range(30, 690, 12):
+        base = y*W
+        for x in range(100, 900, 12):
+            i = (base+x)*3
+            if b[i] > 195 and b[i+1] > 195 and b[i+2] > 195: c += 1
+    counts.append(c)
+base = sorted(counts[:20])[len(counts[:20])//2] if counts else 0
+print(sum(1 for c in counts if c > base + 60))
+PYEOF
+)
+    if [ "${vis:-0}" -gt 5 ]; then
+        ok "录屏中悬浮面板可见（${vis} 帧）"
+    else
+        bad "录屏中未见到悬浮面板（${vis:-0} 帧）——检查 IM 前端/帧桥"
+    fi
+fi
+
 echo "=============================="
 echo "F6 结果: PASS=$PASS FAIL=$FAIL"
 [ "$FAIL" -eq 0 ] && echo "F6 真实音频端到端：全部通过 ✓" || echo "F6：存在失败 ✗"
