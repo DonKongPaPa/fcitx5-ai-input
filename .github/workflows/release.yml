@@ -67,11 +67,6 @@ jobs:
           export VERSION="${VERSION#v}"
           export SRC="$PWD" FLUTTER_BUNDLE="$PWD/flutter-bundle-dl"
           bash packaging/${{ matrix.id }}/build.sh
-          # 版本号归一（去 v 前缀的文件名统一）
-          cd artifacts/packages
-          for f in *; do
-            mv "$f" "$(echo "$f" | sed "s/-0\.1\.0/-$V/; s/_0\.1\.0/_$V/")" 2>/dev/null || true
-          done
       - uses: actions/upload-artifact@v4
         with:
           name: pkg-${{ matrix.id }}
