@@ -14,24 +14,31 @@ permissions:
   contents: write
 
 jobs:
-  # Flutter bundle 只构建一次（glibc 2.35 基座，四路复用保兼容）
+  # Flutter JIT 资产 + raw embedder 引擎只构建/下载一次（四路复用）。
+  # flutter-version 必须钉死：引擎 .so 与 kernel_blob 的引擎 hash 必须一致
+  #（3.44.8 = engine 0cd610717b，见 scripts/fetch-flutter-embedder.sh）
   flutter-bundle:
     runs-on: ubuntu-22.04
     steps:
       - uses: actions/checkout@v4
       - uses: subosito/flutter-action@v2
         with:
+          flutter-version: 3.44.8
           channel: stable
           cache: true
       - run: flutter --version
-      - name: Build linux release
+      - name: Build JIT bundle + fetch embedder engine
         run: |
-          sudo apt-get update -qq && sudo apt-get install -y -qq ninja-build libgtk-3-dev pkg-config
-          cd flutter && flutter build linux --release
+          cd flutter && flutter pub get && flutter build bundle
+          mkdir -p ../flutter-out && cp -r build/flutter_assets ../flutter-out/
+          SDK=$(dirname "$(dirname "$(readlink -f "$(command -v flutter)")")")
+          cp "$SDK/bin/cache/artifacts/engine/linux-x64/icudtl.dat" ../flutter-out/
+          cd .. && bash scripts/fetch-flutter-embedder.sh
+          cp .cache/flutter-embedder/libflutter_engine.so flutter-out/
       - uses: actions/upload-artifact@v4
         with:
           name: flutter-bundle
-          path: flutter/build/linux/x64/release/bundle/
+          path: flutter-out/
           retention-days: 3
 
   package:
@@ -65,7 +72,9 @@ jobs:
         run: |
           # GITHUB_ENV 下一步才生效：本步内直接 export
           export VERSION="${VERSION#v}"
-          export SRC="$PWD" FLUTTER_BUNDLE="$PWD/flutter-bundle-dl"
+          export SRC="$PWD" \
+                 FLUTTER_ASSETS="$PWD/flutter-bundle-dl" \
+                 FLUTTER_ENGINE_LIBRARY="$PWD/flutter-bundle-dl/libflutter_engine.so"
           bash packaging/${{ matrix.id }}/build.sh
       - uses: actions/upload-artifact@v4
         with:
@@ -95,8 +104,10 @@ jobs:
           body: |
             ## fcitx5-voice-input ${{ github.ref_name }}
 
-            语音输入：FunASR 流式（31 语种）/ GGUF 本地双引擎 + Flutter MD3
-            光标悬浮窗 + LLM 润色候选（键盘/鼠标选择）+ configtool 热改设置。
+            语音输入：任何输入法激活时长按右 Ctrl 即用（无需切换，与
+            rime/pinyin 共存）。FunASR 流式（31 语种）/ GGUF 本地双引擎 +
+            Flutter MD3 光标悬浮窗（引擎进程内嵌入，无独立窗口/进程）+
+            LLM 润色候选（数字/方向键/鼠标选择）+ configtool 热改设置。
 
             ### 安装
             - **Arch**: `pacman -U fcitx5-voice-input-*.pkg.tar.zst`
