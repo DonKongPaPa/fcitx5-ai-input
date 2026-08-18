@@ -63,6 +63,8 @@ jobs:
           SRC: ${{ github.workspace }}
           VERSION: ${{ github.event.inputs.version || github.ref_name }}
         run: |
+          set -x
+          pwd; ls -la; ls -la flutter-bundle-dl 2>&1 | head -5
           V="${VERSION#v}"
           echo "VERSION=$V" >> "$GITHUB_ENV"
           bash packaging/${{ matrix.id }}/build.sh
