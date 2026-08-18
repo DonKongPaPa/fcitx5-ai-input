@@ -21,13 +21,6 @@ namespace fcitx {
 static constexpr int kDefaultWidth = 360;
 static constexpr int kDefaultHeight = 200;
 
-// 候选行几何（须与 flutter _CandidatesBody 布局一致：头部 ~26px + 行0 64px
-//（含 subtitle）+ 后续行 52px）；kShadowPad 与 flutter kShadowPad 一致
-//（快照区比卡片大一圈阴影余量，指针坐标先扣掉才是卡片局部）
-static constexpr int kCandHeaderH = 28;
-static constexpr int kCandRowH = 54;
-static constexpr int kShadowPad = 12;
-
 static const wl_registry_listener kRegistryListener = {
     /* .global = */ &VoicePopup::registryGlobalImpl,
     /* .global_remove = */ &VoicePopup::registryGlobalRemoveImpl,
@@ -99,18 +92,11 @@ void VoicePopup::pointerEnter(void *data, wl_pointer *, uint32_t,
     s->ptrY_ = wl_fixed_to_int(sy);
     if (surface == s->surface_) {
         // niri 实测：IM popup 收得到 pointer enter（同 classicui 机制），
-        // 坐标即面板局部——命中走直路，矩形映射只做兜底。
-        // 绝对定位类移动（虚拟指针/部分合成器）只有 enter 没有后续
-        // motion，enter 即做 hover 判定
+        // 坐标即面板局部（含阴影余量）——直接转发给 Flutter 引擎，
+        // hover/点击命中由 Dart 处理
         s->pointerOnPopup_ = true;
-        FCITX_INFO() << "VoicePopup: pointer enter 直达 popup 表面 @"
-                     << s->ptrX_ << "," << s->ptrY_;
-        int row = s->pointerRow(s->ptrX_, s->ptrY_);
-        if (row != s->lastHoverRow_) {
-            s->lastHoverRow_ = row;
-            if (s->hoverHandler_) {
-                s->hoverHandler_(row);
-            }
+        if (s->pointerSink_) {
+            s->pointerSink_(PointerEvent::Enter, s->ptrX_, s->ptrY_);
         }
     } else {
         s->pointerOnPopup_ = false;
@@ -122,15 +108,12 @@ void VoicePopup::pointerLeave(void *data, wl_pointer *, uint32_t,
     auto *s = static_cast<VoicePopup *>(data);
     if (surface == s->surface_) {
         s->pointerOnPopup_ = false;
+        if (s->pointerSink_) {
+            s->pointerSink_(PointerEvent::Leave, s->ptrX_, s->ptrY_);
+        }
     }
     s->ptrX_ = -10000;
     s->ptrY_ = -10000;
-    if (s->lastHoverRow_ != -1) {
-        s->lastHoverRow_ = -1;
-        if (s->hoverHandler_) {
-            s->hoverHandler_(-1);
-        }
-    }
 }
 
 void VoicePopup::pointerMotion(void *data, wl_pointer *, uint32_t,
@@ -138,73 +121,23 @@ void VoicePopup::pointerMotion(void *data, wl_pointer *, uint32_t,
     auto *s = static_cast<VoicePopup *>(data);
     s->ptrX_ = wl_fixed_to_int(sx);
     s->ptrY_ = wl_fixed_to_int(sy);
-    int row = s->pointerRow(s->ptrX_, s->ptrY_);
-    if (row != s->lastHoverRow_) {
-        s->lastHoverRow_ = row;
-        if (s->hoverHandler_) {
-            s->hoverHandler_(row);
-        }
+    if (s->pointerOnPopup_ && s->pointerSink_) {
+        s->pointerSink_(PointerEvent::Motion, s->ptrX_, s->ptrY_);
     }
 }
 
 void VoicePopup::pointerButton(void *data, wl_pointer *, uint32_t,
                                uint32_t, uint32_t button, uint32_t state) {
     auto *s = static_cast<VoicePopup *>(data);
-    if (state != WL_POINTER_BUTTON_STATE_PRESSED || button != 0x110) {
-        return; // 只处理左键按下
+    if (button != 0x110 || !s->pointerOnPopup_) { // 只处理左键
+        return;
     }
-    int row = s->pointerRow(s->ptrX_, s->ptrY_);
-    FCITX_INFO() << "VoicePopup: pointer button @" << s->ptrX_ << ","
-                 << s->ptrY_ << " → row=" << row
-                 << (s->hasCursorRect_ ? "" : "（无光标矩形，未命中正常）");
-    if (row >= 0 && s->clickHandler_) {
-        s->clickHandler_(row);
+    if (s->pointerSink_) {
+        s->pointerSink_(
+            state == WL_POINTER_BUTTON_STATE_PRESSED ? PointerEvent::Press
+                                                     : PointerEvent::Release,
+            s->ptrX_, s->ptrY_);
     }
-}
-
-// 命中：优先直达局部坐标（pointerOnPopup_ 时即表面局部，含阴影余量）；
-// 否则用光标矩形 + 放置规则映射（兜底，合成器不给 enter 时）
-int VoicePopup::pointerRow(int winX, int winY) const {
-    if (pointerOnPopup_) {
-        winX -= kShadowPad; // 扣掉快照余量 → 卡片局部
-        winY -= kShadowPad;
-        // Flutter 候选布局：头部 26，行0（含 subtitle）64，后续行 52
-        if (winY < 26 || winX < 0 || winX > width_ - kShadowPad * 2) {
-            return -1;
-        }
-        int y = winY - 26;
-        if (y < 64) {
-            return 0;
-        }
-        int row = 1 + (y - 64) / 52;
-        return row <= 8 ? row : -1;
-    }
-    if (!hasCursorRect_ || width_ <= 0 || height_ <= 0) {
-        return -1;
-    }
-    int px = cursorX_;
-    int belowY = cursorY_ + cursorH_;
-    int aboveY = cursorY_ - height_;
-    bool xOk = winX >= px - 4 - kShadowPad &&
-               winX < px + width_ - kShadowPad * 2 + 4;
-    bool below = xOk && winY >= belowY - kShadowPad &&
-                 winY < belowY + height_;
-    bool above = xOk && winY >= aboveY && winY < cursorY_ + kShadowPad;
-    if (!below && !above) {
-        return -1;
-    }
-    int localY = (below ? (winY - belowY) : (winY - aboveY)) - kShadowPad;
-    if (localY < kCandHeaderH) {
-        return -1;
-    }
-    int row = (localY - kCandHeaderH) / kCandRowH;
-    int maxRow = (height_ - kShadowPad * 2 - kCandHeaderH + kCandRowH - 1) /
-                     kCandRowH -
-                 1;
-    if (row < 0 || row > maxRow || row > 8) {
-        return -1; // 点在头部或超出候选数
-    }
-    return row;
 }
 
 VoicePopup::VoicePopup(Instance *instance) : instance_(instance) {
@@ -479,7 +412,7 @@ void VoicePopup::resize(int w, int h) {
     FCITX_INFO() << "VoicePopup: shm pool resized to " << w << "x" << h;
 }
 
-void VoicePopup::pushFrame(const uint8_t *rgba, int w, int h) {
+void VoicePopup::pushFrameBGRA(const uint8_t *bgra, int w, int h) {
     if (w != width_ || h != height_) {
         resize(w, h);
     }
@@ -488,32 +421,9 @@ void VoicePopup::pushFrame(const uint8_t *rgba, int w, int h) {
     if (!visible_ || !surface_ || !buffers_[0] || !popup_) {
         return;
     }
-    static int frameLogCount = 0; // 调试：前3帧记日志
-    if (frameLogCount < 3) {
-        ++frameLogCount;
-        size_t nz = 0, alpha0 = 0;
-        for (size_t i = 0; i < static_cast<size_t>(w) * h; ++i) {
-            if (rgba[i * 4] | rgba[i * 4 + 1] | rgba[i * 4 + 2]) {
-                ++nz;
-            }
-            if (rgba[i * 4 + 3] == 0) {
-                ++alpha0;
-            }
-        }
-        FCITX_INFO() << "VoicePopup: frame #" << frameLogCount << " " << w
-                     << "x" << h << " 非零像素=" << nz << " 全透明=" << alpha0
-                     << " surface=" << (surface_ ? 1 : 0)
-                     << " popup=" << (popup_ ? 1 : 0);
-    }
     size_t bufSize = static_cast<size_t>(width_) * height_ * 4;
-    uint8_t *dst = pixels_ + cur_ * bufSize;
-    // RGBA→BGRA（WL_SHM_FORMAT_ARGB8888 小端即 BGRA 字节序）
-    for (int i = 0; i < w * h; ++i) {
-        dst[i * 4 + 0] = rgba[i * 4 + 2];
-        dst[i * 4 + 1] = rgba[i * 4 + 1];
-        dst[i * 4 + 2] = rgba[i * 4 + 0];
-        dst[i * 4 + 3] = rgba[i * 4 + 3];
-    }
+    // 引擎软渲输出即 wl_shm ARGB8888 小端字节序（BGRA），直接 memcpy
+    memcpy(pixels_ + cur_ * bufSize, bgra, bufSize);
     wl_surface_attach(surface_, buffers_[cur_], 0, 0);
     damageSurface(surface_, compositorVersion_, width_, height_);
     wl_surface_commit(surface_);

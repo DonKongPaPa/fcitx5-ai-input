@@ -68,22 +68,21 @@ public:
     // 时的回退）立即绘制测试帧
     void show(InputContext *ic);
     void hide();
-    // F4 帧桥入口：写入一帧 RGBA（w×h），尺寸变化时自动重建 shm 池
-    void pushFrame(const uint8_t *rgba, int w, int h);
+    // F4→重构：Flutter 引擎进程内嵌入后的帧入口。写入一帧 BGRA
+    //（wl_shm ARGB8888 小端字节序，引擎软渲输出可直接 memcpy），
+    // 尺寸变化时自动重建 shm 池
+    void pushFrameBGRA(const uint8_t *bgra, int w, int h);
     void resize(int w, int h); // 重建 shm 池（帧尺寸变化）
-    void setPatternMode(bool p) { patternMode_ = p; } // 桥不可用回退色块
+    void setPatternMode(bool p) { patternMode_ = p; } // 引擎不可用时回退色块
 
-    // P3 鼠标路由：niri 的 IM popup 不收指针事件（命中测试只走窗口/层
-    // surface 树），点击会落到下层窗口——seat 级 wl_pointer 能收到该窗口
-    // 局部坐标，配合 text_input_rectangle（同为窗口局部）+ 放置规则做命中
-    void setClickHandler(std::function<void(int row)> h) {
-        clickHandler_ = std::move(h);
+    // P3→重构：指针事件原始转发（不再 C++ 侧命中测试——Flutter 引擎直接
+    // 收 FlutterPointerEvent，hover/点击由 Dart 命中）。niri 的 IM popup 不
+    // 在窗口/层 surface 树里，seat 级 wl_pointer 才能收到表面局部坐标
+    enum class PointerEvent { Enter, Leave, Motion, Press, Release };
+    void setPointerSink(
+        std::function<void(PointerEvent kind, int x, int y)> sink) {
+        pointerSink_ = std::move(sink);
     }
-    void setHoverHandler(std::function<void(int row)> h) {
-        hoverHandler_ = std::move(h);
-    }
-    // 当前 popup 在焦点窗口坐标系里的候选行命中（-1=不在面板上）
-    int pointerRow(int winX, int winY) const;
 
     // wayland C 回调（public：listener 结构需要函数指针）
     static void registryGlobalImpl(void *data, wl_registry *reg, uint32_t name,
@@ -129,10 +128,8 @@ private:
     // 指针路由状态
     bool hasCursorRect_ = false; // text_input_rectangle 是否已送达（决策门）
     bool pointerOnPopup_ = false; // 指针焦点在我们 popup 表面（直达模式）
-    std::function<void(int row)> clickHandler_;
-    std::function<void(int row)> hoverHandler_;
-    int lastHoverRow_ = -1;
-    int ptrX_ = -10000, ptrY_ = -10000; // 最近指针位置（焦点窗口局部）
+    std::function<void(PointerEvent, int, int)> pointerSink_;
+    int ptrX_ = -10000, ptrY_ = -10000; // 最近指针位置（表面局部）
 
     // shm 双缓冲
     wl_shm_pool *pool_ = nullptr;

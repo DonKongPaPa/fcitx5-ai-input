@@ -1,5 +1,7 @@
 #!/usr/bin/env bash
-# 在编译容器中构建 addon + flutter UI + testapp，产物装入 artifacts/dist/
+# 构建 addon（编译容器）+ Flutter JIT 资产（宿主 SDK——须与
+# .cache/flutter-embedder/libflutter_engine.so 的引擎 hash 一致）+ testapp，
+# 产物装入 artifacts/dist/
 set -euo pipefail
 
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
@@ -7,6 +9,23 @@ IMAGE="${BUILD_IMAGE:-localhost/voiceinput-build:latest}"
 
 mkdir -p "$ROOT/artifacts/dist"
 
+# —— Flutter 资产（宿主）：flutter build bundle（JIT）——
+# 引擎 .so 是按宿主 SDK 的 engine hash 下载的（fetch-flutter-embedder.sh），
+# kernel_blob 必须同一 SDK 产出，所以 flutter 构建留在宿主、不进容器
+"$ROOT/scripts/fetch-flutter-embedder.sh"
+(
+    cd "$ROOT/flutter"
+    flutter pub get >/dev/null
+    flutter build bundle
+)
+FLUTTER_STAGE="$ROOT/artifacts/dist/share/fcitx5-voiceinput/flutter"
+rm -rf "$FLUTTER_STAGE"
+mkdir -p "$FLUTTER_STAGE"
+cp -r "$ROOT/flutter/build/flutter_assets" "$FLUTTER_STAGE/"
+ICU="$("$ROOT/scripts/flutter-icu-path.sh")"
+cp "$ICU" "$FLUTTER_STAGE/icudtl.dat"
+
+# —— addon + testapp（编译容器）——
 podman run --rm \
     --userns=keep-id \
     -v "$ROOT:/work" \
@@ -16,17 +35,10 @@ podman run --rm \
         set -euxo pipefail
         # 在容器内 /tmp 构建，避免挂载卷时间戳导致 make 跳过重编
         cmake -S /work/addon -B /tmp/build-addon -DCMAKE_BUILD_TYPE=Release \
-              -DCMAKE_INSTALL_PREFIX=/work/artifacts/dist
+              -DCMAKE_INSTALL_PREFIX=/work/artifacts/dist \
+              -DFLUTTER_ENGINE_LIBRARY=/work/.cache/flutter-embedder/libflutter_engine.so
         cmake --build /tmp/build-addon -j"$(nproc)"
         cmake --install /tmp/build-addon
-        # flutter UI（linux desktop, release）→ dist/lib/fcitx5-voiceinput/ui/bundle
-        export PATH=/opt/flutter/bin:$PATH
-        cd /work/flutter
-        flutter build linux --release
-        rm -rf /work/artifacts/dist/lib/fcitx5-voiceinput
-        mkdir -p /work/artifacts/dist/lib/fcitx5-voiceinput/ui
-        cp -r build/linux/x64/release/bundle \
-              /work/artifacts/dist/lib/fcitx5-voiceinput/ui/
         # testapp
         cmake -S /work/apps -B /tmp/build/apps -DCMAKE_BUILD_TYPE=Release \
               -DCMAKE_INSTALL_PREFIX=/work/artifacts/dist
@@ -40,4 +52,4 @@ podman run --rm \
     '
 
 echo ">> 产物："
-find "$ROOT/artifacts/dist" -type f -o -type l | head -50
+find "$ROOT/artifacts/dist" -type f -o -type l | head -30

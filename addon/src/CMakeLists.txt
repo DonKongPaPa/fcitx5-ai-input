@@ -2,21 +2,33 @@ add_library(voiceinput MODULE)
 target_sources(voiceinput PRIVATE
     voiceinput.cpp
     popup_surface.cpp
-    ui_bridge.cpp
+    flutter_engine.cpp
     funasr_ws_engine.cpp
     funasr_local_engine.cpp
 )
-# flutter bundle 安装位置（build.sh 拷入 dist；容器侧 /usr/lib/fcitx5-voiceinput/ui/bundle）
-# 注意：不能用 CMAKE_INSTALL_FULL_LIBDIR——构建时 prefix 是 dist 暂存目录，
-# 会把暂存路径编进二进制；这里要的是目标系统的运行时路径
-set(VOICEINPUT_UI_LIBDIR "/usr/lib" CACHE STRING "Runtime libdir of flutter UI bundle")
-target_compile_definitions(voiceinput PRIVATE
-    VOICEINPUT_UI_PATH="${VOICEINPUT_UI_LIBDIR}/fcitx5-voiceinput/ui/bundle/voice_ui")
 target_link_libraries(voiceinput PRIVATE Fcitx5::Core)
 find_package(Fcitx5ModuleDBus CONFIG REQUIRED)
 target_link_libraries(voiceinput PRIVATE Fcitx5::Module::DBus)
 find_package(Fcitx5ModuleWayland CONFIG REQUIRED)
 target_link_libraries(voiceinput PRIVATE Fcitx5::Module::Wayland)
+
+# —— Flutter raw embedder 引擎（进程内嵌入，软渲染）——
+# 头文件 vendor 在 addon/third_party/；libflutter_engine.so 由
+# scripts/fetch-flutter-embedder.sh 下载到 .cache/flutter-embedder/
+#（官方工件只有 linux-x64/JIT 变体；release 目录仅 GTK 壳不导出 C API）。
+# 打包/容器构建可 -DFLUTTER_ENGINE_LIBRARY=... 显式指定。
+set(FLUTTER_ENGINE_LIBRARY "" CACHE PATH "libflutter_engine.so 路径")
+if(NOT FLUTTER_ENGINE_LIBRARY)
+    set(FLUTTER_ENGINE_LIBRARY "${CMAKE_CURRENT_SOURCE_DIR}/../../.cache/flutter-embedder/libflutter_engine.so")
+endif()
+if(NOT EXISTS "${FLUTTER_ENGINE_LIBRARY}")
+    message(FATAL_ERROR
+        "libflutter_engine.so 未找到：${FLUTTER_ENGINE_LIBRARY}\n"
+        "先运行 scripts/fetch-flutter-embedder.sh，或传 -DFLUTTER_ENGINE_LIBRARY=/path/to/libflutter_engine.so")
+endif()
+target_include_directories(voiceinput PRIVATE "${CMAKE_CURRENT_SOURCE_DIR}/../third_party")
+target_link_libraries(voiceinput PRIVATE "${FLUTTER_ENGINE_LIBRARY}")
+target_link_libraries(voiceinput PRIVATE pthread)
 
 # input-method-v2 协议（wlroots/fcitx5 扩展，不在 wayland-protocols 包内）
 find_program(WAYLAND_SCANNER_EXECUTABLE wayland-scanner REQUIRED)
@@ -40,6 +52,16 @@ target_include_directories(voiceinput PRIVATE ${GEN_DIR})
 target_link_libraries(voiceinput PRIVATE wayland-client)
 set_target_properties(voiceinput PROPERTIES PREFIX "")
 
+# 引擎 .so 装到 addon 旁的私有目录（libdir/fcitx5-voiceinput），rpath 用
+# $ORIGIN 相对定位（无需 LD_LIBRARY_PATH）。路径必须前缀相对——dist 暂存
+# 打包依赖 CMAKE_INSTALL_PREFIX
+install(FILES "${FLUTTER_ENGINE_LIBRARY}"
+        DESTINATION "${CMAKE_INSTALL_LIBDIR}/fcitx5-voiceinput")
+get_filename_component(FLUTTER_ENGINE_DIR "${FLUTTER_ENGINE_LIBRARY}" DIRECTORY)
+set_target_properties(voiceinput PROPERTIES
+    BUILD_RPATH "${FLUTTER_ENGINE_DIR}"
+    INSTALL_RPATH "$ORIGIN/../fcitx5-voiceinput")
+
 install(TARGETS voiceinput LIBRARY DESTINATION "${FCITX_INSTALL_ADDONDIR}")
 
 # addon 描述文件 → share/fcitx5/addon/
@@ -49,8 +71,15 @@ configure_file(voiceinput.conf.in voiceinput.conf @ONLY)
 install(FILES "${CMAKE_CURRENT_BINARY_DIR}/voiceinput.conf"
         DESTINATION "${FCITX_INSTALL_PKGDATADIR}/addon")
 
-# 输入法条目 → share/fcitx5/inputmethod/（文件名必须等于输入法唯一名）
-fcitx5_translate_desktop_file(voiceinput-im.conf.in voiceinput-im.conf)
-install(FILES "${CMAKE_CURRENT_BINARY_DIR}/voiceinput-im.conf"
-        DESTINATION "${FCITX_INSTALL_PKGDATADIR}/inputmethod"
-        RENAME voiceinput.conf)
+# Flutter 资产（flutter_assets + icudtl.dat）→ share/fcitx5-voiceinput/flutter/
+# 产物由 flutter build bundle 生成；此处可选安装（构建机上有才装，打包
+# 脚本也可能自行拷贝）。VOICEINPUT_FLUTTER_ASSETS_DIR 指向含 flutter_assets/
+# 与 icudtl.dat 的目录。
+set(VOICEINPUT_FLUTTER_ASSETS_DIR "" CACHE PATH "flutter_assets+icudtl.dat 所在目录")
+if(VOICEINPUT_FLUTTER_ASSETS_DIR AND EXISTS "${VOICEINPUT_FLUTTER_ASSETS_DIR}/flutter_assets")
+    install(DIRECTORY "${VOICEINPUT_FLUTTER_ASSETS_DIR}/flutter_assets"
+            DESTINATION "${CMAKE_INSTALL_DATADIR}/fcitx5-voiceinput/flutter")
+    install(FILES "${VOICEINPUT_FLUTTER_ASSETS_DIR}/icudtl.dat"
+            DESTINATION "${CMAKE_INSTALL_DATADIR}/fcitx5-voiceinput/flutter"
+            OPTIONAL)
+endif()

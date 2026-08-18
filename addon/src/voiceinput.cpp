@@ -1,6 +1,6 @@
 #include "voiceinput.h"
+#include "flutter_engine.h"
 #include "popup_surface.h"
-#include "ui_bridge.h"
 #include "funasr_local_engine.h"
 #include "funasr_ws_engine.h"
 
@@ -12,6 +12,8 @@
 
 #include <dbus_public.h>
 
+#include <unistd.h>
+
 namespace fcitx {
 
 static uint64_t nowUs() {
@@ -20,44 +22,143 @@ static uint64_t nowUs() {
     return static_cast<uint64_t>(ts.tv_sec) * 1000000 + ts.tv_nsec / 1000;
 }
 
+// Flutter 资产发现：env 覆盖 → 打包安装路径
+static bool findFlutterAssets(std::string *assetsDir, std::string *icuPath) {
+    if (const char *env = getenv("VOICEINPUT_FLUTTER_DIR"); env && *env) {
+        *assetsDir = std::string(env) + "/flutter_assets";
+        *icuPath = std::string(env) + "/icudtl.dat";
+        return true;
+    }
+    static const char *candidates[] = {
+        "/usr/share/fcitx5-voiceinput/flutter",
+        "/usr/local/share/fcitx5-voiceinput/flutter",
+    };
+    for (const char *dir : candidates) {
+        std::string assets = std::string(dir) + "/flutter_assets";
+        std::string icu = std::string(dir) + "/icudtl.dat";
+        if (access(assets.c_str(), F_OK) == 0 && access(icu.c_str(), R_OK) == 0) {
+            *assetsDir = assets;
+            *icuPath = icu;
+            return true;
+        }
+    }
+    return false;
+}
+
 VoiceInputEngine::VoiceInputEngine(Instance *instance)
     : instance_(instance) {
     // 配置：~/.config/fcitx5/conf/voiceinput.config（不存在则用默认值）
     readAsIni(config_, "conf/voiceinput.config");
     reloadConfig();
 
-    asr_ = std::make_unique<DummyAsrEngine>();
     popup_ = std::make_unique<VoicePopup>(instance_);
-    bridge_ = std::make_unique<UiBridge>(instance_, popup_.get());
-    // P3 鼠标路由：popup 的点击/悬停 → 候选选择/高亮（仅候选态生效）
-    popup_->setClickHandler([this](int row) {
-        if (state_ == State::Candidates) {
-            uiNotify("mouse-click-row", std::to_string(row));
-            commitCandidate(static_cast<size_t>(row), sessionIc_);
-        }
-    });
-    hoverRow_ = -1;
-    popup_->setHoverHandler([this](int row) {
-        if (state_ != State::Candidates) {
-            row = -1;
-        }
-        if (row != hoverRow_) {
-            hoverRow_ = row;
-            if (row >= 0) {
-                uiNotify("hover-row", std::to_string(row));
-            }
-            if (bridge_ && state_ == State::Candidates) {
-                bridge_->sendCandidates(finalText_, candidates_, hoverRow_);
-            }
-        }
-    });
+    flutter_ = std::make_unique<FlutterEngineHost>(&instance_->eventLoop());
 
-    // 注册测试 D-Bus 服务（addon 加载期 dbus 未就绪时由 activate 补注册）
+    // 帧：引擎软渲输出（主线程）→ popup wl_shm
+    flutter_->setFrameCallback([this](const uint8_t *bgra, int w, int h) {
+        if (popup_) {
+            popup_->pushFrameBGRA(bgra, w, h);
+        }
+    });
+    // 指针：popup 表面局部坐标 → FlutterPointerEvent（hover/点击 Dart 命中）
+    popup_->setPointerSink([this](VoicePopup::PointerEvent kind, int x, int y) {
+        using PK = FlutterEngineHost::PointerKind;
+        static constexpr PK map[] = {
+            PK::Enter, PK::Leave, PK::Motion, PK::Press, PK::Release,
+        };
+        if (flutter_) {
+            flutter_->onPointer(map[static_cast<int>(kind)],
+                                static_cast<double>(x), static_cast<double>(y));
+        }
+    });
+    // Dart → C++：ready/resize 已由引擎处理，selectCandidate/hoverChanged 到这
+    flutter_->setMessageHandler(
+        [this](const std::string &method, const std::string &args) {
+            onFlutterMessage(method, args);
+        });
+
+    // 全局触发键拦截（PreInputMethod：rime/pinyin 等引擎之前）——共存核心
+    keyWatcher_ = instance_->watchEvent(
+        EventType::InputContextKeyEvent, EventWatcherPhase::PreInputMethod,
+        [this](Event &event) {
+            auto &keyEvent = static_cast<KeyEvent &>(event);
+            auto *ic = keyEvent.inputContext();
+            if (!ic) {
+                return;
+            }
+            // 活动会话只认 sessionIc_；其他窗口的按键不掺和
+            if (state_ != State::Idle && ic != sessionIc_) {
+                return;
+            }
+            const bool trig = isTriggerKey(keyEvent.key());
+            const bool handled =
+                handleKey(keyEvent.key(), !keyEvent.isRelease(), ic);
+            // 模态（录音/结果/候选）：除触发键外全部吞掉——防止击键漏进
+            // rime/应用（吞 = 引擎收不到 + 不转发应用）
+            const bool modal = state_ == State::Recording ||
+                               state_ == State::Result ||
+                               state_ == State::Candidates;
+            if ((modal || handled) && !trig) {
+                keyEvent.filterAndAccept();
+                return;
+            }
+            // 触发键事件永不 filter（包括被状态机消费的）：press 已透传给
+            // 应用，release 必须配对，否则应用 xkb 卡在"Ctrl 按下"；
+            // lone modifier 的 press+release 对应用是 no-op
+        });
+
+    // popup 预热：焦点 IC 变化即预建 popup 并提交透明帧（niri 对 IM
+    // popup 的 map 有 ~2s 流水线延迟，等录音才建就看不见卡片了）——
+    // 相当于旧 activate() 的 prepare 预热，改为跟随焦点
+    focusWatcher_ = instance_->watchEvent(
+        EventType::InputContextFocusIn, EventWatcherPhase::PreInputMethod,
+        [this](Event &event) {
+            auto &iev = static_cast<InputContextEvent &>(event);
+            if (state_ == State::Idle && popup_) {
+                popup_->prepare(iev.inputContext());
+            }
+        });
+
+    // 注册测试 D-Bus 服务。addon 加载期 dbus 模块可能未就绪（原来靠
+    // activate() 补注册，Module 化后没有 activate）——1s 重试直到挂上
     ensureTestService();
-    FCITX_INFO() << "VoiceInput engine loaded (config: mode="
+    if (!testService_) {
+        dbusRetry_ = instance_->eventLoop().addTimeEvent(
+            CLOCK_MONOTONIC, nowUs() + 1000000, 0,
+            [this](EventSourceTime *, uint64_t) {
+                ensureTestService();
+                if (testService_) {
+                    dbusRetry_.reset();
+                    return false;
+                }
+                return true; // 未就绪，1s 后再试
+            });
+    }
+
+    // 预热：加载 5s 后初始化 Flutter 引擎（JIT 冷启动较慢，等触发再拉
+    // 就晚了；失败则懒重试——beginRecording 也会调 startFlutterEngine）
+    warmupTimer_ = instance_->eventLoop().addTimeEvent(
+        CLOCK_MONOTONIC, nowUs() + 5000000, 0, [this](EventSourceTime *, uint64_t) {
+            startFlutterEngine();
+            // popup 预热兜底（focus 事件可能早已错过）
+            if (state_ == State::Idle && popup_) {
+                if (auto *ic = instance_->inputContextManager()
+                                   .lastFocusedInputContext()) {
+                    popup_->prepare(ic);
+                }
+            }
+            return false; // 一次性
+        });
+    if (warmupTimer_) {
+        warmupTimer_->setOneShot();
+    }
+
+    FCITX_INFO() << "VoiceInput module loaded (config: mode="
                  << TriggerModeToString(config_.triggerMode.value())
                  << " keys=" << config_.triggerKeys.value().size()
-                 << " dummyText=\"" << config_.dummyText.value() << "\")";
+                 << " engine="
+                 << AsrEngineKindToString(config_.asrEngine.value())
+                 << ")——全局热键模式，与其他输入法共存";
 }
 
 VoiceInputEngine::~VoiceInputEngine() = default;
@@ -100,21 +201,91 @@ void VoiceInputEngine::ensureTestService() {
     FCITX_INFO() << "VoiceInput test D-Bus service registered";
 }
 
-void VoiceInputEngine::activate(const InputMethodEntry & /*entry*/,
-                                InputContextEvent &event) {
-    ensureTestService();
-    // 预热 flutter UI：IC 首次激活即拉起（冷启动 ~3s，等录音才拉就晚了）
-    if (bridge_) {
-        bridge_->ensureStarted();
+// ---------------------------------------------------------------------------
+// Flutter 引擎
+// ---------------------------------------------------------------------------
+
+void VoiceInputEngine::startFlutterEngine() {
+    if (flutter_->running()) {
+        return;
     }
-    if (state_ == State::Idle) {
-        sessionIc_ = event.inputContext();
-        // 预建 popup（透明帧提前走完 niri ~2s 的 map 流水线）
-        if (popup_ && sessionIc_) {
-            popup_->prepare(sessionIc_);
+    std::string assets, icu;
+    if (!findFlutterAssets(&assets, &icu)) {
+        FCITX_WARN() << "VoiceInput: Flutter 资产未找到（"
+                        "VOICEINPUT_FLUTTER_DIR 可覆盖；安装包应含 "
+                        "/usr/share/fcitx5-voiceinput/flutter）——回退色块模式";
+        if (popup_) {
+            popup_->setPatternMode(true);
         }
+        return;
     }
-    uiNotify("activated");
+    if (flutter_->start(assets, icu)) {
+        pushUiState(); // 引擎就绪即同步当前状态（Dart 冷启动有个过程）
+    }
+}
+
+void VoiceInputEngine::pushUiState() {
+    if (!flutter_ || !flutter_->running()) {
+        return;
+    }
+    switch (state_) {
+    case State::Recording:
+        flutter_->sendUpdate(
+            "{\"state\":\"recording\",\"partial\":\"" +
+            flutterJsonEscape(partial_) + "\",\"elapsed_ms\":" +
+            std::to_string((nowUs() - recordStartUs_) / 1000) + "}");
+        break;
+    case State::Result:
+        flutter_->sendUpdate(
+            "{\"state\":\"result\",\"final\":\"" +
+            flutterJsonEscape(finalText_) + "\",\"timeout_ms\":" +
+            std::to_string(config_.popupTimeoutMs.value()) + "}");
+        break;
+    case State::Candidates: {
+        std::string arr;
+        for (size_t i = 0; i < candidates_.size(); ++i) {
+            if (i) {
+                arr += ",";
+            }
+            arr += "\"" + flutterJsonEscape(candidates_[i]) + "\"";
+        }
+        // hover：鼠标悬停优先，否则键盘方向键选择行
+        const int hover = uiHoverRow_ >= 0 ? uiHoverRow_ : keyboardRow_;
+        flutter_->sendUpdate(
+            "{\"state\":\"candidates\",\"final\":\"" +
+            flutterJsonEscape(finalText_) + "\",\"candidates\":[" + arr +
+            "],\"hover\":" + std::to_string(hover) + "}");
+        break;
+    }
+    case State::Idle:
+    case State::Pressing:
+        flutter_->sendUpdate("{\"state\":\"idle\"}");
+        break;
+    }
+}
+
+void VoiceInputEngine::onFlutterMessage(const std::string &method,
+                                        const std::string &args) {
+    // {"index":N} / {"row":N}——极简字段提取（协议自约定）
+    auto numOf = [](const std::string &s, const char *key) -> int {
+        auto pos = s.find(std::string("\"") + key + "\":");
+        if (pos == std::string::npos) {
+            return -1;
+        }
+        return atoi(s.c_str() + pos + strlen(key) + 3);
+    };
+    if (method == "selectCandidate") {
+        int idx = numOf(args, "index");
+        if (state_ == State::Candidates && idx >= 0) {
+            uiNotify("mouse-click-row", std::to_string(idx));
+            commitCandidate(static_cast<size_t>(idx), sessionIc_);
+        }
+    } else if (method == "hoverChanged") {
+        uiHoverRow_ = numOf(args, "row");
+    } else if (method == "ready") {
+        FCITX_INFO() << "VoiceInput: Flutter UI ready";
+        pushUiState();
+    }
 }
 
 // ---------------------------------------------------------------------------
@@ -130,20 +301,13 @@ bool VoiceInputEngine::isTriggerKey(const Key &key) const {
     return false;
 }
 
-void VoiceInputEngine::keyEvent(const InputMethodEntry & /*entry*/,
-                                KeyEvent &keyEvent) {
-    auto *ic = keyEvent.inputContext();
-    if (handleKey(keyEvent.key(), !keyEvent.isRelease(), ic)) {
-        keyEvent.filterAndAccept();
-    }
-}
-
 bool VoiceInputEngine::handleKey(const Key &key, bool pressed,
                                  InputContext *ic) {
-    // —— 候选状态：数字/Enter/Esc ——
+    // —— 候选状态：数字/Enter/空格/Esc/方向键 ——
     if (state_ == State::Candidates && pressed) {
-        if (key.check(FcitxKey_Return) || key.check(FcitxKey_KP_Enter)) {
-            commitCandidate(0, ic);
+        if (key.check(FcitxKey_Return) || key.check(FcitxKey_KP_Enter) ||
+            key.check(FcitxKey_space)) {
+            commitCandidate(static_cast<size_t>(keyboardRow_), ic);
             return true;
         }
         if (key.check(FcitxKey_Escape)) {
@@ -161,6 +325,20 @@ bool VoiceInputEngine::handleKey(const Key &key, bool pressed,
                 return true;
             }
         }
+        const size_t n = candidates_.size();
+        if (n > 0) {
+            if (key.check(FcitxKey_Down) || key.check(FcitxKey_Right)) {
+                keyboardRow_ = static_cast<int>((keyboardRow_ + 1) % n);
+                pushUiState();
+                return true;
+            }
+            if (key.check(FcitxKey_Up) || key.check(FcitxKey_Left)) {
+                keyboardRow_ =
+                    static_cast<int>((keyboardRow_ + n - 1) % n);
+                pushUiState();
+                return true;
+            }
+        }
     }
 
     const bool trigger = isTriggerKey(key);
@@ -172,16 +350,22 @@ bool VoiceInputEngine::handleKey(const Key &key, bool pressed,
             state_ = State::Pressing;
             startThresholdTimer();
             uiNotify("pressing");
-            return true; // 按下即吞（引擎激活时触发键归输入法所有）
+            return true; // 状态机已处理（watcher 决定是否吞——触发键不吞）
         }
         break;
 
     case State::Pressing:
         if (trigger && !pressed) {
-            // 未到阈值松开：吞掉 release，状态回 Idle（press 未透传）
+            // 未到阈值松开：回 Idle（press 已透传应用，release 配对透传）
             thresholdTimer_.reset();
             enterIdle();
             return true;
+        }
+        if (!trigger) {
+            // 组合键场景（Ctrl+S）：任何其他键到达即取消候选，全部透传
+            thresholdTimer_.reset();
+            enterIdle();
+            return false;
         }
         break;
 
@@ -276,14 +460,13 @@ void VoiceInputEngine::beginRecording(InputContext *ic) {
     if (popup_) {
         popup_->show(ic);
     }
-    if (bridge_ && bridge_->ensureStarted()) {
-        bridge_->sendRecording("", 0);
-    } else {
-        // 桥不可用：回退 F3 色块（popup 直接绘制）
-        if (popup_) {
-            popup_->setPatternMode(true);
-            popup_->show(ic);
-        }
+    startFlutterEngine(); // 懒兜底（预热失败/未到 5s 就触发）
+    if (flutter_->running()) {
+        pushUiState();
+    } else if (popup_) {
+        // 引擎不可用：回退色块（popup 直接绘制）
+        popup_->setPatternMode(true);
+        popup_->show(ic);
     }
     partial_.clear();
     finalText_.clear();
@@ -312,9 +495,7 @@ void VoiceInputEngine::onAsrPartial(const std::string &text) {
         return;
     }
     partial_ = text;
-    if (bridge_) {
-        bridge_->sendRecording(partial_, (nowUs() - recordStartUs_) / 1000);
-    }
+    pushUiState();
     uiNotify("partial", text);
 }
 
@@ -327,16 +508,12 @@ void VoiceInputEngine::onAsrFinish(const std::string &text) {
         // Dummy 阶段：候选 = [润色版, 原始版]（润色=保尾标点，真实 LLM 后替换）
         candidates_ = {polish(finalText_), finalText_};
         state_ = State::Candidates;
-        if (bridge_) {
-            bridge_->sendCandidates(finalText_, candidates_);
-        }
+        keyboardRow_ = 0;
+        pushUiState();
         uiNotify("candidates", joinCandidates());
     } else {
         state_ = State::Result;
-        if (bridge_) {
-            bridge_->sendResult(finalText_,
-                                config_.popupTimeoutMs.value());
-        }
+        pushUiState();
         uiNotify("result", finalText_);
         startResultTimer();
     }
@@ -377,8 +554,8 @@ void VoiceInputEngine::enterIdle() {
     if (popup_) {
         popup_->hide();
     }
-    if (bridge_) {
-        bridge_->sendIdle();
+    if (flutter_ && flutter_->running()) {
+        flutter_->sendUpdate("{\"state\":\"idle\"}");
     }
     state_ = State::Idle;
     thresholdTimer_.reset();
@@ -428,7 +605,6 @@ std::string VoiceInputEngine::joinCandidates() const {
 
 void VoiceInputEngine::uiNotify(const std::string &what,
                                 const std::string &detail) {
-    // F2 日志桩；F3/F4 替换为 popup surface / Flutter 通道
     FCITX_INFO() << "[ui] " << what << (detail.empty() ? "" : ": " + detail);
 }
 
@@ -452,6 +628,25 @@ std::string TestService::SimulateKey(std::string key, bool pressed) {
                            .lastFocusedInputContext());
     return "ok: " + key + (pressed ? " down" : " up") + " → " +
            engine_->stateName();
+}
+
+// 走真实事件管线：验证 PreInputMethod watcher 的拦截/透传语义。
+// postEvent 不会把未消费的合成键转发回客户端——未 filter 时补
+// forwardKey，等价于真实按键（waylandim 抓到→引擎不管→回传应用）
+std::string TestService::InjectKey(std::string key, bool pressed) {
+    auto *ic =
+        engine_->instance()->inputContextManager().lastFocusedInputContext();
+    if (!ic) {
+        return "error: no focused input context";
+    }
+    KeyEvent ev(ic, Key(key), !pressed);
+    engine_->instance()->postEvent(ev);
+    if (!ev.filtered()) {
+        ic->forwardKey(Key(key), !pressed);
+    }
+    return "ok: " + key + (pressed ? " down" : " up") + " → " +
+           engine_->stateName() +
+           (ev.filtered() ? ", filtered=yes" : ", filtered=no");
 }
 
 std::string TestService::State() { return engine_->stateName(); }
