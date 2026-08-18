@@ -1,0 +1,114 @@
+name: Release
+
+on:
+  push:
+    tags: ['v*']
+  workflow_dispatch:
+    inputs:
+      version:
+        description: '版本号（如 0.1.0）'
+        required: false
+        default: ''
+
+permissions:
+  contents: write
+
+jobs:
+  # Flutter bundle 只构建一次（glibc 2.35 基座，四路复用保兼容）
+  flutter-bundle:
+    runs-on: ubuntu-22.04
+    steps:
+      - uses: actions/checkout@v4
+      - uses: subosito/flutter-action@v2
+        with:
+          channel: stable
+          cache: true
+      - run: flutter --version
+      - name: Build linux release
+        run: |
+          sudo apt-get update -qq && sudo apt-get install -y -qq ninja-build libgtk-3-dev pkg-config
+          cd flutter && flutter build linux --release
+      - uses: actions/upload-artifact@v4
+        with:
+          name: flutter-bundle
+          path: flutter/build/linux/x64/release/bundle/
+          retention-days: 3
+
+  package:
+    needs: flutter-bundle
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - id: arch
+            image: docker.io/library/archlinux:base-devel
+          - id: debian
+            image: docker.io/library/debian:bookworm
+          - id: fedora
+            image: registry.fedoraproject.org/fedora:latest
+          - id: tarball
+            image: docker.io/library/ubuntu:22.04
+    container:
+      image: ${{ matrix.image }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/download-artifact@v4
+        with:
+          name: flutter-bundle
+          path: flutter-bundle-dl
+      - name: Package + smoke
+        env:
+          FLUTTER_BUNDLE: ${{ github.workspace }}/flutter-bundle-dl
+          SRC: ${{ github.workspace }}
+          VERSION: ${{ github.event.inputs.version || github.ref_name }}
+        run: |
+          V="${VERSION#v}"
+          echo "VERSION=$V" >> "$GITHUB_ENV"
+          bash packaging/${{ matrix.id }}/build.sh
+          # 版本号归一（去 v 前缀的文件名统一）
+          cd artifacts/packages
+          for f in *; do
+            mv "$f" "$(echo "$f" | sed "s/-0\.1\.0/-$V/; s/_0\.1\.0/_$V/")" 2>/dev/null || true
+          done
+      - uses: actions/upload-artifact@v4
+        with:
+          name: pkg-${{ matrix.id }}
+          path: artifacts/packages/*
+          retention-days: 3
+
+  release:
+    needs: [flutter-bundle, package]
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/download-artifact@v4
+        with:
+          pattern: pkg-*
+          path: dist
+          merge-multiple: true
+      - name: Checksums
+        run: |
+          cd dist && sha256sum * > SHA256SUMS && ls -la
+      - name: Create release
+        uses: softprops/action-gh-release@v2
+        with:
+          draft: false
+          prerelease: ${{ contains(github.ref_name, '-') }}
+          generate_release_notes: true
+          body: |
+            ## fcitx5-voice-input ${{ github.ref_name }}
+
+            语音输入：FunASR 流式（31 语种）/ GGUF 本地双引擎 + Flutter MD3
+            光标悬浮窗 + LLM 润色候选（键盘/鼠标选择）+ configtool 热改设置。
+
+            ### 安装
+            - **Arch**: `pacman -U fcitx5-voice-input-*.pkg.tar.zst`
+            - **Debian**: `apt install ./fcitx5-voice-input_*.deb`
+            - **Fedora**: `dnf install fcitx5-voice-input-*.rpm`
+            - **其他**: 解压 tarball 后 `sudo bash install.sh`（需 gcc/cmake/fcitx5-dev/wayland-dev）
+
+            ### 依赖
+            fcitx5 ≥ 5.0、pulseaudio-utils（parec 采集）。语音服务可选：
+            configtool → Voice Input → 模型部署（FunASRAutoStart + 设备/量化档）。
+          files: dist/*
