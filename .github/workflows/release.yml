@@ -65,12 +65,7 @@ jobs:
         run: |
           V="${VERSION#v}"
           echo "VERSION=$V" >> "$GITHUB_ENV"
-          # 诊断（::error 注解匿名可见）
-          echo "::error::workspace=$(pwd) bundle=$(ls flutter-bundle-dl 2>&1 | head -3 | tr '\n' ' ')"
-          bash packaging/${{ matrix.id }}/build.sh 2>&1 | tail -40 || {
-            echo "::error::build.sh-exit=$? marker=FAILED"
-            exit 1
-          }
+          bash packaging/${{ matrix.id }}/build.sh
           # 版本号归一（去 v 前缀的文件名统一）
           cd artifacts/packages
           for f in *; do

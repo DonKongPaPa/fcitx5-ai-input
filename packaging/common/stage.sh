@@ -11,7 +11,9 @@ rm -rf "$STAGE"
 
 # flutter bundle 定位：CI 传入，或本地构建产物
 BUNDLE="${FLUTTER_BUNDLE:-$SRC/artifacts/dist/lib/fcitx5-voiceinput/ui/bundle}"
-[ -x "$BUNDLE/voice_ui" ] || { echo "!! flutter bundle 缺失: $BUNDLE"; exit 1; }
+# CI 的 download-artifact 解压可能丢 exec 位：只查存在，拷贝后强制 chmod
+[ -f "$BUNDLE/voice_ui" ] || { echo "!! flutter bundle 缺失: $BUNDLE"; exit 1; }
+ls -la "$BUNDLE" | head -6
 
 # 1. addon（cmake，安装到 stage/usr）
 cmake -S "$SRC/addon" -B /tmp/build-pkg -DCMAKE_BUILD_TYPE=Release \
@@ -22,6 +24,7 @@ DESTDIR="$STAGE" cmake --install /tmp/build-pkg
 # 2. flutter bundle → /usr/lib/fcitx5-voiceinput/ui/bundle
 mkdir -p "$STAGE/usr/lib/fcitx5-voiceinput/ui"
 cp -r "$BUNDLE" "$STAGE/usr/lib/fcitx5-voiceinput/ui/bundle"
+chmod +x "$STAGE/usr/lib/fcitx5-voiceinput/ui/bundle/voice_ui"
 
 # 3. funasr 服务脚本 → /usr/lib/fcitx5-voiceinput/
 mkdir -p "$STAGE/usr/lib/fcitx5-voiceinput/funasr-server"
