@@ -58,13 +58,14 @@ jobs:
           name: flutter-bundle
           path: flutter-bundle-dl
       - name: Package + smoke
+        # 不用 github.workspace：ubuntu 容器里它展开 /home/runner/... 而
+        # runner 实际挂在 /__w/...（download-artifact 的路径）——用 $PWD
         env:
-          FLUTTER_BUNDLE: ${{ github.workspace }}/flutter-bundle-dl
-          SRC: ${{ github.workspace }}
           VERSION: ${{ github.event.inputs.version || github.ref_name }}
         run: |
           # GITHUB_ENV 下一步才生效：本步内直接 export
           export VERSION="${VERSION#v}"
+          export SRC="$PWD" FLUTTER_BUNDLE="$PWD/flutter-bundle-dl"
           bash packaging/${{ matrix.id }}/build.sh
           # 版本号归一（去 v 前缀的文件名统一）
           cd artifacts/packages
