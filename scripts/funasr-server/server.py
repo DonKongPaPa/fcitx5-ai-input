@@ -35,10 +35,13 @@ raw_model = None
 model_kwargs = {}
 
 
-def load_model(model_dir: str, remote_code: str, device: str):
+def load_model(model_dir: str, remote_code: str, device: str, quant: str):
     """绕过 AutoModel.generate（新版对 ndarray 输入不再包 chat 模板），
-    直接用 remote_code 的模型类（demo2 同款：张量输入 + prev_text 上下文）"""
+    直接用 remote_code 的模型类（demo2 同款：张量输入 + prev_text 上下文）。
+    quant=int8 时对 Linear 做 dynamic int8 量化（实验 001：CPU RTF 0.43→
+    0.185；GPU 无收益不启用）"""
     global raw_model, model_kwargs
+    import torch
     from funasr import AutoModel
     t0 = time.time()
     raw_model, model_kwargs = AutoModel.build_model(
@@ -48,9 +51,18 @@ def load_model(model_dir: str, remote_code: str, device: str):
         device=device,
         disable_update=True,
     )
-    logging.getLogger("funasr-serve")
-    log.info("模型加载完成 %.1fs device=%s dir=%s", time.time() - t0,
-             device, model_dir)
+    quant_s = None
+    if quant == "int8":
+        t1 = time.time()
+        raw_model = torch.ao.quantization.quantize_dynamic(
+            raw_model, {torch.nn.Linear}, dtype=torch.qint8)
+        quant_s = time.time() - t1
+    import resource
+    log.info("模型加载完成 %.1fs device=%s quant=%s%s RSS=%dMB dir=%s",
+             time.time() - t0, device, quant,
+             f"（量化 {quant_s:.1f}s）" if quant_s else "",
+             resource.getrusage(resource.RUSAGE_SELF).ru_maxrss // 1024,
+             model_dir)
 
 
 def extract_text(res) -> str:
@@ -183,11 +195,12 @@ async def main():
     ap.add_argument("--device", default=None)
     ap.add_argument("--model-dir", default=os.environ.get("MODEL_DIR", ""))
     ap.add_argument("--remote-code", default="")
+    ap.add_argument("--quant", default="", choices=["", "int8"])
     args = ap.parse_args()
 
     device = args.device or ("cuda:0" if os.path.exists("/dev/nvidia0")
                              else "cpu")
-    load_model(args.model_dir, args.remote_code, device)
+    load_model(args.model_dir, args.remote_code, device, args.quant)
 
     import websockets
     # 单连接串行：本地个人部署，识别互相排队而不是并发打爆显存

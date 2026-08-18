@@ -9,6 +9,12 @@ PID_FILE="$ROOT/artifacts/funasr-serve.pid"
 LOG="$ROOT/artifacts/funasr-serve.log"
 PORT="${FUNASR_PORT:-10095}"
 DEVICE="${FUNASR_DEVICE:-auto}"
+QUANT="${FUNASR_QUANT:-}"
+# 多实例（部署矩阵测试：GPU/CPU 两档并存）时用独立 pid/log
+SUFFIX=""
+[ "$PORT" != "10095" ] && SUFFIX="-$PORT"
+PID_FILE="$ROOT/artifacts/funasr-serve${SUFFIX}.pid"
+LOG="$ROOT/artifacts/funasr-serve${SUFFIX}.log"
 
 MODEL_DIR="$(find "$ROOT/experiments/001-funasr-nano-local/data/modelscope" \
     -maxdepth 5 -type d -path '*Fun-ASR-MLT-Nano*/snapshots/master' 2>/dev/null | head -1)"
@@ -37,9 +43,11 @@ start)
     [ -n "$MODEL_DIR" ] || { echo "!! 模型未找到（experiments/001 data/modelscope）"; exit 1; }
     dev_args=()
     [ "$DEVICE" != "auto" ] && dev_args=(--device "$DEVICE")
-    echo ">> 启动 funasr-serve :$PORT device=$DEVICE model=${MODEL_DIR#$ROOT/}"
+    quant_args=()
+    [ -n "$QUANT" ] && quant_args=(--quant "$QUANT")
+    echo ">> 启动 funasr-serve :$PORT device=$DEVICE quant=${QUANT:-无} model=${MODEL_DIR#$ROOT/}"
     nohup "$VENV/bin/python" "$ROOT/scripts/funasr-server/server.py" \
-        --port "$PORT" "${dev_args[@]}" \
+        --port "$PORT" "${dev_args[@]}" "${quant_args[@]}" \
         --model-dir "$MODEL_DIR" --remote-code "$REMOTE_CODE" \
         >> "$LOG" 2>&1 &
     echo $! > "$PID_FILE"

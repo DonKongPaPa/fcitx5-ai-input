@@ -71,6 +71,16 @@ void VoiceInputEngine::reloadConfig() {
     uiNotify("config-reloaded");
 }
 
+// configtool 保存链路：D-Bus SetConfig → setConfig（基类默认 no-op）。
+// 与 classicui 同模式：载入 + 落盘 + 应用
+void VoiceInputEngine::setConfig(const RawConfig &config) {
+    config_.load(config, true);
+    if (safeSaveAsIni(config_, "conf/voiceinput.config")) {
+        FCITX_INFO() << "VoiceInput: configtool 保存已落盘";
+    }
+    uiNotify("config-saved-via-configtool");
+}
+
 void VoiceInputEngine::ensureTestService() {
     if (testService_ || !instance_) {
         return;

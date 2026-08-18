@@ -4,6 +4,7 @@
 #include "asr_engine.h"
 #include "voiceinput_config.h"
 
+#include <fcitx-config/rawconfig.h>
 #include <fcitx-utils/dbus/objectvtable.h>
 #include <fcitx/addonfactory.h>
 #include <fcitx/addoninstance.h>
@@ -68,9 +69,12 @@ public:
     void keyEvent(const InputMethodEntry &entry,
                   KeyEvent &keyEvent) override;
 
-    // configtool 设置页：Configuration 自动生成 UI；保存经 D-Bus 触发 reload
+    // configtool 设置页：Configuration 自动生成 UI。注意保存链路是
+    // D-Bus SetConfig → setConfig()（基类默认 no-op，不实现则 configtool
+    // 点保存毫无效果）；文件直改路径走 reloadConfig()
     void reloadConfig() override;
     const Configuration *getConfig() const override { return &config_; }
+    void setConfig(const RawConfig &config) override;
 
     Instance *instance() { return instance_; }
 

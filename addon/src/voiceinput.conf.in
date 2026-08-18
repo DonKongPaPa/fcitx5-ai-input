@@ -7,3 +7,5 @@ Library=voiceinput
 Depends=dbus
 Priority=Default
 Enabled=True
+# configtool 设置页入口（缺这行 GetConfig/SetConfig 报 "not configurable"）
+Configurable=True

@@ -113,7 +113,23 @@ scripts/funasr-serve.sh start   # 宿主 WS 识别服务（GPU 原生；FUNASR_D
 #   AsrEngine=FunASR      流式档（FunASRUrl=ws://127.0.0.1:10095，容器内 ws://host.containers.internal:10095）
 #   AsrEngine=FunASRLocal GGUF 本地档（llama-funasr-cli + gguf 目录，zh/en/ja 非流式）
 scripts/env/f6-test.sh          # 真实音频 E2E（需在 niri 容器编排内运行，见提交历史）
+scripts/run-f7.sh               # 部署矩阵×configtool 测试（GPU/CPU 两档 + GUI 冒烟）
 ```
+
+### 部署档实测（f7，6.5s 中文样本，宿主直连冒烟）
+
+| 档 | 首包 | 最终 | 会话(press→候选) | 资源 | 说明 |
+|---|---|---|---|---|---|
+| GPU（RTX 3060 Laptop, cuda:0） | **0.72s** | 4.48s | 10.2s | VRAM 3962MiB | 默认档 |
+| CPU int8 量化（FUNASR_QUANT=int8） | 0.78-1.39s | 6.2-6.6s | 13.7s | RSS ~6.5-7GB | 多语种无 GPU 兜底；量化提速（实验 001：fp32→int8 RTF 0.43→0.185），dynamic 量化不省权重内存 |
+| GGUF 本地（llama-funasr-cli） | —（非流式） | ~1.3s | ~11s | RSS ~1.5GB | **内存最小**，zh/en/ja |
+
+### configtool 配置链路（f7 S1/S2）
+
+- addon conf 需 `Configurable=True`（缺了 GetConfig/SetConfig 报 "not configurable"，configtool 不给入口）
+- 保存链路 = D-Bus `SetConfig("fcitx://config/addon/voiceinput", <{...}>)` → 引擎 `setConfig()`（**基类默认 no-op，必须 override**：load + safeSaveAsIni + 应用）——本仓库曾在此缺失，GUI 能显示但保存无效
+- gdbus 传 variant 需 GVariant 文本包裹：`"<{'Key': <'value'>}>"`
+- GUI 冒烟：niri 容器装 fcitx5-configtool，`NIRI_SOCKET=<socket> niri msg windows` 断言窗口出现 + vision 复核渲染
 
 ## Flutter UI 里程碑细节（F1-F5）
 
