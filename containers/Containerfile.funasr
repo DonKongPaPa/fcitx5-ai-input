@@ -1,8 +1,9 @@
-# FunASR 运行时镜像（实验/手动测试用；正式管线用 Mock）
-# 镜像只装依赖；模型运行时经 modelscope 从挂载卷下载（国内源）
+# FunASR 运行时镜像：宿主 WS 识别服务的容器形态（测试自含编排用；
+# 产品形态是宿主原生跑同一份 server.py，见 scripts/funasr-serve.sh）
+# 模型不进镜像：运行时卷挂载（experiments/001 的 modelscope 资产）
 FROM archlinux:base-devel
 
-COPY scripts/setup-mirrors.sh /tmp/setup-mirrors.sh
+COPY containers/scripts/setup-mirrors.sh /tmp/setup-mirrors.sh
 RUN sh /tmp/setup-mirrors.sh && rm /tmp/setup-mirrors.sh
 
 RUN pacman -Syu --noconfirm --needed \
@@ -12,10 +13,17 @@ RUN pacman -Syu --noconfirm --needed \
 # pypi 走 TUNA 镜像；torch 为 CUDA 合包（CPU 也能跑，GPU 时直接可用）；
 # 容器内隔离环境，--break-system-packages 绕过 Arch 的 PEP 668 限制
 RUN pip config set global.index-url https://pypi.tuna.tsinghua.edu.cn/simple \
-    && pip install --no-cache-dir --break-system-packages funasr modelscope torch torchaudio
+    && pip install --no-cache-dir --break-system-packages \
+        funasr modelscope torch torchaudio websockets
+
+COPY scripts/funasr-server/server.py /opt/voiceinput/server.py
 
 RUN useradd -m -u 1000 testuser
 USER testuser
 WORKDIR /home/testuser
 
-CMD ["/bin/bash"]
+# 模型卷约定：-v <modelscope-data>:/data（内含 models/ 与 Fun-ASR-code/）
+ENV MODEL_ROOT=/data
+EXPOSE 10095
+# 命令由编排脚本给出（GPU 需先做驱动库软链再 exec）
+CMD ["bash"]

@@ -1,0 +1,30 @@
+name: CI
+
+on:
+  push:
+    branches: ['**']
+  pull_request:
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    container: docker.io/library/archlinux:base-devel
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install deps
+        run: pacman -Syu --noconfirm --needed cmake gcc wayland fcitx5 gettext
+      - name: Build addon
+        run: |
+          cmake -S addon -B /tmp/b -DCMAKE_BUILD_TYPE=Release -DCMAKE_INSTALL_PREFIX=/usr
+          cmake --build /tmp/b -j"$(nproc)"
+      - name: Smoke（引擎加载）
+        run: |
+          export XDG_RUNTIME_DIR=/tmp/xdg; mkdir -p "$XDG_RUNTIME_DIR"
+          pacman -S --noconfirm --needed dbus >/dev/null
+          DESTDIR=/tmp/stage cmake --install /tmp/b >/dev/null
+          cp -a /tmp/stage/usr/* /usr/
+          # 启用 voiceinput（默认 group 只有 keyboard-us）
+          mkdir -p "$HOME/.config/fcitx5"
+          printf "[Groups/0]\nName=Default\nDefault Layout=us\nDefaultIM=voiceinput\n\n[Groups/0/Items/0]\nName=voiceinput\nLayout=\n\n[Group Order]\n0=Default\n" > "$HOME/.config/fcitx5/profile"
+          dbus-run-session -- bash -c 'fcitx5 -d --replace >/tmp/f.log 2>&1; sleep 4'
+          grep -q "VoiceInput engine loaded" /tmp/f.log && echo "✓ engine loaded"
