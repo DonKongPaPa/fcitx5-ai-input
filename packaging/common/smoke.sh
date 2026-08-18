@@ -29,8 +29,8 @@ check "addon 模块加载（全局热键）" 'grep -aq "VoiceInput module loaded
 check "GetConfig 可用（configtool 入口）" 'grep -aq "TriggerKeys" /tmp/smoke-getconfig.txt || grep -aq NO-GDBUS /tmp/smoke-getconfig.txt' 
 check "Flutter 引擎进程内启动" 'grep -aq "FlutterEngine: 引擎已启动" /tmp/smoke-fcitx.log'
 check "flutter 资产在位" '[ -d /usr/share/fcitx5-voiceinput/flutter/flutter_assets ] && [ -f /usr/share/fcitx5-voiceinput/flutter/icudtl.dat ]'
-check "引擎 .so 在位（rpath 目标）" '[ -f /usr/lib/fcitx5-voiceinput/libflutter_engine.so ]' 
-check "funasr 服务脚本在位" '[ -f /usr/lib/fcitx5-voiceinput/funasr-server/server.py ]'
+check "引擎 .so 在位（rpath 目标）" 'find /usr/lib* -path "*fcitx5-voiceinput*" -name libflutter_engine.so 2>/dev/null | grep -q .' 
+check "funasr 服务脚本在位" 'find /usr/lib* -path "*fcitx5-voiceinput*" -name server.py 2>/dev/null | grep -q .'
 check "addon 模块已安装" 'find /usr/lib* -name voiceinput.so 2>/dev/null | grep -q .'
 
 if [ "$FAIL" -eq 0 ]; then

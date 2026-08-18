@@ -30,13 +30,16 @@ cmake -S "$SRC/addon" -B /tmp/build-pkg -DCMAKE_BUILD_TYPE=Release \
 cmake --build /tmp/build-pkg -j"$(nproc)"
 DESTDIR="$STAGE" cmake --install /tmp/build-pkg
 
-# 2. funasr 服务脚本 → /usr/lib/fcitx5-voiceinput/
-mkdir -p "$STAGE/usr/lib/fcitx5-voiceinput/funasr-server"
-cp "$SRC/scripts/funasr-server/server.py" "$STAGE/usr/lib/fcitx5-voiceinput/funasr-server/"
-cp "$SRC/scripts/funasr-serve.sh" "$STAGE/usr/lib/fcitx5-voiceinput/funasr-server/"
-chmod +x "$STAGE/usr/lib/fcitx5-voiceinput/funasr-server/funasr-serve.sh"
-sed -i 's|ROOT=.*|ROOT=/usr/lib/fcitx5-voiceinput|' \
-    "$STAGE/usr/lib/fcitx5-voiceinput/funasr-server/funasr-serve.sh" 2>/dev/null || true
+# 2. funasr 服务脚本 → libdir/fcitx5-voiceinput/（跟随发行版 libdir：
+#    Debian lib/x86_64-linux-gnu、Fedora lib64、Arch lib——与引擎 .so 同目录）
+LIBDIR="$(find "$STAGE/usr" -maxdepth 3 -type d -name fcitx5-voiceinput | head -1 | sed "s|^$STAGE/usr||")"
+[ -n "$LIBDIR" ] || { echo "!! 找不到 libdir/fcitx5-voiceinput"; exit 1; }
+mkdir -p "$STAGE/usr$LIBDIR/funasr-server"
+cp "$SRC/scripts/funasr-server/server.py" "$STAGE/usr$LIBDIR/funasr-server/"
+cp "$SRC/scripts/funasr-serve.sh" "$STAGE/usr$LIBDIR/funasr-server/"
+chmod +x "$STAGE/usr$LIBDIR/funasr-server/funasr-serve.sh"
+sed -i "s|ROOT=.*|ROOT=/usr$LIBDIR/fcitx5-voiceinput|" \
+    "$STAGE/usr$LIBDIR/funasr-server/funasr-serve.sh" 2>/dev/null || true
 
 # 3. 文档
 mkdir -p "$STAGE/usr/share/doc/fcitx5-voice-input"
