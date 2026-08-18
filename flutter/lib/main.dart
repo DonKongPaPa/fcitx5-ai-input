@@ -165,6 +165,7 @@ class SessionData {
   final List<String> candidates; // 候选（首个=润色版）
   final int elapsedMs; // 录音计时
   final int timeoutMs; // result 停留时长（倒计时条）
+  final int hover; // 鼠标悬停候选行（-1=无；niri seat 级指针路由）
   const SessionData({
     this.state = UiState.idle,
     this.partial = '',
@@ -172,6 +173,7 @@ class SessionData {
     this.candidates = const [],
     this.elapsedMs = 0,
     this.timeoutMs = 1500,
+    this.hover = -1,
   });
 }
 
@@ -296,6 +298,7 @@ class _VoiceUiHomeState extends State<VoiceUiHome> {
           state: UiState.candidates,
           resultText: msg['final'] as String? ?? '',
           candidates: (msg['candidates'] as List?)?.cast<String>() ?? const [],
+          hover: msg['hover'] as int? ?? -1,
         ));
         break;
       default:
@@ -526,35 +529,40 @@ class _CandidatesBody extends StatelessWidget {
           ),
         ),
         for (var i = 0; i < items.length; i++)
-          ListTile(
-            dense: true,
-            visualDensity: VisualDensity.compact,
-            contentPadding: const EdgeInsets.symmetric(horizontal: 12),
-            leading: Container(
-              width: 20,
-              height: 20,
-              alignment: Alignment.center,
-              decoration: BoxDecoration(
-                color: i == 0 ? cs.primary : cs.surfaceContainerHighest,
-                shape: BoxShape.circle,
+          // hover 行高亮（niri seat 级指针路由）
+          AnimatedContainer(
+            duration: const Duration(milliseconds: 100),
+            color: i == data.hover ? cs.surfaceContainerHighest : null,
+            child: ListTile(
+              dense: true,
+              visualDensity: VisualDensity.compact,
+              contentPadding: const EdgeInsets.symmetric(horizontal: 12),
+              leading: Container(
+                width: 20,
+                height: 20,
+                alignment: Alignment.center,
+                decoration: BoxDecoration(
+                  color: i == 0 ? cs.primary : cs.surfaceContainerHighest,
+                  shape: BoxShape.circle,
+                ),
+                child: Text('${i + 1}',
+                    style: TextStyle(
+                      fontSize: 11,
+                      color: i == 0 ? cs.onPrimary : cs.onSurfaceVariant,
+                    )),
               ),
-              child: Text('${i + 1}',
-                  style: TextStyle(
-                    fontSize: 11,
-                    color: i == 0 ? cs.onPrimary : cs.onSurfaceVariant,
-                  )),
+              title: Text(
+                items[i],
+                maxLines: 1,
+                overflow: TextOverflow.ellipsis,
+                style: i == 0 ? theme.textTheme.titleSmall : theme.textTheme.bodyMedium,
+              ),
+              subtitle: i == 0
+                  ? Text('润色版',
+                      style: theme.textTheme.labelSmall
+                          ?.copyWith(color: cs.primary))
+                  : null,
             ),
-            title: Text(
-              items[i],
-              maxLines: 1,
-              overflow: TextOverflow.ellipsis,
-              style: i == 0 ? theme.textTheme.titleSmall : theme.textTheme.bodyMedium,
-            ),
-            subtitle: i == 0
-                ? Text('润色版',
-                    style: theme.textTheme.labelSmall
-                        ?.copyWith(color: cs.primary))
-                : null,
           ),
       ],
     );

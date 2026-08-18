@@ -29,6 +29,28 @@ VoiceInputEngine::VoiceInputEngine(Instance *instance)
     asr_ = std::make_unique<DummyAsrEngine>();
     popup_ = std::make_unique<VoicePopup>(instance_);
     bridge_ = std::make_unique<UiBridge>(instance_, popup_.get());
+    // P3 鼠标路由：popup 的点击/悬停 → 候选选择/高亮（仅候选态生效）
+    popup_->setClickHandler([this](int row) {
+        if (state_ == State::Candidates) {
+            uiNotify("mouse-click-row", std::to_string(row));
+            commitCandidate(static_cast<size_t>(row), sessionIc_);
+        }
+    });
+    hoverRow_ = -1;
+    popup_->setHoverHandler([this](int row) {
+        if (state_ != State::Candidates) {
+            row = -1;
+        }
+        if (row != hoverRow_) {
+            hoverRow_ = row;
+            if (row >= 0) {
+                uiNotify("hover-row", std::to_string(row));
+            }
+            if (bridge_ && state_ == State::Candidates) {
+                bridge_->sendCandidates(finalText_, candidates_, hoverRow_);
+            }
+        }
+    });
 
     // 注册测试 D-Bus 服务（addon 加载期 dbus 未就绪时由 activate 补注册）
     ensureTestService();

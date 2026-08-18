@@ -32,6 +32,11 @@ podman run --rm \
               -DCMAKE_INSTALL_PREFIX=/work/artifacts/dist
         cmake --build /tmp/build/apps -j"$(nproc)"
         cmake --install /tmp/build/apps
+        # virtpoint（wlr-virtual-pointer 注入工具，交互测试用）
+        cmake -S /work/tools/virtpoint -B /tmp/build/virtpoint -DCMAKE_BUILD_TYPE=Release \
+              -DCMAKE_INSTALL_PREFIX=/work/artifacts/dist
+        cmake --build /tmp/build/virtpoint -j"$(nproc)"
+        cmake --install /tmp/build/virtpoint
     '
 
 echo ">> 产物："

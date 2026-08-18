@@ -321,7 +321,8 @@ void UiBridge::sendResult(const std::string &finalText, int timeoutMs) {
 }
 
 void UiBridge::sendCandidates(const std::string &finalText,
-                              const std::vector<std::string> &candidates) {
+                              const std::vector<std::string> &candidates,
+                              int hover) {
     std::string list;
     for (size_t i = 0; i < candidates.size(); ++i) {
         if (i) {
@@ -331,7 +332,8 @@ void UiBridge::sendCandidates(const std::string &finalText,
     }
     sendState(
         "{\"type\":\"state\",\"state\":\"candidates\",\"final\":\"" +
-        jsonEscape(finalText) + "\",\"candidates\":[" + list + "]}");
+        jsonEscape(finalText) + "\",\"hover\":" + std::to_string(hover) +
+        ",\"candidates\":[" + list + "]}");
 }
 
 void UiBridge::sendIdle() { sendState("{\"type\":\"state\",\"state\":\"idle\"}"); }

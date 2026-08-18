@@ -78,6 +78,10 @@ static void on_activate(GtkApplication *app, gpointer user_data) {
 
     GtkWidget *entry = gtk_entry_new();
     gtk_entry_set_placeholder_text(GTK_ENTRY(entry), "语音输入落点……");
+    /* 文字行贴窗口顶：GtkEntry 默认在(被平铺拉高的)窗口里垂直居中，光标
+     * 矩形会落到窗口中部，IM popup 跟着挂到窗口中下部——顶部对齐后 popup
+     * 紧随标题栏，贴近真实单行输入框的体验 */
+    gtk_widget_set_valign(entry, GTK_ALIGN_START);
     gtk_window_set_child(GTK_WINDOW(win), entry);
 
     g_signal_connect(entry, "changed", G_CALLBACK(on_changed), NULL);

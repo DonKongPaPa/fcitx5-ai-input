@@ -36,7 +36,8 @@ public:
     void sendRecording(const std::string &partial, uint64_t elapsedMs);
     void sendResult(const std::string &finalText, int timeoutMs);
     void sendCandidates(const std::string &finalText,
-                        const std::vector<std::string> &candidates);
+                        const std::vector<std::string> &candidates,
+                        int hover = -1);
     void sendIdle();
 
     bool connected() const { return clientFd_ >= 0; }

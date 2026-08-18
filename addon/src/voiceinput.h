@@ -118,6 +118,7 @@ private:
     std::string finalText_;              // ASR 最终文本
     std::vector<std::string> candidates_; // LLM 候选（[0]=润色 [1]=原始 ...）
     uint64_t recordStartUs_ = 0;          // 录音起点（推 elapsed_ms）
+    int hoverRow_ = -1;                   // 鼠标悬停的候选行（-1=无）
 };
 
 class VoiceInputEngineFactory : public AddonFactory {

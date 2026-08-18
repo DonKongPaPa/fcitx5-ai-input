@@ -5,6 +5,7 @@
 #include <fcitx-utils/trackableobject.h>
 #include <wayland_public.h>
 
+#include <functional>
 #include <memory>
 #include <mutex>
 
@@ -12,6 +13,8 @@ struct wl_display;
 struct wl_registry;
 struct wl_compositor;
 struct wl_shm;
+struct wl_seat;
+struct wl_pointer;
 struct wl_surface;
 struct wl_shm_pool;
 struct wl_buffer;
@@ -70,6 +73,18 @@ public:
     void resize(int w, int h); // 重建 shm 池（帧尺寸变化）
     void setPatternMode(bool p) { patternMode_ = p; } // 桥不可用回退色块
 
+    // P3 鼠标路由：niri 的 IM popup 不收指针事件（命中测试只走窗口/层
+    // surface 树），点击会落到下层窗口——seat 级 wl_pointer 能收到该窗口
+    // 局部坐标，配合 text_input_rectangle（同为窗口局部）+ 放置规则做命中
+    void setClickHandler(std::function<void(int row)> h) {
+        clickHandler_ = std::move(h);
+    }
+    void setHoverHandler(std::function<void(int row)> h) {
+        hoverHandler_ = std::move(h);
+    }
+    // 当前 popup 在焦点窗口坐标系里的候选行命中（-1=不在面板上）
+    int pointerRow(int winX, int winY) const;
+
     // wayland C 回调（public：listener 结构需要函数指针）
     static void registryGlobalImpl(void *data, wl_registry *reg, uint32_t name,
                                    const char *iface, uint32_t version);
@@ -77,6 +92,16 @@ public:
                                          uint32_t name);
     static void popupRectangle(void *data, zwp_input_popup_surface_v2 *popup,
                                int32_t x, int32_t y, int32_t w, int32_t h);
+    // seat 级指针路由（niri 上 IM popup 不收指针事件，见 setClickHandler）
+    static void seatCapabilities(void *data, wl_seat *seat, uint32_t caps);
+    static void pointerEnter(void *data, wl_pointer *p, uint32_t serial,
+                             wl_surface *surface, wl_fixed_t sx, wl_fixed_t sy);
+    static void pointerLeave(void *data, wl_pointer *p, uint32_t serial,
+                             wl_surface *surface);
+    static void pointerMotion(void *data, wl_pointer *p, uint32_t time,
+                              wl_fixed_t sx, wl_fixed_t sy);
+    static void pointerButton(void *data, wl_pointer *p, uint32_t serial,
+                              uint32_t time, uint32_t button, uint32_t state);
 
 private:
     void onConnectionCreated(const std::string &name, wl_display *display);
@@ -94,10 +119,20 @@ private:
     wl_compositor *compositor_ = nullptr;
     uint32_t compositorVersion_ = 1; // damage_buffer 需 ≥4
     wl_shm *shm_ = nullptr;
+    wl_seat *seat_ = nullptr;
+    wl_pointer *pointer_ = nullptr;
     zwp_input_method_v2 *im_ = nullptr; // 借用：waylandim 所有
     zwp_input_popup_surface_v2 *popup_ = nullptr;
     wl_surface *surface_ = nullptr;
     TrackableObjectReference<InputContext> icRef_; // popup 所属 IC
+
+    // 指针路由状态
+    bool hasCursorRect_ = false; // text_input_rectangle 是否已送达（决策门）
+    bool pointerOnPopup_ = false; // 指针焦点在我们 popup 表面（直达模式）
+    std::function<void(int row)> clickHandler_;
+    std::function<void(int row)> hoverHandler_;
+    int lastHoverRow_ = -1;
+    int ptrX_ = -10000, ptrY_ = -10000; // 最近指针位置（焦点窗口局部）
 
     // shm 双缓冲
     wl_shm_pool *pool_ = nullptr;

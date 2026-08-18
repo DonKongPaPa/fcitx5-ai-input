@@ -122,13 +122,20 @@ scripts/env/f6-test.sh          # 真实音频 E2E（需在 niri 容器编排内
 - **窗口宿主**：flutter 进程由 addon 按需拉起（IC 激活预热，冷启动 ~3s），GTK 窗口开在 weston headless（`VOICEINPUT_UI_DISPLAY`）——cage 是单客户端 kiosk 不能用；weston headless 对普通应用客户端工作正常（此前"不能用"的结论仅限嵌套合成器场景）
 - **配置热改**：写 `conf/voiceinput.config` + D-Bus `org.fcitx.Fcitx.Controller1.ReloadAddonConfig voiceinput`（接口名**不带 5**）→ `reloadConfig` 即时生效
 - **测试触发**：`org.fcitx.VoiceInput.Test`（State/Candidates/SimulateKey/Trigger），确定性驱动状态机；跑 f4/f5 前屏蔽 `/usr/share/dbus-1/services/org.fcitx.Fcitx5.service`（portal/GTK 会 D-Bus 激活第二个 fcitx5 抢名）
-- **验证脚本**：`scripts/env/f3-test.sh`（popup 位置）、`f4-test.sh`（UI 视觉，时间线对齐全视频扫描断言，与实际帧率无关）、`f5-test.sh`（端到端 5 场景）
+- **验证脚本**：`scripts/env/f3-test.sh`（popup 位置）、`f4-test.sh`（UI 视觉，时间线对齐全视频扫描断言，与实际帧率无关）、`f5-test.sh`（端到端 5 场景）、`f6-test.sh`（真实音频 23 项）
+
+## 候选交互（键盘 + 鼠标，fix/overlay-ux-input）
+
+- **键盘**：数字 1-9 选对应候选、Enter 选第一个、Esc 取消（录音中 Esc 取消整轮）
+- **鼠标**：hover 高亮 + 点击选择。实测 niri 会把 pointer enter 事件发给 IM popup 表面（同 fcitx5 classicui 机制，坐标即面板局部）——命中直走局部坐标；`text_input_rectangle`（实测送达，窗口局部）+ 放置规则复刻作兜底映射（合成器不给 enter 时）
+- **virtpoint 工具**（`tools/virtpoint`）：wlr-virtual-pointer-v1 最小客户端，测试注入真实指针流（move/click）；f6 用它自动验证 hover 高亮与点击选词
+- **testapp valign 修复**：GtkEntry 默认在高窗口里垂直居中，光标矩形落窗口中部导致 popup"出现得很靠下"——顶部对齐后 popup 紧贴输入框（vision 复核：标准候选栏定位，自然）
+- **classicui 冲突**：注入的虚拟指针流会触发 stock classicui wl_pointer 回调空指针崩溃（真实桌面收不到这些事件无恙）——测试环境 `fcitx5 --disable=classicui`（我们的 UI 全自绘不依赖它）
 
 ### 已知限制（如实记录）
 
 - niri 不 clamp popup 在光标上方时的顶部越界（光标贴屏幕顶会裁掉上部）；popup 定位在焦点切换后不更新（niri#4063 类）
 - niri 对 IM popup 的 map/重绘由输出 damage 驱动：静止应用周期可长达 ~3.4s（map、hide 清除都滞后）；真实打字场景应用持续 damage，不受影响——testapp 用标题变化模拟
-- `text_input_rectangle` 事件未到达 addon 客户端（疑在 waylandim 内部事件队列，F4 指针路由若需要再处理）
 - 满栈负载下事件循环定时器节奏劣化 ~2.5x（120ms 配置实测 ~300ms/字，Dummy 流式变慢但不影响功能）
 
 ## 目录结构

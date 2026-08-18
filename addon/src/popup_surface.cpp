@@ -21,6 +21,10 @@ namespace fcitx {
 static constexpr int kDefaultWidth = 360;
 static constexpr int kDefaultHeight = 200;
 
+// 候选行几何（须与 flutter _CandidatesBody 布局一致：头部 ~28px + 每行 54px）
+static constexpr int kCandHeaderH = 28;
+static constexpr int kCandRowH = 54;
+
 static const wl_registry_listener kRegistryListener = {
     /* .global = */ &VoicePopup::registryGlobalImpl,
     /* .global_remove = */ &VoicePopup::registryGlobalRemoveImpl,
@@ -30,7 +34,31 @@ static const zwp_input_popup_surface_v2_listener kPopupListener = {
     /* .text_input_rectangle = */ &VoicePopup::popupRectangle,
 };
 
-// 合成器告知光标矩形（popup 定位锚点）
+static const wl_seat_listener kSeatListener = {
+    /* .capabilities = */ &VoicePopup::seatCapabilities,
+    /* .name = */ // v4+ 会发 name 事件；listener 槽为 NULL 时 libwayland
+    // 直接 abort（listener function for opcode 1 of wl_seat is NULL）
+    [](void *, wl_seat *, const char *) {},
+};
+
+static const wl_pointer_listener kPointerListener = {
+    /* .enter = */ &VoicePopup::pointerEnter,
+    /* .leave = */ &VoicePopup::pointerLeave,
+    /* .motion = */ &VoicePopup::pointerMotion,
+    /* .button = */ &VoicePopup::pointerButton,
+    /* .axis = */
+    [](void *, wl_pointer *, uint32_t, uint32_t, wl_fixed_t) {},
+    /* .frame = */ // listener 槽 NULL 时事件一到 libwayland 直接 abort
+    [](void *, wl_pointer *) {},
+    /* .axis_source = */
+    [](void *, wl_pointer *, uint32_t) {},
+    /* .axis_stop = */
+    [](void *, wl_pointer *, uint32_t, uint32_t) {},
+    /* .axis_discrete = */
+    [](void *, wl_pointer *, uint32_t, int32_t) {},
+};
+
+// 合成器告知光标矩形（popup 定位锚点；窗口局部坐标，与 wl_pointer 事件同空间）
 void VoicePopup::popupRectangle(void *data, zwp_input_popup_surface_v2 *,
                                 int32_t x, int32_t y, int32_t w, int32_t h) {
     auto *s = static_cast<VoicePopup *>(data);
@@ -38,8 +66,133 @@ void VoicePopup::popupRectangle(void *data, zwp_input_popup_surface_v2 *,
     s->cursorY_ = y;
     s->cursorW_ = w;
     s->cursorH_ = h;
+    s->hasCursorRect_ = true;
     FCITX_INFO() << "VoicePopup: text_input_rectangle " << x << "," << y << " "
-                 << w << "x" << h;
+                 << w << "x" << h << "（窗口局部）";
+}
+
+// ---------------------------------------------------------------------------
+// P3 鼠标路由：seat 级 wl_pointer
+// niri 的 contents_under 只命中窗口/层 surface 树，IM popup 收不到指针
+// 事件——点击落到焦点窗口，我们在这里收窗口局部坐标做映射命中
+// ---------------------------------------------------------------------------
+void VoicePopup::seatCapabilities(void *data, wl_seat *seat, uint32_t caps) {
+    auto *s = static_cast<VoicePopup *>(data);
+    if ((caps & WL_SEAT_CAPABILITY_POINTER) && !s->pointer_) {
+        s->pointer_ = wl_seat_get_pointer(seat);
+        wl_pointer_add_listener(s->pointer_, &kPointerListener, s);
+        FCITX_INFO() << "VoicePopup: seat pointer acquired（鼠标路由就绪）";
+    } else if (!(caps & WL_SEAT_CAPABILITY_POINTER) && s->pointer_) {
+        wl_pointer_release(s->pointer_);
+        s->pointer_ = nullptr;
+    }
+}
+
+void VoicePopup::pointerEnter(void *data, wl_pointer *, uint32_t,
+                              wl_surface *surface, wl_fixed_t sx,
+                              wl_fixed_t sy) {
+    auto *s = static_cast<VoicePopup *>(data);
+    s->ptrX_ = wl_fixed_to_int(sx);
+    s->ptrY_ = wl_fixed_to_int(sy);
+    if (surface == s->surface_) {
+        // niri 实测：IM popup 收得到 pointer enter（同 classicui 机制），
+        // 坐标即面板局部——命中走直路，矩形映射只做兜底。
+        // 绝对定位类移动（虚拟指针/部分合成器）只有 enter 没有后续
+        // motion，enter 即做 hover 判定
+        s->pointerOnPopup_ = true;
+        FCITX_INFO() << "VoicePopup: pointer enter 直达 popup 表面 @"
+                     << s->ptrX_ << "," << s->ptrY_;
+        int row = s->pointerRow(s->ptrX_, s->ptrY_);
+        if (row != s->lastHoverRow_) {
+            s->lastHoverRow_ = row;
+            if (s->hoverHandler_) {
+                s->hoverHandler_(row);
+            }
+        }
+    } else {
+        s->pointerOnPopup_ = false;
+    }
+}
+
+void VoicePopup::pointerLeave(void *data, wl_pointer *, uint32_t,
+                              wl_surface *surface) {
+    auto *s = static_cast<VoicePopup *>(data);
+    if (surface == s->surface_) {
+        s->pointerOnPopup_ = false;
+    }
+    s->ptrX_ = -10000;
+    s->ptrY_ = -10000;
+    if (s->lastHoverRow_ != -1) {
+        s->lastHoverRow_ = -1;
+        if (s->hoverHandler_) {
+            s->hoverHandler_(-1);
+        }
+    }
+}
+
+void VoicePopup::pointerMotion(void *data, wl_pointer *, uint32_t,
+                               wl_fixed_t sx, wl_fixed_t sy) {
+    auto *s = static_cast<VoicePopup *>(data);
+    s->ptrX_ = wl_fixed_to_int(sx);
+    s->ptrY_ = wl_fixed_to_int(sy);
+    int row = s->pointerRow(s->ptrX_, s->ptrY_);
+    if (row != s->lastHoverRow_) {
+        s->lastHoverRow_ = row;
+        if (s->hoverHandler_) {
+            s->hoverHandler_(row);
+        }
+    }
+}
+
+void VoicePopup::pointerButton(void *data, wl_pointer *, uint32_t,
+                               uint32_t, uint32_t button, uint32_t state) {
+    auto *s = static_cast<VoicePopup *>(data);
+    if (state != WL_POINTER_BUTTON_STATE_PRESSED || button != 0x110) {
+        return; // 只处理左键按下
+    }
+    int row = s->pointerRow(s->ptrX_, s->ptrY_);
+    FCITX_INFO() << "VoicePopup: pointer button @" << s->ptrX_ << ","
+                 << s->ptrY_ << " → row=" << row
+                 << (s->hasCursorRect_ ? "" : "（无光标矩形，未命中正常）");
+    if (row >= 0 && s->clickHandler_) {
+        s->clickHandler_(row);
+    }
+}
+
+// 命中：优先直达局部坐标（pointerOnPopup_ 时即面板局部）；否则用
+// 光标矩形 + 放置规则映射（兜底，合成器不给 enter 时）
+int VoicePopup::pointerRow(int winX, int winY) const {
+    if (pointerOnPopup_) {
+        // Flutter 候选布局：头部 26，行0（含 subtitle）64，后续行 52
+        if (winY < 26 || winX < 0 || winX > width_) {
+            return -1;
+        }
+        int y = winY - 26;
+        if (y < 64) {
+            return 0;
+        }
+        int row = 1 + (y - 64) / 52;
+        return row <= 8 ? row : -1;
+    }
+    if (!hasCursorRect_ || width_ <= 0 || height_ <= 0) {
+        return -1;
+    }
+    int px = cursorX_;
+    int belowY = cursorY_ + cursorH_;
+    int aboveY = cursorY_ - height_;
+    bool xOk = winX >= px - 4 && winX < px + width_ + 4;
+    bool below = xOk && winY >= belowY && winY < belowY + height_;
+    bool above = xOk && winY >= aboveY && winY < cursorY_;
+    if (!below && !above) {
+        return -1;
+    }
+    int localY = below ? (winY - belowY) : (winY - aboveY);
+    int row = (localY - kCandHeaderH) / kCandRowH;
+    int maxRow = (height_ - kCandHeaderH + kCandRowH - 1) / kCandRowH - 1;
+    if (row < 0 || row > maxRow || row > 8) {
+        return -1; // 点在头部或超出候选数
+    }
+    return row;
 }
 
 VoicePopup::VoicePopup(Instance *instance) : instance_(instance) {
@@ -62,6 +215,9 @@ VoicePopup::VoicePopup(Instance *instance) : instance_(instance) {
                 pixels_ = nullptr;
                 compositor_ = nullptr;
                 shm_ = nullptr;
+                seat_ = nullptr;
+                pointer_ = nullptr;
+                hasCursorRect_ = false;
                 display_ = nullptr;
             });
         FCITX_INFO() << "VoicePopup: wayland connection watcher registered";
@@ -107,6 +263,13 @@ void VoicePopup::registryGlobalImpl(void *data, wl_registry *reg, uint32_t name,
     } else if (strcmp(iface, "wl_shm") == 0 && !self->shm_) {
         self->shm_ = static_cast<wl_shm *>(
             wl_registry_bind(reg, name, &wl_shm_interface, 1));
+    } else if (strcmp(iface, "wl_seat") == 0 && !self->seat_) {
+        // P3 鼠标路由：seat 级 wl_pointer。绑 v3（capabilities 即止）——
+        // v5+ 的 frame 事件若 listener 槽缺失会 abort（已补 no-op 双保险）
+        uint32_t sv = version < 3 ? version : 3;
+        self->seat_ = static_cast<wl_seat *>(wl_registry_bind(
+            reg, name, &wl_seat_interface, sv));
+        wl_seat_add_listener(self->seat_, &kSeatListener, self);
     } else if (strcmp(iface, "zwp_input_method_manager_v2") == 0) {
         // 仅作为"这是 waylandim 的 IM 连接"的判据；不绑定第二个 IM
         // （协议规定一个 seat 只允许一个 input method，waylandim 已 bind）
