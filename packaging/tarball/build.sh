@@ -31,9 +31,11 @@ rm -rf "$STAGE/artifacts" "$STAGE/.git" "$STAGE/build" \
 
 # 预编译 flutter bundle
 BUNDLE="${FLUTTER_BUNDLE:-$SRC/artifacts/dist/lib/fcitx5-voiceinput/ui/bundle}"
-[ -x "$BUNDLE/voice_ui" ] || { echo "!! flutter bundle 缺失"; exit 1; }
+# download-artifact 解压丢 exec 位：-f 检查 + 落盘后 chmod（与 stage.sh 一致）
+[ -f "$BUNDLE/voice_ui" ] || { echo "!! flutter bundle 缺失"; exit 1; }
 mkdir -p "$STAGE/flutter-bundle"
 cp -a "$BUNDLE/." "$STAGE/flutter-bundle/"
+chmod +x "$STAGE/flutter-bundle/voice_ui"
 
 cp "$SRC/packaging/tarball/install.sh" "$STAGE/install.sh"
 chmod +x "$STAGE/install.sh"
