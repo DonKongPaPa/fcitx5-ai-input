@@ -329,12 +329,6 @@ bool VoicePopup::ensurePopup(InputContext *ic) {
     }
     destroyPopupSurface();
 
-    if (!ic || ic->frontendName() != "wayland_v2") {
-        FCITX_INFO() << "VoicePopup: ic frontend="
-                     << (ic ? ic->frontendName() : std::string("null"))
-                     << "（需要 wayland_v2 才能取 IM proxy）";
-        return false;
-    }
     auto *waylandim = instance_->addonManager().addon("waylandim", true);
     if (!waylandim) {
         FCITX_WARN() << "VoicePopup: waylandim addon unavailable";
@@ -344,7 +338,9 @@ bool VoicePopup::ensurePopup(InputContext *ic) {
         waylandim->call<IWaylandIMModule::getInputMethodV2>(ic);
     im_ = wayland::rawPointer(imWrapper); // 借用，归 waylandim 所有
     if (!im_) {
-        FCITX_WARN() << "VoicePopup: waylandim has no InputMethodV2 for ic";
+        // frontendName() 是 5.1 API（bookworm 5.0.21 没有）：对非 wayland_v2
+        // 前端的 IC，getInputMethodV2 本身就返回 null，无需前端名判断
+        FCITX_INFO() << "VoicePopup: IC 无 waylandim IM proxy（非 wayland_v2 前端？）";
         return false;
     }
 

@@ -21,3 +21,6 @@ models/
 .env
 *.log
 .funasr-env/
+
+# 打包临时产物
+packaging/out/
