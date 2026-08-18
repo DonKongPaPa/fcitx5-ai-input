@@ -48,7 +48,7 @@ jobs:
           - id: fedora
             image: registry.fedoraproject.org/fedora:latest
           - id: tarball
-            image: docker.io/library/ubuntu:22.04
+            image: docker.io/library/debian:bookworm
     container:
       image: ${{ matrix.image }}
     steps:

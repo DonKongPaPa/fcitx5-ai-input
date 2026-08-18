@@ -7,6 +7,13 @@ SRC="${SRC:-/work}"
 VERSION="${VERSION:-0.1.0}"
 export SRC VERSION
 
+# 冒烟需要构建依赖 + git（tarball 源码含 .git 时走 git archive）
+if command -v apt-get >/dev/null 2>&1; then
+    export DEBIAN_FRONTEND=noninteractive
+    apt-get update -qq >/dev/null 2>&1
+    apt-get install -y -qq --no-install-recommends         build-essential cmake pkg-config gettext git dbus         libfcitx5core-dev libfcitx5utils-dev libfcitx5config-dev         fcitx5-modules-dev fcitx5 libwayland-dev libwayland-bin         pulseaudio-utils libglib2.0-bin >/dev/null 2>&1 || true
+fi
+
 NAME="fcitx5-voice-input-$VERSION"
 STAGE=/tmp/tarball/$NAME
 rm -rf /tmp/tarball; mkdir -p "$STAGE"
