@@ -21,9 +21,12 @@ namespace fcitx {
 static constexpr int kDefaultWidth = 360;
 static constexpr int kDefaultHeight = 200;
 
-// 候选行几何（须与 flutter _CandidatesBody 布局一致：头部 ~28px + 每行 54px）
+// 候选行几何（须与 flutter _CandidatesBody 布局一致：头部 ~26px + 行0 64px
+//（含 subtitle）+ 后续行 52px）；kShadowPad 与 flutter kShadowPad 一致
+//（快照区比卡片大一圈阴影余量，指针坐标先扣掉才是卡片局部）
 static constexpr int kCandHeaderH = 28;
 static constexpr int kCandRowH = 54;
+static constexpr int kShadowPad = 12;
 
 static const wl_registry_listener kRegistryListener = {
     /* .global = */ &VoicePopup::registryGlobalImpl,
@@ -159,12 +162,14 @@ void VoicePopup::pointerButton(void *data, wl_pointer *, uint32_t,
     }
 }
 
-// 命中：优先直达局部坐标（pointerOnPopup_ 时即面板局部）；否则用
-// 光标矩形 + 放置规则映射（兜底，合成器不给 enter 时）
+// 命中：优先直达局部坐标（pointerOnPopup_ 时即表面局部，含阴影余量）；
+// 否则用光标矩形 + 放置规则映射（兜底，合成器不给 enter 时）
 int VoicePopup::pointerRow(int winX, int winY) const {
     if (pointerOnPopup_) {
+        winX -= kShadowPad; // 扣掉快照余量 → 卡片局部
+        winY -= kShadowPad;
         // Flutter 候选布局：头部 26，行0（含 subtitle）64，后续行 52
-        if (winY < 26 || winX < 0 || winX > width_) {
+        if (winY < 26 || winX < 0 || winX > width_ - kShadowPad * 2) {
             return -1;
         }
         int y = winY - 26;
@@ -180,15 +185,22 @@ int VoicePopup::pointerRow(int winX, int winY) const {
     int px = cursorX_;
     int belowY = cursorY_ + cursorH_;
     int aboveY = cursorY_ - height_;
-    bool xOk = winX >= px - 4 && winX < px + width_ + 4;
-    bool below = xOk && winY >= belowY && winY < belowY + height_;
-    bool above = xOk && winY >= aboveY && winY < cursorY_;
+    bool xOk = winX >= px - 4 - kShadowPad &&
+               winX < px + width_ - kShadowPad * 2 + 4;
+    bool below = xOk && winY >= belowY - kShadowPad &&
+                 winY < belowY + height_;
+    bool above = xOk && winY >= aboveY && winY < cursorY_ + kShadowPad;
     if (!below && !above) {
         return -1;
     }
-    int localY = below ? (winY - belowY) : (winY - aboveY);
+    int localY = (below ? (winY - belowY) : (winY - aboveY)) - kShadowPad;
+    if (localY < kCandHeaderH) {
+        return -1;
+    }
     int row = (localY - kCandHeaderH) / kCandRowH;
-    int maxRow = (height_ - kCandHeaderH + kCandRowH - 1) / kCandRowH - 1;
+    int maxRow = (height_ - kShadowPad * 2 - kCandHeaderH + kCandRowH - 1) /
+                     kCandRowH -
+                 1;
     if (row < 0 || row > maxRow || row > 8) {
         return -1; // 点在头部或超出候选数
     }

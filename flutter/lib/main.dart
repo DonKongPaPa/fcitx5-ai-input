@@ -27,6 +27,9 @@ import 'package:flutter/rendering.dart';
 
 const double kMinW = 280;
 const double kMaxW = 420;
+// 卡片阴影余量：快照区比卡片四周各大这么多（BoxShadow blur10+spread1
+// 超出边界 ~11px）；须与 addon popup_surface.cpp 的 kShadowPad 一致
+const double kShadowPad = 12;
 
 void main() {
   runApp(const VoiceUiApp());
@@ -343,10 +346,20 @@ class _VoiceUiHomeState extends State<VoiceUiHome> {
       body: Center(
         child: RepaintBoundary(
           key: _rbKey,
+          // 快照区 = 卡片 + 阴影余量：BoxShadow(blur 10 + spread 1) 画在
+          // Container 边界外，toImage 只截 boundary 尺寸——不含余量会把
+          // 阴影裁掉（四周留 kShadowPad 透明边，指针命中在 addon 侧补偿）
           child: SizedBox(
-            width: size.width,
-            height: size.height,
-            child: VoicePanel(data: _data),
+            width: size.width + kShadowPad * 2,
+            height: size.height + kShadowPad * 2,
+            child: Padding(
+              padding: const EdgeInsets.all(kShadowPad),
+              child: SizedBox(
+                width: size.width,
+                height: size.height,
+                child: VoicePanel(data: _data),
+              ),
+            ),
           ),
         ),
       ),
@@ -370,7 +383,8 @@ class VoicePanel extends StatelessWidget {
         borderRadius: BorderRadius.circular(14),
         border: Border.all(color: cs.outlineVariant, width: 1),
         boxShadow: const [
-          BoxShadow(color: Color(0x33000000), blurRadius: 10, spreadRadius: 1),
+          // MD3 elevation：vision 复核建议加强对比（浅底上 0x33 偏淡）
+          BoxShadow(color: Color(0x40202028), blurRadius: 10, spreadRadius: 1),
         ],
       ),
       child: ClipRRect(
