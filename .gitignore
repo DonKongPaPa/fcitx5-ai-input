@@ -20,3 +20,4 @@ models/
 # 环境与日志
 .env
 *.log
+.funasr-env/

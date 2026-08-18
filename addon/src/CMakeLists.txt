@@ -3,6 +3,8 @@ target_sources(voiceinput PRIVATE
     voiceinput.cpp
     popup_surface.cpp
     ui_bridge.cpp
+    funasr_ws_engine.cpp
+    funasr_local_engine.cpp
 )
 # flutter bundle 安装位置（build.sh 拷入 dist；容器侧 /usr/lib/fcitx5-voiceinput/ui/bundle）
 # 注意：不能用 CMAKE_INSTALL_FULL_LIBDIR——构建时 prefix 是 dist 暂存目录，

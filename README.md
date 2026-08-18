@@ -6,6 +6,15 @@
 
 ```
 [触发键 右Ctrl] → [fcitx5 C++ addon：状态机/配置/引擎抽象]
+                      │
+                      ├─ ASR 引擎三档（configtool 可切，热改即时生效）：
+                      │   · FunASR（WS 流式档）：parec 采音 → 手写 WS 客户端
+                      │     → 宿主 funasr-serve（MLT 31 语种，GPU 原生无容器，
+                      │     累积窗口流式：每 720ms 全量重识别 + 剪尾）
+                      │   · FunASRLocal（GGUF 本地档）：录音落盘 wav →
+                      │     llama-funasr-cli 子进程（zh/en/ja 非流式，CPU ~1.5G）
+                      │   · Dummy（调试/管线确定性回归）
+                      │
                       │ TCP 127.0.0.1（行式 JSON 状态 + RGBA 帧）
                       ▼
               [Flutter voice_ui：MD3 浮窗，跑在 weston headless 上]
@@ -17,8 +26,9 @@
                       → 文本经 InputContext::commitString 落到光标处
 ```
 
-- `addon/`：fcitx5 插件。配置（`voiceinput.conf.desc` → configtool 设置页，热改即时生效）、按键状态机（HoldRelease/Toggle 两模式 + 阈值）、ASR 引擎抽象（Dummy 流式已实现，FunASR 预留）、UiBridge（flutter 进程管理 + 帧接收）、VoicePopup（popup surface，纯 C libwayland）
-- `flutter/`：MD3 三态 UI（录音=mic+计时+流式 partial / 结果 / 候选），全官方组件，快照帧桥
+- `addon/`：fcitx5 插件。配置（`voiceinput.conf.desc` → configtool 设置页，热改即时生效）、按键状态机（HoldRelease/Toggle 两模式 + 阈值 + 录音中 Esc 取消）、AsrEngine 抽象（Dummy/FunASR WS/FunASR GGUF 三实现）、UiBridge（flutter 进程管理 + 帧接收）、VoicePopup（popup surface，纯 C libwayland）
+- `flutter/`：MD3 三态 UI（录音=mic+计时+流式 partial 尾部优先 / 结果 / 候选），全官方组件，自适应尺寸（宽 280–420 实测），快照帧桥
+- `scripts/funasr-server/`：宿主 WS 识别服务（uv venv python3.12 + funasr/torch-CUDA，`scripts/funasr-serve.sh start` 管理）
 - 定位不由我们计算：popup 挂在 waylandim 的 `zwp_input_method_v2` 上，合成器按 text-input 光标矩形放置（协议规定一个 seat 仅一个 IM，必须复用 waylandim 的连接，不能自 bind）
 
 ## 测试环境（一个桌面 = 一个独立容器）
@@ -88,8 +98,22 @@ make compare             # 汇总历史报告，生成方案对比页（性能/�
   - F3 popup surface：借 waylandim IM 连接挂 `zwp_input_popup_surface_v2`，niri 光标附近显示验证通过
   - F4 Flutter MD3 UI + 快照帧桥：toImage→TCP→wl_shm 全链路，录屏四项断言（录音期可见/内容实时变化/候选切换/idle 隐藏）连续通过
   - F5 端到端 28/28：候选数字键落点、阈值透传、TriggerMode/LLMEnabled 配置热改即时生效、流式逐字单调递增、连续三轮触发（popup 复用）、100 字长文本全文提交、录音中 Esc 取消+立即复用
+- ✅ G1-G4 FunASR 双档接入（真实用户语音 E2E 13/13）：
+  - 宿主原生 WS 服务（无 GPU 容器）：`scripts/funasr-serve.sh`（uv venv py3.12 + MLT 模型复用实验 001 资产，RTX 3060 原生驱动）；累积窗口流式（每 720ms 全量重识别，单窗 0.25-0.9s）；**prev_text LLM 上下文实测会"锚死"早期文本，弃用**
+  - addon 三档引擎：FunASR WS（parec 采音 + 手写零依赖 WS 客户端）、FunASRLocal GGUF（wav 落盘 + llama-funasr-cli 子进程非阻塞）、Dummy；configtool 枚举热切换
+  - f6-test.sh 真实音频 E2E：中文流式（8 条真实 partial）+ 英语（MLT 多语种）+ GGUF 非流式 + Dummy 回归，识别文本与 `tests/expected-transcripts.json` 精确匹配
 - ✅ 视觉验证改用 vision subagent（能真实感知录屏帧，替代像素取证）：确认 MD3 风格渲染正确、自适应尺寸观感合适、发现并关闭 niri hotkey-overlay 干扰
-- ⬜ 后续：FunASR 引擎接入（虚拟麦克风 → 流式识别）、LLM 双后端（OpenAI 兼容 API / 本地 Qwen 直连）、真实音频用例替换 Trigger 直通、kde/gnome 环境补测
+- ⬜ 后续：LLM 双后端（OpenAI 兼容 API / 本地 Qwen 直连）替换 Dummy 润色、真实音频进 case-driver 管线（audio 字段）与报告 asr_raw、kde/gnome 环境补测
+
+## FunASR 使用
+
+```bash
+scripts/funasr-serve.sh start   # 宿主 WS 识别服务（GPU 原生；FUNASR_DEVICE=cpu 可切）
+# configtool（或写 conf/voiceinput.config）：
+#   AsrEngine=FunASR      流式档（FunASRUrl=ws://127.0.0.1:10095，容器内 ws://host.containers.internal:10095）
+#   AsrEngine=FunASRLocal GGUF 本地档（llama-funasr-cli + gguf 目录，zh/en/ja 非流式）
+scripts/env/f6-test.sh          # 真实音频 E2E（需在 niri 容器编排内运行，见提交历史）
+```
 
 ## Flutter UI 里程碑细节（F1-F5）
 

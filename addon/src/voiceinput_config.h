@@ -14,9 +14,13 @@ namespace fcitx {
 FCITX_CONFIG_ENUM(TriggerMode, HoldRelease, Toggle);
 FCITX_CONFIG_ENUM_I18N_ANNOTATION(TriggerMode, "HoldRelease", "Toggle");
 
-// ASR 引擎：Dummy=调试用模拟输出（默认）；FunASR=预留接入点
-FCITX_CONFIG_ENUM(AsrEngineKind, Dummy, FunASR);
-FCITX_CONFIG_ENUM_I18N_ANNOTATION(AsrEngineKind, "Dummy", "FunASR");
+// ASR 引擎：Dummy=调试用模拟输出（默认）；
+//           FunASR=流式 WS 档（宿主 funasr-serve，MLT 31 语种，GPU/CPU）；
+//           FunASRLocal=GGUF 本地档（llama-funasr-cli 子进程，zh/en/ja，
+//           非流式，CPU ~1.5GB 内存）
+FCITX_CONFIG_ENUM(AsrEngineKind, Dummy, FunASR, FunASRLocal);
+FCITX_CONFIG_ENUM_I18N_ANNOTATION(AsrEngineKind, "Dummy", "FunASR",
+                                  "FunASRLocal");
 
 // configtool 由该 Configuration 自动生成设置页；保存后经 D-Bus 触发
 // reloadConfig()，参数即时生效（无需重启 fcitx5）
@@ -37,13 +41,33 @@ FCITX_CONFIGURATION(
 
     // —— 组2 语音引擎 ——
     Option<AsrEngineKind, NoConstrain<AsrEngineKind>, DefaultMarshaller<AsrEngineKind>, AsrEngineKindI18NAnnotation> asrEngine{
-        this, "AsrEngine", "ASR 引擎（Dummy=调试模拟，FunASR=预留）",
+        this, "AsrEngine", "ASR 引擎（Dummy=调试模拟，FunASR=流式识别，"
+                           "FunASRLocal=本地轻量档 zh/en/ja 非流式）",
         AsrEngineKind::Dummy};
     Option<bool> streamingEnabled{
         this, "StreamingEnabled", "流式识别（实时显示中间结果，引擎支持时）",
         true};
     Option<bool> llmEnabled{
         this, "LLMEnabled", "LLM 优化输出（开启时结果先入候选框）", true};
+
+    // —— 组2.1 FunASR 流式（WS 档）——
+    Option<std::string> funasrUrl{
+        this, "FunASRUrl", "FunASR 流式服务地址（ws://host:port）",
+        "ws://127.0.0.1:10095"};
+    Option<std::string> funasrLanguage{
+        this, "FunASRLanguage", "识别语言（中文/英文/日文…，MLT 31 语种）",
+        "中文"};
+
+    // —— 组2.2 FunASR 本地（GGUF 档）——
+    Option<std::string> funasrLocalCmd{
+        this, "FunASRLocalCmd", "llama-funasr-cli 可执行文件路径",
+        "/usr/lib/fcitx5-voiceinput/llamacpp/llama-funasr-cli"};
+    Option<std::string> funasrLocalModelDir{
+        this, "FunASRLocalModelDir", "GGUF 模型目录（encoder/llm/vad/tiktoken）",
+        "/usr/lib/fcitx5-voiceinput/gguf"};
+    Option<std::string> funasrLocalQuant{
+        this, "FunASRLocalQuant", "LLM 量化（q8_0=更准 或 q4km=更小）",
+        "q8_0"};
 
     // —— 组3 Dummy 调试 ——
     Option<std::string> dummyText{

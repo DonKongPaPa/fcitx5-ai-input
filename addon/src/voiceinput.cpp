@@ -1,6 +1,8 @@
 #include "voiceinput.h"
 #include "popup_surface.h"
 #include "ui_bridge.h"
+#include "funasr_local_engine.h"
+#include "funasr_ws_engine.h"
 
 #include <fcitx-config/iniparser.h>
 #include <fcitx-utils/keysym.h>
@@ -217,10 +219,28 @@ void VoiceInputEngine::startThresholdTimer() {
     }
 }
 
+// 按当前配置创建 ASR 引擎（会话级：配置热改后下一会话即生效）
+static std::unique_ptr<AsrEngine> makeAsrEngine(const VoiceInputConfig &cfg) {
+    switch (cfg.asrEngine.value()) {
+    case AsrEngineKind::FunASR:
+        return std::make_unique<FunAsrWsEngine>();
+    case AsrEngineKind::FunASRLocal:
+        return std::make_unique<FunAsrLocalEngine>();
+    case AsrEngineKind::Dummy:
+    default:
+        return std::make_unique<DummyAsrEngine>();
+    }
+}
+
 void VoiceInputEngine::beginRecording(InputContext *ic) {
     state_ = State::Recording;
     toggleReleased_ = false;
     recordStartUs_ = nowUs();
+    // 引擎随会话创建（旧引擎若在跑先取消）
+    if (asr_) {
+        asr_->cancel();
+    }
+    asr_ = makeAsrEngine(config_);
     if (popup_) {
         popup_->show(ic);
     }
