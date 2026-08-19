@@ -113,7 +113,7 @@ void VoicePopup::preferredScale(void *data, wp_fractional_scale_v1 *,
         double sc = s->scale();
         int pw = static_cast<int>(s->logicalW_ * sc + 0.5);
         int ph = static_cast<int>(s->logicalH_ * sc + 0.5);
-        s->resize(pw, ph);
+        s->resizeLocked(pw, ph);
         wp_viewport_set_destination(s->viewport_, s->logicalW_, s->logicalH_);
     }
     if (s->scaleHandler_) {
@@ -135,7 +135,7 @@ void VoicePopup::outputScale(void *data, wl_output *, int32_t factor) {
         FCITX_INFO() << "VoicePopup: wl_output scale → " << factor;
         if (s->logicalW_ > 0 && s->viewport_) {
             int pw = s->logicalW_ * factor, ph = s->logicalH_ * factor;
-            s->resize(pw, ph);
+            s->resizeLocked(pw, ph);
             wp_viewport_set_destination(s->viewport_, s->logicalW_,
                                         s->logicalH_);
         }
@@ -496,9 +496,16 @@ void VoicePopup::hide() {
     }
 }
 
-// 重建 shm 池（帧尺寸变化时）；surface/popup 不动
+// 重建 shm 池（帧尺寸变化时）；surface/popup 不动。
+// 注意：preferredScale/outputScale/setLogicalSize 已持锁调用的是
+// resizeLocked——std::mutex 不可重入，持锁再调本函数=自死锁（主循环
+// 卡死，宿主机实测栈：preferredScale→resize→pthread_mutex_lock）
 void VoicePopup::resize(int w, int h) {
     std::lock_guard<std::mutex> lock(mutex_);
+    resizeLocked(w, h);
+}
+
+void VoicePopup::resizeLocked(int w, int h) {
     if (!pool_ || (w == width_ && h == height_)) {
         return;
     }
@@ -545,7 +552,7 @@ void VoicePopup::setLogicalSize(int w, int h) {
     if (pw != width_ || ph != height_) {
         // 物理池与当前不符时先按目标逻辑比例预留（首帧到达会再校准）
         if (width_ <= 0) {
-            resize(pw, ph);
+            resizeLocked(pw, ph);
         }
     }
 }

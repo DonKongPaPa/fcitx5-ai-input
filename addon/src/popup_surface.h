@@ -77,7 +77,8 @@ public:
     //（wl_shm ARGB8888 小端字节序，引擎软渲输出可直接 memcpy），
     // 尺寸变化时自动重建 shm 池
     void pushFrameBGRA(const uint8_t *bgra, int w, int h);
-    void resize(int w, int h); // 重建 shm 池（帧尺寸变化）
+    void resize(int w, int h); // 重建 shm 池（帧尺寸变化；内部加锁）
+    void resizeLocked(int w, int h); // 已持锁版本（wayland 回调用）
     void setPatternMode(bool p) { patternMode_ = p; } // 引擎不可用时回退色块
 
     // W3 fractional scale：逻辑/物理尺寸分离。Dart（或调用方）上报**逻辑**
