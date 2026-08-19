@@ -583,7 +583,7 @@ if [ -n "${CAGE_SOCK:-}" ] && command -v grim >/dev/null 2>&1; then
     fi
     gdbus call --session --dest org.fcitx.Fcitx5 --object-path /controller \
         --method org.fcitx.Fcitx.Controller1.SetConfig \
-        "fcitx://config/addon/voiceinput" "<{'PositionMode': <'auto'>}>" >/dev/null 2>&1 || true
+        "fcitx://config/addon/voiceinput" "<{'PositionMode': <'auto'>, 'UIFont': <''>}>" >/dev/null 2>&1 || true
     case "$(call State 2>/dev/null || true)" in *idle*) ;; *)
         call SimulateKey "Control+Control_R" true >/dev/null 2>&1 || true
         sleep 0.3
@@ -600,8 +600,8 @@ if [ -n "${CAGE_SOCK:-}" ] && command -v virtpoint >/dev/null 2>&1 && \
    [ -x "$DIST_BIN/virtpoint" ]; then
     gdbus call --session --dest org.fcitx.Fcitx5 --object-path /controller \
         --method org.fcitx.Fcitx.Controller1.SetConfig \
-        "fcitx://config/addon/voiceinput" "<{'PositionMode': <'top'>}>" >/dev/null 2>&1 || true
-    sleep 0.5
+        "fcitx://config/addon/voiceinput" "<{'PositionMode': <'top'>, 'UIFont': <'Noto Sans CJK SC 16'>}>" >/dev/null 2>&1 || true
+    sleep 1
     "$DIST_BIN/$TESTAPP" >"$LOG_DIR/testapp-r23.log" 2>&1 &
     R23_PID=$!
     sleep 2
@@ -609,9 +609,11 @@ if [ -n "${CAGE_SOCK:-}" ] && command -v virtpoint >/dev/null 2>&1 && \
     call SimulateKey "Control+Control_R" true >/dev/null 2>&1 || true
     sleep 0.8
     call SimulateKey "Control+Control_R" false >/dev/null 2>&1 || true
-    sleep 2.5  # Dummy 引擎吐字 + 进候选态（卡片可见，顶部居中）
-    # hover：移到卡片候选行 1 区域（顶部居中 ≈640,110）
-    "$DIST_BIN/virtpoint" move 640 110 1280 720 2>/dev/null || true
+    sleep 2.5  # Dummy 引擎吐字 + 进候选态（卡片可见，顶部居中；16pt 字号）
+    # 大字号候选截图（用户实测溢出场景：字体变化 → 尺寸应随之变化）
+    WAYLAND_DISPLAY="$CAGE_SOCK" grim "$OUT_DIR/r23-font16-candidates.png" 2>"$LOG_DIR/grim-r23.log" || true
+    # hover+点击候选行 1（16pt 字体布局更高：行 1 中心 ≈640,130）
+    "$DIST_BIN/virtpoint" move 640 130 1280 720 2>/dev/null || true
     sleep 0.6
     "$DIST_BIN/virtpoint" click left 2>/dev/null || true
     sleep 1.5

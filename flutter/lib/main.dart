@@ -130,23 +130,27 @@ class VoiceUiApp extends StatelessWidget {
   }
 }
 
-/// 面板尺寸决策：宽度 TextPainter 实测（280–420），高度按状态
-Size panelSizeFor(ThemeData theme, SessionData d) {
+/// 面板尺寸决策：宽度 TextPainter 实测（280–420，随 fontScale 缩放），
+/// 高度按状态。theme 必须与渲染主题同源（同字体族+字号缩放）——
+/// 测量用默认字体而渲染用 SysFont 时宽度必然失准（用户实测候选头部
+/// 提示溢出即此因）
+Size panelSizeFor(ThemeData theme, SessionData d, double fontScale) {
+  final minW = kMinW * fontScale, maxW = kMaxW * fontScale;
   switch (d.state) {
     case UiState.recording:
-      return const Size(280, 104);
+      return Size(280 * fontScale, 104 * fontScale);
     case UiState.result:
       {
-        // 3 行放不下就加宽（步进 40），仍放不下按 3 行截断
-        var w = kMinW;
+        // 3 行放不下就加宽（步进 40*scale），仍放不下按 3 行截断
+        var w = minW;
         var lines = lineCount(d.resultText, theme.textTheme.titleMedium!,
             w - 24 /* 左右 padding */);
-        while (lines > 3 && w < kMaxW) {
-          w += 40;
+        while (lines > 3 && w < maxW) {
+          w += 40 * fontScale;
           lines =
               lineCount(d.resultText, theme.textTheme.titleMedium!, w - 24);
         }
-        return Size(w, 60 + lines.clamp(1, 3) * 24);
+        return Size(w, (60 + lines.clamp(1, 3) * 24) * fontScale);
       }
     case UiState.candidates:
       {
@@ -160,11 +164,23 @@ Size panelSizeFor(ThemeData theme, SessionData d) {
           final need = measureWidth(items[i], style) + (i == 0 ? 24 : 0);
           if (need > textW) textW = need;
         }
-        final w = (textW + 22 + 16 + 24 + 8).clamp(kMinW, kMaxW);
-        return Size(w, 44 + items.length * 52 + 8 /* 首条 subtitle */);
+        // 头部行也参与宽度决策（提示文字曾溢出）：图标 14 + 间距 4 +
+        // "LLM 优化" + 提示文字 + 行 padding 24 + 弹性余量 24（实测
+        // 余量 8 时 Row 可用宽仍差 ~16px，差 1-2 个字符触发省略）
+        final labelStyle = theme.textTheme.labelSmall!;
+        final headerW = 14 + 4 +
+            measureWidth('LLM 优化', labelStyle) +
+            measureWidth('数字/方向键选择 · Enter=上屏 · Esc=取消', labelStyle) +
+            24 + 24;
+        var w = (textW + 22 + 16 + 24 + 8).clamp(minW, maxW);
+        if (w < headerW) {
+          // 头部提示撑宽：允许超出常规 maxW（提示完整显示优先于宽度收敛）
+          w = headerW.clamp(minW, maxW * 1.3);
+        }
+        return Size(w, (44 + items.length * 52 + 8 /* 首条 subtitle */) * fontScale);
       }
     case UiState.idle:
-      return const Size(280, 64);
+      return Size(280 * fontScale, 64 * fontScale);
   }
 }
 
@@ -183,6 +199,7 @@ class _VoiceUiHomeState extends State<VoiceUiHome> {
   int _localElapsed = 0;
   String? _sysFontFamily; // classicui 跟随字体（FontLoader 注册后启用）
   double _fontScale = 1.0; // size/12 基准
+  ThemeData? _renderTheme; // build 捕获的规范化渲染主题（测量同源用）
   int _mouseHover = -1; // 鼠标悬停行（本地状态；键盘选择走 data.hover）
   Size _lastReported = Size.zero;
 
@@ -260,9 +277,9 @@ class _VoiceUiHomeState extends State<VoiceUiHome> {
 
   void _update(SessionData d) {
     setState(() => _data = d);
-    // 窗口尺寸 = 卡片 + 阴影余量，变化即上报（C++ 侧据此更新引擎 metrics
-    // → 重排 → 下一帧即新尺寸，popup 池随帧自动重建）
-    final size = panelSizeFor(_themeForSizing(), d);
+    // 窗口尺寸 = 卡片（已按当前字体测量）+ 阴影余量，变化即上报
+    // （C++ 侧据此更新引擎 metrics → 重排 → 下一帧即新尺寸，popup 池随帧自动重建）
+    final size = panelSizeFor(_measureTheme(), d, _fontScale);
     final win = Size(size.width + kShadowPad * 2, size.height + kShadowPad * 2);
     if (win != _lastReported) {
       _lastReported = win;
@@ -270,8 +287,13 @@ class _VoiceUiHomeState extends State<VoiceUiHome> {
     }
   }
 
-  // panelSizeFor 只用 textTheme——直接取全局 Theme（不依赖 BuildContext）
-  ThemeData _themeForSizing() {
+  /// 测量主题：与 build 的渲染主题同源（同字体族 + 同字号缩放），否则
+  /// TextPainter 实测宽与实际渲染宽失配 → 溢出。注意：直接对裸
+  /// ThemeData().textTheme.apply(fontSizeFactor≠1) 会命中框架断言
+  /// （部分样式 fontSize 为 null）——Theme.of 返回的规范化主题才安全，
+  /// 故 build 时捕获、此处复用；兜底主题因子恒 1（断言允许）
+  ThemeData _measureTheme() {
+    if (_renderTheme != null) return _renderTheme!;
     final brightness = WidgetsBinding.instance.platformDispatcher.platformBrightness;
     return ThemeData(
       useMaterial3: true,
@@ -292,6 +314,7 @@ class _VoiceUiHomeState extends State<VoiceUiHome> {
           _sysFontFamily = 'SysFont';
           _fontScale = (size / 12.0).clamp(0.7, 2.5);
         });
+        // 字体变化 → 尺寸变化由 build 的后置帧上报（此处主题尚未重建）
         // ignore: avoid_print
         print('ui-font: $path size=$size');
         return;
@@ -318,34 +341,53 @@ class _VoiceUiHomeState extends State<VoiceUiHome> {
   @override
   Widget build(BuildContext context) {
     final base = Theme.of(context);
-    final size = panelSizeFor(base, _data);
     final theme = base.copyWith(
       // SysFont = classicui 跟随/UIFont 配置（_applyFont 注册）；
-      // 字号以 classicui Font 的 pt 为基准（12 → 1.0）
+      // 字号以 classicui Font 的 pt 为基准（12 → 1.0）。
+      // Theme.of 的主题已规范化（样式字号非空），apply 才不触发断言
       textTheme: base.textTheme.apply(
         fontFamily: _sysFontFamily ?? 'NotoSansSC',
         fontFamilyFallback: const ['NotoSansSC'],
         fontSizeFactor: _fontScale,
       ),
     );
+    _renderTheme = theme; // 测量同源（_measureTheme 复用）
+    // 测量与渲染同源：size 已含 fontScale，不再二次放大
+    final size = panelSizeFor(theme, _data, _fontScale);
+    // 非状态变化路径（如字体热更）的尺寸上报兜底：后置帧上报
+    final win = Size(size.width + kShadowPad * 2, size.height + kShadowPad * 2);
+    if (win != _lastReported) {
+      WidgetsBinding.instance.addPostFrameCallback((_) {
+        if (!mounted || win == _lastReported) return;
+        _lastReported = win;
+        _invoke('resize', {'w': win.width.round(), 'h': win.height.round()});
+      });
+    }
     return Theme(
       data: theme,
       child: Scaffold(
         backgroundColor: Colors.transparent,
         body: Center(
           child: SizedBox(
-            width: size.width * _fontScale + kShadowPad * 2,
-            height: size.height * _fontScale + kShadowPad * 2,
+            width: size.width + kShadowPad * 2,
+            height: size.height + kShadowPad * 2,
             child: Padding(
               padding: const EdgeInsets.all(kShadowPad),
-              child: SizedBox(
-                width: size.width * _fontScale,
-                height: size.height * _fontScale,
-                child: VoicePanel(
-                  data: _data,
-                  mouseHover: _mouseHover,
-                  onHover: _onHoverRow,
-                  onSelect: _selectCandidate,
+              child: AnimatedSize(
+                // 状态切换的尺寸过渡：窗口尺寸直接跳到目标态（透明区无感），
+                // 卡片本体在窗口内平滑伸缩，避免逐帧 resize 的反馈循环
+                duration: const Duration(milliseconds: 220),
+                curve: Curves.easeOutCubic,
+                alignment: Alignment.topCenter,
+                child: SizedBox(
+                  width: size.width,
+                  height: size.height,
+                  child: VoicePanel(
+                    data: _data,
+                    mouseHover: _mouseHover,
+                    onHover: _onHoverRow,
+                    onSelect: _selectCandidate,
+                  ),
                 ),
               ),
             ),
@@ -387,13 +429,23 @@ class VoicePanel extends StatelessWidget {
       ),
       child: ClipRRect(
         borderRadius: BorderRadius.circular(14),
-        child: switch (data.state) {
-          UiState.recording => _RecordingBody(data: data),
-          UiState.result => _ResultBody(data: data),
-          UiState.candidates => _CandidatesBody(
-              data: data, mouseHover: mouseHover, onHover: onHover, onSelect: onSelect),
-          UiState.idle => _IdleBody(),
-        },
+        // 状态间内容过渡（录音指示器 → 结果 → 候选）：尺寸变化由外层
+        // AnimatedSize 平滑衔接，这里补内容层的淡入淡出
+        child: AnimatedSwitcher(
+          duration: const Duration(milliseconds: 180),
+          switchInCurve: Curves.easeOut,
+          switchOutCurve: Curves.easeIn,
+          child: KeyedSubtree(
+            key: ValueKey(data.state),
+            child: switch (data.state) {
+              UiState.recording => _RecordingBody(data: data),
+              UiState.result => _ResultBody(data: data),
+              UiState.candidates => _CandidatesBody(
+                  data: data, mouseHover: mouseHover, onHover: onHover, onSelect: onSelect),
+              UiState.idle => const _IdleBody(),
+            },
+          ),
+        ),
       ),
     );
   }
@@ -415,8 +467,6 @@ class _RecordingBody extends StatelessWidget {
     final cs = theme.colorScheme;
     final partialStyle =
         theme.textTheme.bodyMedium?.copyWith(color: cs.onSurfaceVariant);
-    final shown = tailFit(
-        data.partial, partialStyle!, 280 - 24 /* 左右 padding */, 2);
     return Column(
       crossAxisAlignment: CrossAxisAlignment.stretch,
       children: [
@@ -454,12 +504,17 @@ class _RecordingBody extends StatelessWidget {
             padding: const EdgeInsets.symmetric(horizontal: 12),
             child: Align(
               alignment: Alignment.centerLeft,
-              child: Text(
-                shown.isEmpty ? ' ' : shown,
-                maxLines: 2,
-                overflow: TextOverflow.ellipsis,
-                style: partialStyle,
-              ),
+              // tailFit 用实际可用宽（字体缩放后不再写死 280）
+              child: LayoutBuilder(builder: (ctx, c) {
+                final shown =
+                    tailFit(data.partial, partialStyle!, c.maxWidth, 2);
+                return Text(
+                  shown.isEmpty ? ' ' : shown,
+                  maxLines: 2,
+                  overflow: TextOverflow.ellipsis,
+                  style: partialStyle,
+                );
+              }),
             ),
           ),
         ),
@@ -539,15 +594,29 @@ class _CandidatesBody extends StatelessWidget {
       children: [
         Padding(
           padding: const EdgeInsets.fromLTRB(12, 8, 12, 2),
+          // 注意不能用 Spacer：Spacer(Expanded flex:1) 会与 Flexible(hint)
+          // 平分剩余空间，提示恒被压到半宽再省略截断（用户实测溢出的
+          // 真凶）。spaceBetween 让 hint 独占全部剩余宽度
           child: Row(
+            mainAxisAlignment: MainAxisAlignment.spaceBetween,
             children: [
-              Icon(Icons.auto_awesome, size: 14, color: cs.primary),
-              const SizedBox(width: 4),
-              Text('LLM 优化', style: theme.textTheme.labelSmall),
-              const Spacer(),
-              Text('数字/方向键选择 · Enter=上屏 · Esc=取消',
+              Row(
+                mainAxisSize: MainAxisSize.min,
+                children: [
+                  Icon(Icons.auto_awesome, size: 14, color: cs.primary),
+                  const SizedBox(width: 4),
+                  Text('LLM 优化', style: theme.textTheme.labelSmall),
+                ],
+              ),
+              Flexible(
+                child: Text(
+                  '数字/方向键选择 · Enter=上屏 · Esc=取消',
+                  maxLines: 1,
+                  overflow: TextOverflow.ellipsis,
                   style: theme.textTheme.labelSmall?.copyWith(
-                      color: cs.onSurfaceVariant)),
+                      color: cs.onSurfaceVariant),
+                ),
+              ),
             ],
           ),
         ),
