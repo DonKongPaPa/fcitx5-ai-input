@@ -72,12 +72,21 @@ void SherpaOnnxEngine::start(EventLoop *loop, const VoiceInputConfig *config,
     finished_ = false;
 
     const std::string dir = resolveSherpaModelDir(config);
+    const std::string tokens = dir + "/tokens.txt";
+    // 双架构探测（与下方加载严格同源，勿各自为政——宿主机曾因检查只认
+    // paraformer 固定文件名而误报 zipformer「模型缺失」）：
+    //   zipformer：joiner*/encoder*/decoder*.onnx（epoch 命名，通配匹配）
+    //   paraformer：encoder.int8.onnx + decoder.int8.onnx（固定命名）
+    std::string joiner = findModelFile(dir, "joiner", true);
+    std::string zfEnc = findModelFile(dir, "encoder", false); // fp32 优先
+    std::string zfDec = findModelFile(dir, "decoder", true);
     const std::string encoder = dir + "/encoder.int8.onnx";
     const std::string decoder = dir + "/decoder.int8.onnx";
-    const std::string tokens = dir + "/tokens.txt";
-    if (access(encoder.c_str(), R_OK) != 0 ||
-        access(decoder.c_str(), R_OK) != 0 ||
-        access(tokens.c_str(), R_OK) != 0) {
+    const bool isZipformer =
+        !joiner.empty() && !zfEnc.empty() && !zfDec.empty();
+    const bool isParaformer =
+        access(encoder.c_str(), R_OK) == 0 && access(decoder.c_str(), R_OK) == 0;
+    if (access(tokens.c_str(), R_OK) != 0 || (!isZipformer && !isParaformer)) {
         FCITX_WARN() << "Sherpa: 模型缺失 " << dir
                      << "（scripts/fetch-sherpa-models.sh 下载，或 "
                         "configtool 配置模型目录）";
@@ -86,15 +95,10 @@ void SherpaOnnxEngine::start(EventLoop *loop, const VoiceInputConfig *config,
     }
 
     // —— 配置（对齐实验 004 的 python 参数：16k/80 维/4 线程/cpu）——
-    // 双架构：目录有 joiner*.int8.onnx → zipformer transducer（中英混说
-    // 旗舰）；否则 paraformer（encoder.int8+decoder.int8）
     SherpaOnnxOnlineRecognizerConfig c = {};
     c.feat_config.sample_rate = 16000;
     c.feat_config.feature_dim = 80;
-    std::string joiner = findModelFile(dir, "joiner", true);
-    std::string zfEnc = findModelFile(dir, "encoder", false); // fp32 encoder
-    std::string zfDec = findModelFile(dir, "decoder", true);
-    if (!joiner.empty() && !zfEnc.empty() && !zfDec.empty()) {
+    if (isZipformer) {
         c.model_config.transducer.encoder = zfEnc.c_str();
         c.model_config.transducer.decoder = zfDec.c_str();
         c.model_config.transducer.joiner = joiner.c_str();
@@ -113,12 +117,22 @@ void SherpaOnnxEngine::start(EventLoop *loop, const VoiceInputConfig *config,
     const auto t0 = std::chrono::steady_clock::now();
     // recognizer 常驻缓存：模型加载 ~0.9s，若每会话新建会在按键瞬间
     // 阻塞主循环（grab 下全部键盘输入冻结——宿主机实测"打不了字"）。
-    // 进程级单例，stream 才是会话级
+    // 进程级单例，stream 才是会话级。缓存键含模型目录与线程数：
+    // configtool 换目录（zipformer↔paraformer 对比）需重建，否则旧架构
+    // recognizer 被静默复用；换键时销毁旧实例并同步更新 static 指针
+    // （会话 teardown 不销毁、指针悬垂的旧坑不复现）
     static SherpaOnnxOnlineRecognizer *cachedRec = nullptr;
+    static std::string cachedDir;
     static int cachedThreads = 0;
-    if (!cachedRec || cachedThreads != c.model_config.num_threads) {
+    if (!cachedRec || cachedThreads != c.model_config.num_threads ||
+        cachedDir != dir) {
+        if (cachedRec) {
+            SherpaOnnxDestroyOnlineRecognizer(cachedRec);
+            FCITX_INFO() << "Sherpa: 模型目录/线程变化，重建 recognizer";
+        }
         cachedRec = const_cast<SherpaOnnxOnlineRecognizer *>(
             SherpaOnnxCreateOnlineRecognizer(&c));
+        cachedDir = dir;
         cachedThreads = c.model_config.num_threads;
     }
     recognizer_ = cachedRec;

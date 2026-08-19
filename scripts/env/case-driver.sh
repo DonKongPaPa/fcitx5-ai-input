@@ -440,6 +440,48 @@ else
     record r16-tail-audio pass "（跳过：无模型/音频环境）"
 fi
 
+# R20 zipformer 双架构启动（宿主机回归：启动前置检查曾只认 paraformer
+# 固定文件名，epoch 命名的 zipformer 被误报「模型缺失」；同时验证目录
+# 切换后 recognizer 缓存重建而非静默复用旧架构）
+if [ -d "/models/sherpa-zipformer" ]; then
+    gdbus call --session --dest org.fcitx.Fcitx5 --object-path /controller \
+        --method org.fcitx.Fcitx.Controller1.SetConfig \
+        "fcitx://config/addon/voiceinput" "<{'AsrEngine': <'Sherpa'>, 'SherpaModelDir': <'/models/sherpa-zipformer'>}>" >/dev/null 2>&1 || true
+    sleep 0.5
+    "$DIST_BIN/$TESTAPP" >"$LOG_DIR/testapp-r20.log" 2>&1 &
+    R20_PID=$!
+    sleep 2
+    WAV=/samples/中文测试-16k.wav
+    [ -f "$WAV" ] || WAV=$(ls /samples/*.wav 2>/dev/null | head -1 || true)
+    call SimulateKey "Control+Control_R" true >/dev/null 2>&1 || true; sleep 0.8
+    [ -n "$WAV" ] && play_to_mic "$WAV" &
+    PLAY_PID=$!
+    sleep 6
+    wait "$PLAY_PID" 2>/dev/null || true
+    call SimulateKey "Control+Control_R" false >/dev/null 2>&1 || true
+    sleep 3
+    r20_final="$(grep -aE "\[ui\] (committed|result)" "$FCITX_LOG" | tail -1 | sed 's/.*\[ui\] [a-z]*: //' || true)"
+    kill "$R20_PID" 2>/dev/null || true
+    if grep -aq "zipformer transducer" "$FCITX_LOG" && [ -n "$r20_final" ] && \
+       grep -aq "重建 recognizer" "$FCITX_LOG" && \
+       ! grep -aq "模型缺失.*sherpa-zipformer" "$FCITX_LOG"; then
+        record r20-sherpa-zipformer pass "zipformer 启动+识别+缓存重建：final「$r20_final」"
+    else
+        record r20-sherpa-zipformer fail "zipformer 未正确启动（final「$r20_final」；transducer/重建/缺失日志检查未全过）"
+    fi
+    # 还原：引擎回 Dummy、目录回空（回落 env 默认），收尾回 idle
+    gdbus call --session --dest org.fcitx.Fcitx5 --object-path /controller \
+        --method org.fcitx.Fcitx.Controller1.SetConfig \
+        "fcitx://config/addon/voiceinput" "<{'AsrEngine': <'Dummy'>, 'SherpaModelDir': <''}>" >/dev/null 2>&1 || true
+    case "$(call State 2>/dev/null || true)" in *idle*) ;; *)
+        call SimulateKey "Control+Control_R" true >/dev/null 2>&1 || true
+        sleep 0.3
+        call SimulateKey "Control+Control_R" false >/dev/null 2>&1 || true
+        sleep 2;; esac
+else
+    record r20-sherpa-zipformer pass "（跳过：zipformer 模型未挂载）"
+fi
+
 # R18 字体跟随（W4：classicui Font → fontconfig → Dart 加载）
 printf 'Font="Noto Sans CJK SC 12"\n' >> /home/testuser/.config/fcitx5/conf/classicui.conf 2>/dev/null || true
 gdbus call --session --dest org.fcitx.Fcitx5 --object-path /controller \

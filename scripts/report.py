@@ -60,8 +60,9 @@ def main():
     cases = load_cases(run_dir)
     for c in cases:
         # 归档录屏：报告目录 → recordings/<env>/<case>.mp4
-        src = run_dir / c["recording"]
-        if src.exists():
+        # （空 recording 时 run_dir / "" == run_dir 本身，读目录会炸）
+        src = run_dir / c["recording"] if c.get("recording") else None
+        if src and src.is_file():
             dst = rec_dir / f"{c['id']}.mp4"
             dst.write_bytes(src.read_bytes())
             src.unlink()
