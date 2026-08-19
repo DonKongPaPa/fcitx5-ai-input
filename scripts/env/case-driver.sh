@@ -537,6 +537,62 @@ else
     record r21-sensevoice-final pass "（跳过：sensevoice/zipformer 模型未挂载）"
 fi
 
+# R22 layer-shell 顶部居中模式（chromium 系定位回退）：
+# a) 日志链：layer surface created + configured
+# b) 截图断言（vision）：卡片在屏幕顶部水平居中（r22-top-center.png）
+# c) 隐藏后无输入遮挡：卡片区域下方的 testapp 输入框可被点击夺回焦点
+if [ -n "${CAGE_SOCK:-}" ] && command -v grim >/dev/null 2>&1; then
+    gdbus call --session --dest org.fcitx.Fcitx5 --object-path /controller \
+        --method org.fcitx.Fcitx.Controller1.SetConfig \
+        "fcitx://config/addon/voiceinput" "<{'PositionMode': <'top'>}>" >/dev/null 2>&1 || true
+    sleep 0.5
+    # mark 放在 testapp 启动前：prepare（FocusIn）时就创建 layer surface
+    r22_mark=$(wc -l < "$FCITX_LOG")
+    "$DIST_BIN/$TESTAPP" >"$LOG_DIR/testapp-r22.log" 2>&1 &
+    R22_PID=$!
+    weston-flower >"$LOG_DIR/flower-r22.log" 2>&1 &
+    R22_FLOWER=$!
+    sleep 2
+    # 焦点先给 flower（视觉实测：flower 平铺在左上 ≈128,108；testapp 居右）
+    "$DIST_BIN/virtpoint" move 128 108 1280 720 2>/dev/null || true
+    "$DIST_BIN/virtpoint" click left 2>/dev/null || true
+    sleep 0.5
+    call SimulateKey "Control+Control_R" true >/dev/null 2>&1 || true
+    sleep 1.2
+    WAYLAND_DISPLAY="$CAGE_SOCK" grim "$OUT_DIR/r22-top-center.png" 2>"$LOG_DIR/grim-r22.log" || true
+    sleep 0.3
+    call SimulateKey "Control+Control_R" false >/dev/null 2>&1 || true
+    sleep 1.5
+    r22_win="$(tail -n +$((r22_mark+1)) "$FCITX_LOG")"
+    r22_layer="$(printf '%s' "$r22_win" | grep -ac 'layer surface created' || true)"
+    r22_conf="$(printf '%s' "$r22_win" | grep -ac 'layer surface configured' || true)"
+    # 穿透断言：点 testapp 输入框（视觉实测窗口居右、输入框 ≈530,80——
+    # 正是卡片出现过的区域，被遮挡则点击到不了输入框、无新 focus-in）
+    R22_TA_LOG="$LOG_DIR/testapp-r22.log"
+    R22_FOCUSED_BEFORE=$(grep -ac 'focus-in' "$R22_TA_LOG" || true)
+    "$DIST_BIN/virtpoint" move 530 80 1280 720 2>/dev/null || true
+    "$DIST_BIN/virtpoint" click left 2>/dev/null || true
+    sleep 1
+    R22_FOCUSED_AFTER=$(grep -ac 'focus-in' "$R22_TA_LOG" || true)
+    kill "$R22_PID" "$R22_FLOWER" 2>/dev/null || true
+    if [ "$r22_layer" -ge 1 ] && [ "$r22_conf" -ge 1 ] && \
+       [ "$R22_FOCUSED_AFTER" -gt "$R22_FOCUSED_BEFORE" ]; then
+        record r22-layer-top-center pass "top 模式：layer surface 就绪 + 隐藏后无输入遮挡（点击穿透，焦点 $R22_FOCUSED_BEFORE→$R22_FOCUSED_AFTER）"
+    else
+        record r22-layer-top-center fail "layer=$r22_layer conf=$r22_conf 焦点 $R22_FOCUSED_BEFORE→$R22_FOCUSED_AFTER（遮挡未清空？）"
+    fi
+    gdbus call --session --dest org.fcitx.Fcitx5 --object-path /controller \
+        --method org.fcitx.Fcitx.Controller1.SetConfig \
+        "fcitx://config/addon/voiceinput" "<{'PositionMode': <'auto'>}>" >/dev/null 2>&1 || true
+    case "$(call State 2>/dev/null || true)" in *idle*) ;; *)
+        call SimulateKey "Control+Control_R" true >/dev/null 2>&1 || true
+        sleep 0.3
+        call SimulateKey "Control+Control_R" false >/dev/null 2>&1 || true
+        sleep 2;; esac
+else
+    record r22-layer-top-center pass "（跳过：无 cage/grim 环境）"
+fi
+
 # R18 字体跟随（W4：classicui Font → fontconfig → Dart 加载）
 printf 'Font="Noto Sans CJK SC 12"\n' >> /home/testuser/.config/fcitx5/conf/classicui.conf 2>/dev/null || true
 gdbus call --session --dest org.fcitx.Fcitx5 --object-path /controller \

@@ -6,7 +6,7 @@ FROM voiceinput-host:latest
 USER root
 
 RUN pacman -Syu --noconfirm --needed \
-        niri fcitx5-configtool \
+        niri fcitx5-configtool grim \
         && pacman -Scc --noconfirm
 
 # niri 最小配置：

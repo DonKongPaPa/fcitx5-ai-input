@@ -348,6 +348,8 @@ VoiceInputEngine::VoiceInputEngine(Instance *instance)
     reloadConfig();
 
     popup_ = std::make_unique<VoicePopup>(instance_);
+    popup_->setPositionPolicy(config_.positionMode.value(),
+                              config_.positionFallbackApps.value());
     flutter_ = std::make_unique<FlutterEngineHost>(&instance_->eventLoop());
 
     // 帧：引擎软渲输出（主线程）→ popup wl_shm
@@ -487,6 +489,10 @@ AddonInstance *VoiceInputEngineFactory::create(AddonManager *manager) {
 
 void VoiceInputEngine::reloadConfig() {
     readAsIni(config_, "conf/voiceinput.config");
+    if (popup_) { // 定位策略热更新（PositionMode/PositionFallbackApps）
+        popup_->setPositionPolicy(config_.positionMode.value(),
+                                  config_.positionFallbackApps.value());
+    }
     uiNotify("config-reloaded");
 }
 
@@ -502,6 +508,10 @@ void VoiceInputEngine::setConfig(const RawConfig &config) {
         onEngineChanged(config_.asrEngine.value());
     }
     sendFontToUi(); // 字体热改（UIFont/classicui Font 变化即生效）
+    if (popup_) {
+        popup_->setPositionPolicy(config_.positionMode.value(),
+                                  config_.positionFallbackApps.value());
+    }
     uiNotify("config-saved-via-configtool");
 }
 

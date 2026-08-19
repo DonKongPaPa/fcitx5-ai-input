@@ -72,6 +72,21 @@ FCITX_CONFIGURATION(
         "悬浮卡片字体（Pango 格式如 \"MiSans VF 13\"；留空 = 跟随 classicui 的字体设置）",
         ""};
 
+    // —— 卡片定位 ——
+    // chromium 系应用的 wayland text-input 不上报光标矩形，合成器会把
+    // input popup 放到窗口左上角。auto：对 PositionFallbackApps 匹配的
+    // 应用改用 layer-shell 顶部居中（dictation 风格）；caret：始终跟随
+    // 光标（旧行为）；top：全部顶部居中
+    Option<std::string> positionMode{
+        this, "PositionMode",
+        "卡片定位模式（auto=chromium 系应用顶部居中其余跟随光标 / caret=全部跟随光标 / top=全部顶部居中）",
+        "auto"};
+    Option<std::string> positionFallbackApps{
+        this, "PositionFallbackApps",
+        "auto 模式下改用顶部居中的应用列表（逗号分隔，匹配程序名/app-id 子串）",
+        "chromium,chrome,brave,msedge,vivaldi,opera,electron,vscode,code,"
+        "slack,discord,teams,qq,telegram"};
+
     Option<AsrEngineKind, NoConstrain<AsrEngineKind>, DefaultMarshaller<AsrEngineKind>, AsrEngineKindI18NAnnotation> asrEngine{
         this, "AsrEngine", "ASR 引擎（Dummy=调试模拟，FunASR=流式识别，"
                            "FunASRLocal=本地轻量档 zh/en/ja 非流式）",

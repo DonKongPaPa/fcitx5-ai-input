@@ -71,7 +71,7 @@ add_custom_command(
 target_sources(voiceinput PRIVATE ${GEN_DIR}/imv2-protocol.c)
 
 # —— W3 fractional scale：viewporter + fractional-scale-v1（wayland-protocols 标准件）——
-foreach(proto viewporter fractional-scale-v1)
+foreach(proto viewporter fractional-scale-v1 wlr-layer-shell)
     add_custom_command(
         OUTPUT ${GEN_DIR}/${proto}-protocol.c
                ${GEN_DIR}/${proto}-client-protocol.h
@@ -83,6 +83,8 @@ foreach(proto viewporter fractional-scale-v1)
                 ${GEN_DIR}/${proto}-protocol.c
         COMMAND sed -i "s/^WL_PRIVATE //g" ${GEN_DIR}/${proto}-protocol.c
         COMMAND sed -i "s/^extern const struct wl_interface/extern __attribute__((visibility(\"default\"))) const struct wl_interface/" ${GEN_DIR}/${proto}-protocol.c
+        # wlr-layer-shell 的 get_layer_surface 参数名 namespace 撞 C++ 关键字
+        COMMAND sed -i "s/\\bnamespace\\b/namespace_/g" ${GEN_DIR}/${proto}-client-protocol.h
         DEPENDS ${CMAKE_CURRENT_SOURCE_DIR}/../protocol/${proto}.xml
         VERBATIM)
     target_sources(voiceinput PRIVATE ${GEN_DIR}/${proto}-protocol.c)

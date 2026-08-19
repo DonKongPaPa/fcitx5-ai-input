@@ -8,6 +8,8 @@
 #include <functional>
 #include <memory>
 #include <mutex>
+#include <string>
+#include <vector>
 
 struct wl_display;
 struct wl_registry;
@@ -25,6 +27,8 @@ struct wp_fractional_scale_manager_v1;
 struct wp_fractional_scale_v1;
 struct zwp_input_method_v2;
 struct zwp_input_popup_surface_v2;
+struct zwlr_layer_shell_v1;
+struct zwlr_layer_surface_v1;
 
 namespace fcitx {
 class InputContext;
@@ -81,6 +85,11 @@ public:
     void resizeLocked(int w, int h); // 已持锁版本（wayland 回调用）
     void setPatternMode(bool p) { patternMode_ = p; } // 引擎不可用时回退色块
 
+    // —— 卡片定位模式（chromium 系不报光标矩形 → input popup 被合成器
+    // 放到窗口左上角；此类应用改用 layer-shell 顶部居中自定位）——
+    void setPositionPolicy(const std::string &mode,
+                           const std::string &fallbackAppsCsv);
+
     // W3 fractional scale：逻辑/物理尺寸分离。Dart（或调用方）上报**逻辑**
     // 尺寸；池按 物理=ceil(逻辑×scale/120) 建，viewport 缩回逻辑显示。
     // scale 经 preferred_scale 事件异步到达后自动重算并回调（metrics 需更新）
@@ -132,6 +141,8 @@ public:
                               uint32_t time, uint32_t button, uint32_t state);
     static void preferredScale(void *data, wp_fractional_scale_v1 *fs,
                                uint32_t scale);
+    static void layerConfigure(void *data, zwlr_layer_surface_v1 *ls,
+                               uint32_t serial, uint32_t w, uint32_t h);
 
 private:
     void onConnectionCreated(const std::string &name, wl_display *display);
@@ -139,6 +150,8 @@ private:
     bool ensurePopup(InputContext *ic); // IC 变化时重建 surface+popup
     void destroyPopupSurface();
     void teardown();
+    bool wantTopMode(InputContext *ic); // 定位模式决策（policy × 应用名单）
+    std::string toLower(std::string s);
 
     Instance *instance_;
     std::mutex mutex_;
@@ -165,7 +178,16 @@ private:
     zwp_input_method_v2 *im_ = nullptr; // 借用：waylandim 所有
     zwp_input_popup_surface_v2 *popup_ = nullptr;
     wl_surface *surface_ = nullptr;
+
+    // layer-shell 顶部居中回退（chromium 系）
+    zwlr_layer_shell_v1 *layerShell_ = nullptr;
+    zwlr_layer_surface_v1 *layerSurface_ = nullptr;
+    bool layerConfigured_ = false; // 首个 configure 到达前不得 commit buffer
+    bool topMode_ = false;         // 当前 surface 用的是 layer 角色
+    std::string positionMode_ = "auto";
+    std::vector<std::string> fallbackApps_;
     void *surfaceCompat_ = nullptr; // WlSurface wrapper 布局占位（见 cpp）
+    wl_region *emptyRegion_ = nullptr; // 隐藏/透明态的空输入区域
     TrackableObjectReference<InputContext> icRef_; // popup 所属 IC
 
     // 指针路由状态

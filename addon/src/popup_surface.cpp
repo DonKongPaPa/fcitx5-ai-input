@@ -1,6 +1,13 @@
 #define _GNU_SOURCE 1
 #include "popup_surface.h"
 
+#include "wlr-layer-shell-client-protocol.h"
+
+// wlr-layer-shell 的 get_popup 请求参数引用 xdg_popup_interface，生成的
+// private-code 会 extern 它；本模块从不调用 get_popup（layer 卡片无子
+// popup），零定义仅为满足链接
+extern "C" const wl_interface xdg_popup_interface = {};
+
 #include "fcitx-wayland/zwp_input_method_v2.h"
 
 #include <fcitx-utils/log.h>
@@ -10,7 +17,9 @@
 
 #include <fcntl.h>
 
+#include <cctype>
 #include <cstring>
+#include <sstream>
 #include <sys/mman.h>
 #include <unistd.h>
 
@@ -49,6 +58,24 @@ static const wl_seat_listener kSeatListener = {
 static const wp_fractional_scale_v1_listener kFscaleListener = {
     /* .preferred_scale = */ &VoicePopup::preferredScale,
 };
+
+static const zwlr_layer_surface_v1_listener kLayerListener = {
+    /* .configure = */ &VoicePopup::layerConfigure,
+    /* .closed = */
+    [](void *, zwlr_layer_surface_v1 *) {},
+};
+
+// layer-shell 首个 configure 到达：ack 后才允许提交 buffer（协议要求）
+void VoicePopup::layerConfigure(void *data, zwlr_layer_surface_v1 *ls,
+                                uint32_t serial, uint32_t, uint32_t) {
+    auto *s = static_cast<VoicePopup *>(data);
+    std::lock_guard<std::mutex> lock(s->mutex_);
+    zwlr_layer_surface_v1_ack_configure(ls, serial);
+    if (!s->layerConfigured_) {
+        s->layerConfigured_ = true;
+        FCITX_INFO() << "VoicePopup: layer surface configured（顶部居中就绪）";
+    }
+}
 
 static const wl_pointer_listener kPointerListener = {
     /* .enter = */ &VoicePopup::pointerEnter,
@@ -219,6 +246,10 @@ VoicePopup::VoicePopup(Instance *instance) : instance_(instance) {
                 fscale_ = nullptr;
                 popup_ = nullptr;
                 im_ = nullptr;
+                layerSurface_ = nullptr;
+                layerShell_ = nullptr;
+                layerConfigured_ = false;
+                emptyRegion_ = nullptr;
                 pool_ = nullptr;
                 for (auto &b : buffers_) {
                     b = nullptr;
@@ -299,6 +330,13 @@ void VoicePopup::registryGlobalImpl(void *data, wl_registry *reg, uint32_t name,
         self->fsManager_ =
             static_cast<wp_fractional_scale_manager_v1 *>(wl_registry_bind(
                 reg, name, &wp_fractional_scale_manager_v1_interface, 1));
+    } else if (strcmp(iface, "zwlr_layer_shell_v1") == 0 &&
+               !self->layerShell_) {
+        // chromium 系定位回退用；version ≤3（4 的 bottom/surface 扩展非必需）
+        uint32_t lv = version < 3 ? version : 3;
+        self->layerShell_ = static_cast<zwlr_layer_shell_v1 *>(
+            wl_registry_bind(reg, name, &zwlr_layer_shell_v1_interface, lv));
+        FCITX_INFO() << "VoicePopup: zwlr_layer_shell_v1 bound v" << lv;
     } else if (strcmp(iface, "zwp_input_method_manager_v2") == 0) {
         // 仅作为"这是 waylandim 的 IM 连接"的判据；不绑定第二个 IM
         // （协议规定一个 seat 只允许一个 input method，waylandim 已 bind）
@@ -337,31 +375,97 @@ void VoicePopup::registryGlobalRemoveImpl(void *data, wl_registry *, uint32_t) {
     (void)data;
 }
 
+std::string VoicePopup::toLower(std::string s) {
+    for (auto &c : s) {
+        c = static_cast<char>(::tolower(static_cast<unsigned char>(c)));
+    }
+    return s;
+}
+
+void VoicePopup::setPositionPolicy(const std::string &mode,
+                                   const std::string &fallbackAppsCsv) {
+    std::lock_guard<std::mutex> lock(mutex_);
+    positionMode_ = mode.empty() ? "auto" : mode;
+    fallbackApps_.clear();
+    std::string cur;
+    std::stringstream ss(toLower(fallbackAppsCsv));
+    while (std::getline(ss, cur, ',')) {
+        // 去首尾空白
+        while (!cur.empty() && (cur.front() == ' ' || cur.front() == '\t')) {
+            cur.erase(cur.begin());
+        }
+        while (!cur.empty() && (cur.back() == ' ' || cur.back() == '\t')) {
+            cur.pop_back();
+        }
+        if (!cur.empty()) {
+            fallbackApps_.push_back(cur);
+        }
+    }
+}
+
+// 定位模式决策：policy × 应用名单。chromium 系的 wayland text-input
+// 不上报光标矩形 → 合成器把 input popup 放到窗口左上角（用户实测）；
+// 此类应用改用 layer-shell 顶部居中（layer 角色的合成器定位在我们手里）
+bool VoicePopup::wantTopMode(InputContext *ic) {
+    if (positionMode_ == "top") {
+        return true;
+    }
+    if (positionMode_ != "auto") {
+        return false; // caret
+    }
+    const std::string prog = toLower(ic->program());
+    if (prog.empty()) {
+        return false;
+    }
+    for (const auto &frag : fallbackApps_) {
+        if (prog.find(frag) != std::string::npos) {
+            FCITX_INFO() << "VoicePopup: 应用「" << prog
+                         << "」命中定位回退名单（" << frag
+                         << "）→ 顶部居中";
+            return true;
+        }
+    }
+    return false;
+}
+
 bool VoicePopup::ensurePopup(InputContext *ic) {
     if (!pool_ || !compositor_) {
         return false;
     }
-    if (popup_ && surface_ && icRef_.get() == ic) {
-        return true; // 同一 IC 复用
+    const bool top = wantTopMode(ic);
+    if (surface_ && icRef_.get() == ic && topMode_ == top) {
+        return true; // 同一 IC 且同一模式：复用
     }
     destroyPopupSurface();
+    topMode_ = top;
 
-    auto *waylandim = instance_->addonManager().addon("waylandim", true);
-    if (!waylandim) {
-        FCITX_WARN() << "VoicePopup: waylandim addon unavailable";
-        return false;
-    }
-    auto *imWrapper =
-        waylandim->call<IWaylandIMModule::getInputMethodV2>(ic);
-    im_ = wayland::rawPointer(imWrapper); // 借用，归 waylandim 所有
-    if (!im_) {
-        // frontendName() 是 5.1 API（bookworm 5.0.21 没有）：对非 wayland_v2
-        // 前端的 IC，getInputMethodV2 本身就返回 null，无需前端名判断
-        FCITX_INFO() << "VoicePopup: IC 无 waylandim IM proxy（非 wayland_v2 前端？）";
-        return false;
+    if (!top) {
+        auto *waylandim = instance_->addonManager().addon("waylandim", true);
+        if (!waylandim) {
+            FCITX_WARN() << "VoicePopup: waylandim addon unavailable";
+            return false;
+        }
+        auto *imWrapper =
+            waylandim->call<IWaylandIMModule::getInputMethodV2>(ic);
+        im_ = wayland::rawPointer(imWrapper); // 借用，归 waylandim 所有
+        if (!im_) {
+            // frontendName() 是 5.1 API（bookworm 5.0.21 没有）：对非 wayland_v2
+            // 前端的 IC，getInputMethodV2 本身就返回 null，无需前端名判断
+            FCITX_INFO() << "VoicePopup: IC 无 waylandim IM proxy（非 wayland_v2 前端？）";
+            return false;
+        }
     }
 
     surface_ = wl_compositor_create_surface(compositor_);
+    // 透明/隐藏态的空输入区域：layer surface 的输入区与像素透明度无关，
+    // 不显式清空会把"出现过的区域"变成不可见遮挡（用户实测挡住下方
+    // 按钮）；可见时再恢复全量输入区（nullptr = 默认全量）
+    if (!emptyRegion_ && compositor_) {
+        emptyRegion_ = wl_compositor_create_region(compositor_);
+    }
+    if (emptyRegion_) {
+        wl_surface_set_input_region(surface_, emptyRegion_);
+    }
     // fcitx wayland C++ wrapper 兼容层（宿主机崩溃修复）：classicui 等
     // 组件的 wl_pointer enter thunk 会把 wl_surface 的 user_data 直接
     // reinterpret 成 fcitx::wayland::WlSurface* 再读 userData_（+0x48）。
@@ -381,15 +485,50 @@ bool VoicePopup::ensurePopup(InputContext *ic) {
             fsManager_, surface_);
         wp_fractional_scale_v1_add_listener(fscale_, &kFscaleListener, this);
     }
-    popup_ = zwp_input_method_v2_get_input_popup_surface(im_, surface_);
-    zwp_input_popup_surface_v2_add_listener(popup_, &kPopupListener, this);
-    icRef_ = ic->watch();
-    FCITX_INFO() << "VoicePopup: popup surface attached to waylandim IM";
+    if (topMode_) {
+        // layer-shell 顶部居中：不依赖应用上报光标矩形，合成器按我们
+        // 的 anchor/margin/size 摆放。configure 到达前不提交 buffer
+        if (!layerShell_) {
+            FCITX_WARN() << "VoicePopup: 合成器无 zwlr_layer_shell_v1，"
+                            "回退光标跟随";
+            topMode_ = false;
+            return ensurePopup(ic);
+        }
+        layerConfigured_ = false;
+        layerSurface_ = zwlr_layer_shell_v1_get_layer_surface(
+            layerShell_, surface_, nullptr, ZWLR_LAYER_SHELL_V1_LAYER_TOP,
+            "input-method");
+        zwlr_layer_surface_v1_add_listener(layerSurface_, &kLayerListener,
+                                           this);
+        zwlr_layer_surface_v1_set_anchor(
+            layerSurface_, ZWLR_LAYER_SURFACE_V1_ANCHOR_TOP);
+        zwlr_layer_surface_v1_set_exclusive_zone(layerSurface_, -1);
+        zwlr_layer_surface_v1_set_margin(layerSurface_, 16, 0, 0, 0);
+        zwlr_layer_surface_v1_set_keyboard_interactivity(
+            layerSurface_,
+            ZWLR_LAYER_SURFACE_V1_KEYBOARD_INTERACTIVITY_NONE);
+        zwlr_layer_surface_v1_set_size(
+            layerSurface_, logicalW_ > 0 ? logicalW_ : width_,
+            logicalH_ > 0 ? logicalH_ : height_);
+        wl_surface_commit(surface_); // 空 commit：请求首个 configure
+        icRef_ = ic->watch();
+        FCITX_INFO() << "VoicePopup: layer surface created（顶部居中模式）";
+    } else {
+        popup_ = zwp_input_method_v2_get_input_popup_surface(im_, surface_);
+        zwp_input_popup_surface_v2_add_listener(popup_, &kPopupListener, this);
+        icRef_ = ic->watch();
+        FCITX_INFO() << "VoicePopup: popup surface attached to waylandim IM";
+    }
     wl_display_flush(display_);
     return true;
 }
 
 void VoicePopup::destroyPopupSurface() {
+    if (layerSurface_) {
+        zwlr_layer_surface_v1_destroy(layerSurface_);
+        layerSurface_ = nullptr;
+        layerConfigured_ = false;
+    }
     if (popup_) {
         zwp_input_popup_surface_v2_destroy(popup_);
         popup_ = nullptr;
@@ -444,10 +583,20 @@ static void paintTestPattern(uint8_t *argb, int w, int h) {
 
 void VoicePopup::prepare(InputContext *ic) {
     std::lock_guard<std::mutex> lock(mutex_);
+    // 光标矩形诊断：fcitx 核心从前端（wayland text-input / XIM spot）汇总
+    const auto &cr = ic->cursorRect();
+    FCITX_INFO() << "VoicePopup: ic cursorRect " << cr.left() << ","
+                 << cr.top() << " " << cr.width() << "x" << cr.height()
+                 << "（前端=" << ic->frontendName() << "）";
     if (!ensurePopup(ic)) {
         return;
     }
-    // 全透明首帧：触发 map 流水线（内容仍不可见）
+    // 全透明首帧：触发 map 流水线（内容仍不可见）。
+    // layer 模式首个 configure 未到前不提交 buffer（协议要求）
+    if (topMode_ && !layerConfigured_) {
+        wl_display_flush(display_);
+        return;
+    }
     size_t bufSize = static_cast<size_t>(width_) * height_ * 4;
     uint8_t *dst = pixels_ + cur_ * bufSize;
     memset(dst, 0, bufSize);
@@ -460,11 +609,17 @@ void VoicePopup::prepare(InputContext *ic) {
 
 void VoicePopup::show(InputContext *ic) {
     std::lock_guard<std::mutex> lock(mutex_);
+    // show 时刻的光标矩形（判别 chromium：应用从未上报 → 合成器把
+    // input popup 放在窗口左上角；GTK 此时已由 waylandim 填好）
+    const auto &scr = ic->cursorRect();
+    FCITX_INFO() << "VoicePopup: show 时 ic cursorRect " << scr.left()
+                 << "," << scr.top() << " " << scr.width() << "x"
+                 << scr.height() << " hasCursorRect_=" << hasCursorRect_;
     if (!ensurePopup(ic)) {
         FCITX_WARN() << "VoicePopup::show but popup not ready";
         return;
     }
-    if (patternMode_) {
+    if (patternMode_ && (!topMode_ || layerConfigured_)) {
         size_t bufSize = width_ * height_ * 4;
         uint8_t *dst = pixels_ + cur_ * bufSize;
         paintTestPattern(dst, width_, height_);
@@ -482,9 +637,12 @@ void VoicePopup::hide() {
     std::lock_guard<std::mutex> lock(mutex_);
     // 不销毁 surface：销毁不产生 damage，niri 会残留旧画面数秒；
     // 提交全透明帧用自己的 damage 立即清掉内容，popup 保留复用（已预热）
-    if (surface_ && buffers_[0]) {
+    if (surface_ && buffers_[0] && (!topMode_ || layerConfigured_)) {
         size_t bufSize = static_cast<size_t>(width_) * height_ * 4;
         memset(pixels_ + cur_ * bufSize, 0, bufSize);
+        if (emptyRegion_) { // 隐藏即退出命中测试：不留不可见遮挡
+            wl_surface_set_input_region(surface_, emptyRegion_);
+        }
         wl_surface_attach(surface_, buffers_[cur_], 0, 0);
         damageSurface(surface_, compositorVersion_, width_, height_);
         wl_surface_commit(surface_);
@@ -534,6 +692,13 @@ void VoicePopup::resizeLocked(int w, int h) {
             pool_, i * bufSize, w, h, stride, WL_SHM_FORMAT_ARGB8888);
     }
     cur_ = 0;
+    if (topMode_ && layerSurface_) {
+        // 物理池是逻辑×scale；layer surface 用逻辑尺寸
+        double sc = scale();
+        zwlr_layer_surface_v1_set_size(
+            layerSurface_, static_cast<int32_t>(w / sc + 0.5),
+            static_cast<int32_t>(h / sc + 0.5));
+    }
     FCITX_INFO() << "VoicePopup: shm pool resized to " << w << "x" << h;
 }
 
@@ -563,12 +728,19 @@ void VoicePopup::pushFrameBGRA(const uint8_t *bgra, int w, int h) {
     }
     std::lock_guard<std::mutex> lock(mutex_);
     // 隐藏后丢弃迟到帧（hide 已提交透明帧，idle 态的帧会把它覆盖回来）
-    if (!visible_ || !surface_ || !buffers_[0] || !popup_) {
+    if (!visible_ || !surface_ || !buffers_[0] ||
+        (topMode_ ? !layerSurface_ : !popup_)) {
         return;
+    }
+    if (topMode_ && !layerConfigured_) {
+        return; // 首个 configure 未到，提交 buffer 是协议错误；丢帧等下一张
     }
     size_t bufSize = static_cast<size_t>(width_) * height_ * 4;
     // 引擎软渲输出即 wl_shm ARGB8888 小端字节序（BGRA），直接 memcpy
     memcpy(pixels_ + cur_ * bufSize, bgra, bufSize);
+    if (!visible_) { // 透明/隐藏 → 可见：恢复输入区（卡片可点选）
+        wl_surface_set_input_region(surface_, nullptr);
+    }
     wl_surface_attach(surface_, buffers_[cur_], 0, 0);
     damageSurface(surface_, compositorVersion_, width_, height_);
     wl_surface_commit(surface_);
