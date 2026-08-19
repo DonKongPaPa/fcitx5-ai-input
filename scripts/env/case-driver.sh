@@ -242,6 +242,24 @@ case "$(call State 2>/dev/null || true)" in *idle*) ;; *)
     call SimulateKey Control_R false >/dev/null 2>&1 || true;; esac
 kill "$R6_PID" 2>/dev/null || true
 
+# R8 真实键盘键形：纯修饰键事件自带自身修饰 state（xkb 语义），
+# 模拟 compositor→fcitx 的真实 Control_R（SimulateKey 裸键测不到这层）
+rm -f "$TEST_RESULT_FILE"
+"$DIST_BIN/$TESTAPP" >"$LOG_DIR/testapp-r8.log" 2>&1 &
+R8_PID=$!
+sleep 2
+call SimulateKey "Control+Control_R" true >/dev/null 2>&1 || true; sleep 1.2
+r8_state="$(call State 2>/dev/null || true)"
+call SimulateKey "Control+Control_R" false >/dev/null 2>&1 || true
+sleep 1
+case "$(call State 2>/dev/null || true)" in *idle*) r8_end=ok;; *) r8_end="end=$(call State 2>/dev/null || true)";; esac
+if case "$r8_state" in *recording*) true;; *) false;; esac; then
+    record r8-real-key-form pass "带修饰 state 的真实键形触发录音（$r8_end）"
+else
+    record r8-real-key-form fail "state=$r8_state（触发键匹配未兼容真实键形）"
+fi
+kill "$R8_PID" 2>/dev/null || true
+
 # R7 渲染帧到达 popup（引擎软渲 → wl_shm）
 if grep -aq "FlutterEngine: frame #1" "$FCITX_LOG" && \
    grep -aq "VoicePopup: shm pool" "$FCITX_LOG"; then

@@ -299,9 +299,20 @@ void VoiceInputEngine::onFlutterMessage(const std::string &method,
 // ---------------------------------------------------------------------------
 
 bool VoiceInputEngine::isTriggerKey(const Key &key) const {
-    for (const auto &k : config_.triggerKeys.value()) {
-        if (k.check(key)) {
-            return true;
+    const auto &list = config_.triggerKeys.value();
+    // 标准匹配（非修饰键路径）
+    if (key.keyListIndex(list) >= 0) {
+        return true;
+    }
+    // 纯修饰键特例：真实键盘事件自带自身修饰 state 且带 keycode
+    //（Key::check 的 keycode 分支要求全等，裸 Key("Control_R") 永远不匹配
+    //——宿主机实测按住 10s 无反应的根因；容器测试用 SimulateKey 构造的
+    //干净键从未暴露）。fcitx 惯例配置写 Control+Control_R，但裸写也要认
+    if (key.isModifier()) {
+        for (const auto &k : list) {
+            if (k.sym() == key.sym()) {
+                return true;
+            }
         }
     }
     return false;
