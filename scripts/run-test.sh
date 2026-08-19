@@ -16,6 +16,12 @@ if [ ! -d "$ROOT/artifacts/dist/lib/fcitx5" ]; then
     exit 1
 fi
 
+# sherpa 模型挂载（存在才挂；r15 用例无模型时自动跳过）
+MODEL_ARGS=()
+if [ -d "$HOME/.local/share/fcitx5-voiceinput/models/sherpa-paraformer" ]; then
+    MODEL_ARGS=(-v "$HOME/.local/share/fcitx5-voiceinput/models:/models:ro")
+fi
+
 DEV_ARGS=()
 for d in /dev/dri/renderD*; do
     if [ -e "$d" ]; then
@@ -31,12 +37,14 @@ podman run --rm \
     -v "$ROOT/scripts:/scripts:ro" \
     -v "$ROOT/artifacts/dist:/opt/dist:ro" \
     -v "$ROOT/tests:/tests:ro" \
+    "${MODEL_ARGS[@]}" \
     -v "$OUT:/out" \
     -e ENV_NAME="$ENV_NAME" \
     -e MODE=case \
     -e LOG_DIR=/out/logs \
     -e OUT_DIR=/out \
     -e CASES_DIR=/tests/cases \
+    -e VOICEINPUT_SHERPA_MODEL_DIR=/models/sherpa-paraformer \
     "$IMAGE" \
     bash -c '
         set -e

@@ -2,6 +2,7 @@
 #include "flutter_engine.h"
 #include "popup_surface.h"
 #include "funasr_local_engine.h"
+#include "sherpa_engine.h"
 #include "funasr_ws_engine.h"
 
 #include <fcitx-config/iniparser.h>
@@ -466,6 +467,8 @@ static std::unique_ptr<AsrEngine> makeAsrEngine(const VoiceInputConfig &cfg) {
         return std::make_unique<FunAsrWsEngine>();
     case AsrEngineKind::FunASRLocal:
         return std::make_unique<FunAsrLocalEngine>();
+    case AsrEngineKind::Sherpa:
+        return std::make_unique<SherpaOnnxEngine>();
     case AsrEngineKind::Dummy:
     default:
         return std::make_unique<DummyAsrEngine>();
@@ -679,6 +682,10 @@ std::string TestService::InjectKey(std::string key, bool pressed) {
 }
 
 std::string TestService::State() { return engine_->stateName(); }
+
+// 编译期版本回读：容器/宿主断言加载的二进制与包一致（防"陈旧 dist/
+// ~/.local 不生效"类问题——宿主机实测踩过）
+std::string TestService::Version() { return VOICEINPUT_VERSION_STRING; }
 
 std::vector<std::string> TestService::Candidates() {
     return engine_->candidates();

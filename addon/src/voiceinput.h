@@ -38,6 +38,7 @@ public:
     std::string SimulateKey(std::string key, bool pressed);
     std::string InjectKey(std::string key, bool pressed);
     std::string State();
+    std::string Version();
     std::vector<std::string> Candidates();
 
     static const char *interface() { return "org.fcitx.VoiceInput.Test"; }
@@ -48,6 +49,7 @@ private:
     FCITX_OBJECT_VTABLE_METHOD(SimulateKey, "SimulateKey", "sb", "s");
     FCITX_OBJECT_VTABLE_METHOD(InjectKey, "InjectKey", "sb", "s");
     FCITX_OBJECT_VTABLE_METHOD(State, "State", "", "s");
+    FCITX_OBJECT_VTABLE_METHOD(Version, "Version", "", "s");
     FCITX_OBJECT_VTABLE_METHOD(Candidates, "Candidates", "", "as");
 };
 

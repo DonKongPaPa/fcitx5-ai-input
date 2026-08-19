@@ -18,9 +18,9 @@ FCITX_CONFIG_ENUM_I18N_ANNOTATION(TriggerMode, "HoldRelease", "Toggle");
 //           FunASR=流式 WS 档（宿主 funasr-serve，MLT 31 语种，GPU/CPU）；
 //           FunASRLocal=GGUF 本地档（llama-funasr-cli 子进程，zh/en/ja，
 //           非流式，CPU ~1.5GB 内存）
-FCITX_CONFIG_ENUM(AsrEngineKind, Dummy, FunASR, FunASRLocal);
+FCITX_CONFIG_ENUM(AsrEngineKind, Dummy, FunASR, FunASRLocal, Sherpa);
 FCITX_CONFIG_ENUM_I18N_ANNOTATION(AsrEngineKind, "Dummy", "FunASR",
-                                  "FunASRLocal");
+                                  "FunASRLocal", "Sherpa");
 
 // 模型部署设备档（自动拉起服务时的参数）
 FCITX_CONFIG_ENUM(FunASRDeviceKind, Auto, Gpu, Cpu);
@@ -48,6 +48,16 @@ FCITX_CONFIGURATION(
         300};
 
     // —— 组2 语音引擎 ——
+    // —— Sherpa CPU 流式引擎（实验 004：RSS 412MB/首字 0.07s/0 显存）——
+    Option<std::string> sherpaModelDir{
+        this, "SherpaModelDir",
+        "Sherpa 模型目录（含 encoder.int8.onnx/decoder.int8.onnx/tokens.txt；"
+        "留空 = ~/.local/share/fcitx5-voiceinput/models/sherpa-paraformer，"
+        "下载见 scripts/fetch-sherpa-models.sh）",
+        ""};
+    Option<int> sherpaNumThreads{
+        this, "SherpaNumThreads", "Sherpa 解码线程数", 4};
+
     Option<AsrEngineKind, NoConstrain<AsrEngineKind>, DefaultMarshaller<AsrEngineKind>, AsrEngineKindI18NAnnotation> asrEngine{
         this, "AsrEngine", "ASR 引擎（Dummy=调试模拟，FunASR=流式识别，"
                            "FunASRLocal=本地轻量档 zh/en/ja 非流式）",

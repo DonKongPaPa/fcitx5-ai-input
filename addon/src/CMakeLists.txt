@@ -5,6 +5,7 @@ target_sources(voiceinput PRIVATE
     flutter_engine.cpp
     funasr_ws_engine.cpp
     funasr_local_engine.cpp
+    sherpa_engine.cpp
 )
 target_link_libraries(voiceinput PRIVATE Fcitx5::Core)
 find_package(Fcitx5ModuleDBus CONFIG REQUIRED)
@@ -26,8 +27,23 @@ if(NOT EXISTS "${FLUTTER_ENGINE_LIBRARY}")
         "libflutter_engine.so 未找到：${FLUTTER_ENGINE_LIBRARY}\n"
         "先运行 scripts/fetch-flutter-embedder.sh，或传 -DFLUTTER_ENGINE_LIBRARY=/path/to/libflutter_engine.so")
 endif()
+target_compile_definitions(voiceinput PRIVATE
+    VOICEINPUT_VERSION_STRING="${PROJECT_VERSION}")
 target_include_directories(voiceinput PRIVATE "${CMAKE_CURRENT_SOURCE_DIR}/../third_party")
 target_link_libraries(voiceinput PRIVATE "${FLUTTER_ENGINE_LIBRARY}")
+
+# —— sherpa-onnx 运行时（CPU 流式第四引擎）——
+# libsherpa-onnx-c-api.so（自带 RPATH $ORIGIN，libonnxruntime.so 同目录解析）
+set(SHERPA_ONNX_LIBRARY "" CACHE PATH "libsherpa-onnx-c-api.so 路径")
+if(NOT SHERPA_ONNX_LIBRARY)
+    set(SHERPA_ONNX_LIBRARY "${CMAKE_CURRENT_SOURCE_DIR}/../../.cache/sherpa-onnx/libsherpa-onnx-c-api.so")
+endif()
+if(NOT EXISTS "${SHERPA_ONNX_LIBRARY}")
+    message(FATAL_ERROR
+        "libsherpa-onnx-c-api.so 未找到：${SHERPA_ONNX_LIBRARY}\n"
+        "先运行 scripts/fetch-sherpa-runtime.sh，或传 -DSHERPA_ONNX_LIBRARY=...")
+endif()
+target_link_libraries(voiceinput PRIVATE "${SHERPA_ONNX_LIBRARY}")
 target_link_libraries(voiceinput PRIVATE pthread)
 
 # input-method-v2 协议（wlroots/fcitx5 扩展，不在 wayland-protocols 包内）
@@ -56,6 +72,10 @@ set_target_properties(voiceinput PROPERTIES PREFIX "")
 # $ORIGIN 相对定位（无需 LD_LIBRARY_PATH）。路径必须前缀相对——dist 暂存
 # 打包依赖 CMAKE_INSTALL_PREFIX
 install(FILES "${FLUTTER_ENGINE_LIBRARY}"
+        DESTINATION "${CMAKE_INSTALL_LIBDIR}/fcitx5-voiceinput")
+get_filename_component(SHERPA_RT_DIR "${SHERPA_ONNX_LIBRARY}" DIRECTORY)
+install(FILES "${SHERPA_RT_DIR}/libsherpa-onnx-c-api.so"
+              "${SHERPA_RT_DIR}/libonnxruntime.so"
         DESTINATION "${CMAKE_INSTALL_LIBDIR}/fcitx5-voiceinput")
 get_filename_component(FLUTTER_ENGINE_DIR "${FLUTTER_ENGINE_LIBRARY}" DIRECTORY)
 set_target_properties(voiceinput PROPERTIES

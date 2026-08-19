@@ -26,6 +26,8 @@ cp -a %{_stage_src}/usr %{buildroot}/
 %files
 %{_libdir}/fcitx5/voiceinput.so
 %{_libdir}/fcitx5-voiceinput/libflutter_engine.so
+%{_libdir}/fcitx5-voiceinput/libsherpa-onnx-c-api.so
+%{_libdir}/fcitx5-voiceinput/libonnxruntime.so
 %{_libdir}/fcitx5-voiceinput/funasr-server/server.py
 %{_libdir}/fcitx5-voiceinput/funasr-server/funasr-serve.sh
 /usr/share/fcitx5/addon/voiceinput.conf
