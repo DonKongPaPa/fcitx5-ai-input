@@ -11,6 +11,7 @@
 #include <fcitx/addoninstance.h>
 #include <fcitx/event.h>
 #include <fcitx/instance.h>
+#include <fcitx-utils/trackableobject.h>
 
 #include <memory>
 
@@ -138,7 +139,10 @@ private:
     std::unique_ptr<EventSourceTime> dbusRetry_;   // dbus 模块未就绪时补注册
 
     State state_ = State::Idle;
-    InputContext *sessionIc_ = nullptr;
+    // 会话 IC 用 watch() 跟踪：裸指针会在 hold 的 300ms 窗口内因焦点
+    // 切换/IC 销毁变成悬垂指针（宿主机实测 beginRecording→getInputMethodV2
+    // →frontendName SEGV）
+    TrackableObjectReference<InputContext> sessionIcRef_;
     bool toggleReleased_ = false; // Toggle 模式：起始按的键已松开
     std::unique_ptr<EventSourceTime> thresholdTimer_;
     std::unique_ptr<EventSourceTime> resultTimer_;

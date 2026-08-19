@@ -91,8 +91,8 @@ VoiceInputEngine::VoiceInputEngine(Instance *instance)
             if (!ic) {
                 return;
             }
-            // 活动会话只认 sessionIc_；其他窗口的按键不掺和
-            if (state_ != State::Idle && ic != sessionIc_) {
+            // 活动会话只认会话 IC；其他窗口的按键不掺和
+            if (state_ != State::Idle && ic != sessionIcRef_.get()) {
                 return;
             }
             const bool trig = isTriggerKey(keyEvent.key());
@@ -283,7 +283,8 @@ void VoiceInputEngine::onFlutterMessage(const std::string &method,
         int idx = numOf(args, "index");
         if (state_ == State::Candidates && idx >= 0) {
             uiNotify("mouse-click-row", std::to_string(idx));
-            commitCandidate(static_cast<size_t>(idx), sessionIc_);
+            commitCandidate(static_cast<size_t>(idx),
+                            sessionIcRef_.get());
         }
     } else if (method == "hoverChanged") {
         uiHoverRow_ = numOf(args, "row");
@@ -351,7 +352,10 @@ bool VoiceInputEngine::handleKey(const Key &key, bool pressed,
     switch (state_) {
     case State::Idle:
         if (trigger && pressed) {
-            sessionIc_ = ic;
+            if (!ic) {
+                return false; // 无 IC（TestService 无焦点等）：不启动会话
+            }
+            sessionIcRef_ = ic->watch();
             state_ = State::Pressing;
             startThresholdTimer();
             uiNotify("pressing");
@@ -405,8 +409,8 @@ bool VoiceInputEngine::handleKey(const Key &key, bool pressed,
         if (trigger && pressed) {
             // 结果展示期间再按触发键：跳过等待立即上屏
             resultTimer_.reset();
-            if (sessionIc_) {
-                sessionIc_->commitString(finalText_);
+            if (auto *ic = sessionIcRef_.get()) {
+                ic->commitString(finalText_);
             }
             uiNotify("committed", finalText_);
             enterIdle();
@@ -431,7 +435,11 @@ void VoiceInputEngine::startThresholdTimer() {
         CLOCK_MONOTONIC, nowUs() + config_.triggerThresholdMs.value() * 1000, 0,
         [this](EventSourceTime *, uint64_t) {
             if (state_ == State::Pressing) {
-                beginRecording(sessionIc_);
+                if (auto *ic = sessionIcRef_.get()) {
+                    beginRecording(ic);
+                } else {
+                    enterIdle(); // hold 期间 IC 已销毁
+                }
             }
             return true;
         });
@@ -454,6 +462,10 @@ static std::unique_ptr<AsrEngine> makeAsrEngine(const VoiceInputConfig &cfg) {
 }
 
 void VoiceInputEngine::beginRecording(InputContext *ic) {
+    if (!ic) {
+        enterIdle();
+        return;
+    }
     state_ = State::Recording;
     toggleReleased_ = false;
     recordStartUs_ = nowUs();
@@ -529,8 +541,9 @@ void VoiceInputEngine::startResultTimer() {
     resultTimer_ = instance_->eventLoop().addTimeEvent(
         CLOCK_MONOTONIC, nowUs() + config_.popupTimeoutMs.value() * 1000, 0,
         [this](EventSourceTime *, uint64_t) {
-            if (state_ == State::Result && sessionIc_) {
-                sessionIc_->commitString(finalText_);
+            if (auto *ic = sessionIcRef_.get();
+                state_ == State::Result && ic) {
+                ic->commitString(finalText_);
                 uiNotify("committed", finalText_);
             }
             enterIdle();
@@ -548,8 +561,8 @@ void VoiceInputEngine::commitCandidate(size_t index, InputContext *ic) {
     auto text = candidates_[index];
     if (ic) {
         ic->commitString(text);
-    } else if (sessionIc_) {
-        sessionIc_->commitString(text);
+    } else if (auto *ic = sessionIcRef_.get()) {
+        ic->commitString(text);
     }
     uiNotify("committed", text);
     enterIdle();
