@@ -341,17 +341,16 @@ VoiceInputEngine::VoiceInputEngine(Instance *instance)
     flutter_->setResizeHandler([this](int w, int h) {
         if (popup_) {
             popup_->setLogicalSize(w, h);
-            flutter_->updateMetrics(w, h, popup_->scale());
-        } else {
-            flutter_->updateMetrics(w, h, 1.0);
         }
+        // metrics 更新 defer 到事件循环下一轮：resize 消息来自引擎平台
+        // 回调、scale 来自 wayland dispatch——在这些上下文里同步调
+        // SendWindowMetricsEvent 会与引擎内部锁重入死锁（宿主机实测卡死）
+        deferredMetrics(w, h);
     });
     // 合成器 scale 变化（跨屏移动/用户改缩放）→ 用当前逻辑尺寸重设 metrics
-    popup_->setScaleHandler([this](double s) {
-        if (flutter_ && flutter_->running() && popup_ &&
-            popup_->logicalWidth() > 0) {
-            flutter_->updateMetrics(popup_->logicalWidth(),
-                                    popup_->logicalHeight(), s);
+    popup_->setScaleHandler([this](double) {
+        if (popup_ && popup_->logicalWidth() > 0) {
+            deferredMetrics(popup_->logicalWidth(), popup_->logicalHeight());
         }
     });
     // Dart → C++：ready/resize 已由引擎处理，selectCandidate/hoverChanged 到这
@@ -635,6 +634,27 @@ void VoiceInputEngine::sendFontToUi() {
     if (font.length() > 4) { // 非 "{}"
         flutter_->sendUpdate("{\"state\":\"font\"," + font.substr(1));
         FCITX_INFO() << "VoiceInput: UI 字体 → " << font;
+    }
+}
+
+// metrics 更新统一 defer（防 dispatch/平台回调上下文重入引擎锁）
+void VoiceInputEngine::deferredMetrics(int w, int h) {
+    pendingMW_ = w;
+    pendingMH_ = h;
+    metricsTimer_ = instance_->eventLoop().addTimeEvent(
+        CLOCK_MONOTONIC, nowUs() + 1000, 0, [this](EventSourceTime *, uint64_t) {
+            double sc = popup_ ? popup_->scale() : 1.0;
+            if (flutter_ && flutter_->running()) {
+                // FlutterWindowMetricsEvent 的 width/height 是物理像素
+                //（引擎不乘 ratio）——传逻辑会让 Dart 布局被压成 1/sc
+                flutter_->updateMetrics(
+                    static_cast<int>(pendingMW_ * sc + 0.5),
+                    static_cast<int>(pendingMH_ * sc + 0.5), sc);
+            }
+            return false;
+        });
+    if (metricsTimer_) {
+        metricsTimer_->setOneShot();
     }
 }
 

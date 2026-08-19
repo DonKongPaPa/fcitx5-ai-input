@@ -394,6 +394,17 @@ void VoicePopup::destroyPopupSurface() {
         zwp_input_popup_surface_v2_destroy(popup_);
         popup_ = nullptr;
     }
+    // W3 对象随 surface 销毁：fractional scale 有 destroy 请求；viewport
+    // 是 surface 生命周期绑定（无 destroy，置空即可）。悬空 proxy 会在
+    // shutdown flush 时触发 SIGSEGV（宿主机实测）
+    if (fscale_) {
+        wp_fractional_scale_v1_destroy(fscale_);
+        fscale_ = nullptr;
+    }
+    if (viewport_) {
+        wp_viewport_destroy(viewport_);
+        viewport_ = nullptr;
+    }
     if (surface_) {
         wl_surface_destroy(surface_);
         surface_ = nullptr;

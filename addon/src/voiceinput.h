@@ -104,6 +104,9 @@ public:
     std::string healthCheckJson(bool deep); // TestService::HealthCheck 调
     std::string resolveUiFont();
     void sendFontToUi();
+    void deferredMetrics(int w, int h);
+    std::unique_ptr<EventSourceTime> metricsTimer_;
+    int pendingMW_ = 64, pendingMH_ = 64;
     const std::vector<std::string> &candidates() const { return candidates_; }
     void commitCandidate(size_t index, InputContext *ic);
 
