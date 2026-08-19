@@ -57,6 +57,10 @@ public:
 
     void setFrameCallback(FrameCallback cb) { frameCb_ = std::move(cb); }
     void setMessageHandler(MessageHandler h) { handler_ = std::move(h); }
+    // Dart resize 消息（逻辑尺寸）——交给使用方统筹（popup 池 + metrics scale）
+    void setResizeHandler(std::function<void(int, int)> h) {
+        resizeHandler_ = std::move(h);
+    }
 
     // C++→Dart 状态推送（argsJson 为 update 的 JSON 对象体）
     void sendUpdate(const std::string &argsJson);
@@ -127,6 +131,7 @@ private:
 
     FrameCallback frameCb_;
     MessageHandler handler_;
+    std::function<void(int, int)> resizeHandler_;
     std::atomic<bool> shuttingDown_{false};
 };
 

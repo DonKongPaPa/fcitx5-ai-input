@@ -403,6 +403,75 @@ else
     record r15-sherpa-engine pass "（跳过：模型未挂载）"
 fi
 
+# R16 尾音完整（W2 drain：松键瞬间管道尾音不再丢弃）
+if [ -d "${VOICEINPUT_SHERPA_MODEL_DIR:-/nonexistent}" ] && [ -n "${CAGE_SOCK:-}" ]; then
+    gdbus call --session --dest org.fcitx.Fcitx5 --object-path /controller \
+        --method org.fcitx.Fcitx.Controller1.SetConfig \
+        "fcitx://config/addon/voiceinput" "<{'AsrEngine': <'Sherpa'>}>" >/dev/null 2>&1 || true
+    sleep 0.5
+    "$DIST_BIN/$TESTAPP" >"$LOG_DIR/testapp-r16.log" 2>&1 &
+    R16_PID=$!
+    sleep 2
+    WAV=/samples/中文测试-16k.wav
+    [ -f "$WAV" ] || WAV=$(ls /samples/*.wav 2>/dev/null | head -1 || true)
+    call SimulateKey "Control+Control_R" true >/dev/null 2>&1 || true
+    sleep 0.6
+    [ -n "$WAV" ] && play_to_mic "$WAV" &
+    wait $! 2>/dev/null || true
+    call SimulateKey "Control+Control_R" false >/dev/null 2>&1 || true  # 喂完立刻松
+    sleep 3
+    r16_final="$(grep -a "committed" "$FCITX_LOG" | tail -1 | sed 's/.*committed: //' || true)"
+    kill "$R16_PID" 2>/dev/null || true
+    if [ "$r16_final" = "我们出去玩吧" ]; then
+        record r16-tail-audio pass "松键后 final 完整（drain 生效）：「$r16_final」"
+    else
+        record r16-tail-audio fail "final「$r16_final」过短（尾音被丢？）"
+    fi
+    gdbus call --session --dest org.fcitx.Fcitx5 --object-path /controller \
+        --method org.fcitx.Fcitx.Controller1.SetConfig \
+        "fcitx://config/addon/voiceinput" "<{'AsrEngine': <'Dummy'>}>" >/dev/null 2>&1 || true
+else
+    record r16-tail-audio pass "（跳过：无模型/音频环境）"
+fi
+
+# R18 字体跟随（W4：classicui Font → fontconfig → Dart 加载）
+printf 'Font="Noto Sans CJK SC 12"\n' >> /home/testuser/.config/fcitx5/conf/classicui.conf 2>/dev/null || true
+gdbus call --session --dest org.fcitx.Fcitx5 --object-path /controller \
+    --method org.fcitx.Fcitx.Controller1.SetConfig \
+    "fcitx://config/addon/voiceinput" "<{'StreamingEnabled': <'True'>}>" >/dev/null 2>&1 || true
+sleep 2
+if grep -aq "UI 字体 →" "$FCITX_LOG" && grep -aq "ui-font:" "$FCITX_LOG"; then
+    record r18-font-follow pass "classicui 字体已解析并加载（$(grep -a 'ui-font:' "$FCITX_LOG" | tail -1 | sed 's/.*ui-font: //')）"
+else
+    record r18-font-follow fail "字体链路未通（检查 fontconfig/消息日志）"
+fi
+
+# R19 部署健康检查（W5：HealthCheck JSON 各字段）
+hc="$(call HealthCheck "" 2>/dev/null || true)"
+if echo "$hc" | grep -q "sherpa" && echo "$hc" | grep -q "funasr" && \
+   echo "$hc" | grep -q "advice"; then
+    record r19-healthcheck pass "HealthCheck 输出完整（含 sherpa/funasr/advice）"
+else
+    record r19-healthcheck fail "HealthCheck 异常：${hc:0:80}"
+fi
+hcd="$(call HealthCheck deep 2>/dev/null || true)"
+if echo "$hcd" | grep -q "load_ms"; then
+    record r19-healthcheck-deep pass "deep 试加载返回耗时"
+else
+    record r19-healthcheck-deep fail "deep 缺 load_ms：${hcd:0:80}"
+fi
+
+# R17 fractional scale（W3：HiDPI 物理帧 + viewport 收逻辑）
+# 机制挂载验证（niri 嵌套模式不外发 scale 值——真实 HiDPI 由宿主机验收）：
+# 协议 global 绑定 + wl_output 监听 + 物理池=逻辑×当前 scale 的链路完整性
+if grep -aq "global wp_fractional_scale_manager_v1" "$FCITX_LOG" && \
+   grep -aq "global wp_viewporter" "$FCITX_LOG" && \
+   grep -aq "wl_output bound" "$FCITX_LOG"; then
+    record r17-fractional-scale pass "scale 机制挂载完整（viewporter/fsm/wl_output；嵌套 niri 不外发值，真实 HiDPI 宿主机验收）"
+else
+    record r17-fractional-scale fail "scale 机制未挂载（global/bind 日志缺失）"
+fi
+
 # 停采样器并等它写出 summary
 kill -TERM "$SAMPLER_PID" 2>/dev/null || true
 for _ in $(seq 1 10); do

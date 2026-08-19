@@ -3,6 +3,7 @@
 #include "popup_surface.h"
 #include "funasr_local_engine.h"
 #include "sherpa_engine.h"
+#include "sherpa-onnx/c-api.h"
 #include "funasr_ws_engine.h"
 
 #include <fcitx-config/iniparser.h>
@@ -15,12 +16,270 @@
 
 #include <unistd.h>
 
+#include <arpa/inet.h>
+#include <dirent.h>
+#include <sys/select.h>
+#include <sys/socket.h>
+
+#include <chrono>
+#include <sstream>
+
+#include <fontconfig/fontconfig.h>
+#include <fcitx-utils/standardpath.h>
+
 namespace fcitx {
 
 static uint64_t nowUs() {
     struct timespec ts;
     clock_gettime(CLOCK_MONOTONIC, &ts);
     return static_cast<uint64_t>(ts.tv_sec) * 1000000 + ts.tv_nsec / 1000;
+}
+
+// ---------------------------------------------------------------------------
+// 部署健康检查 + 引擎切换联动（W1/W5）
+// ---------------------------------------------------------------------------
+// 扫 /proc 找 funasr 服务进程（匹配 funasr-server/server.py + 端口）
+static pid_t findFunasrPid(int port, long *rssKb) {
+    DIR *d = opendir("/proc");
+    if (!d) {
+        return -1;
+    }
+    pid_t found = -1;
+    std::string portArg = "--port " + std::to_string(port) + " ";
+    struct dirent *e;
+    while ((e = readdir(d)) != nullptr) {
+        if (e->d_name[0] < '0' || e->d_name[0] > '9') {
+            continue;
+        }
+        std::string cl = "/proc/" + std::string(e->d_name) + "/cmdline";
+        FILE *f = fopen(cl.c_str(), "r");
+        if (!f) {
+            continue;
+        }
+        std::string cmd;
+        char buf[4096];
+        size_t n = fread(buf, 1, sizeof(buf), f);
+        fclose(f);
+        for (size_t i = 0; i < n; ++i) {
+            cmd += buf[i] ? buf[i] : ' ';
+        }
+        if (cmd.find("funasr-server/server.py") == std::string::npos) {
+            continue;
+        }
+        if (port > 0 && cmd.find(portArg) == std::string::npos &&
+            cmd.find("--port " + std::to_string(port)) == std::string::npos) {
+            continue;
+        }
+        found = atoi(e->d_name);
+        if (rssKb) {
+            *rssKb = 0;
+            std::string st = "/proc/" + std::string(e->d_name) + "/status";
+            if (FILE *sf = fopen(st.c_str(), "r")) {
+                char line[256];
+                while (fgets(line, sizeof(line), sf)) {
+                    if (strncmp(line, "VmRSS:", 6) == 0) {
+                        *rssKb = atol(line + 6);
+                        break;
+                    }
+                }
+                fclose(sf);
+            }
+        }
+        break;
+    }
+    closedir(d);
+    return found;
+}
+
+// TCP 端口探测（funasrUrl 解析出的 host:port）
+static bool portListening(const std::string &host, int port) {
+    int fd = socket(AF_INET, SOCK_STREAM | SOCK_CLOEXEC, 0);
+    if (fd < 0) {
+        return false;
+    }
+    sockaddr_in addr{};
+    addr.sin_family = AF_INET;
+    addr.sin_port = htons(port);
+    if (inet_pton(AF_INET, host.c_str(), &addr.sin_addr) != 1) {
+        close(fd);
+        return false;
+    }
+    // 非阻塞 connect 即可探测（本地端口立刻返回）
+    fcntl(fd, F_SETFL, fcntl(fd, F_GETFL) | O_NONBLOCK);
+    int r = connect(fd, (sockaddr *)&addr, sizeof(addr));
+    if (r != 0 && errno != EINPROGRESS) {
+        close(fd);
+        return false;
+    }
+    // EINPROGRESS 也算在听（内核 RST 才是没听）；极短等待确认可写
+    fd_set w;
+    FD_ZERO(&w);
+    FD_SET(fd, &w);
+    struct timeval tv{0, 50000};
+    bool ok = false;
+    if (select(fd + 1, nullptr, &w, nullptr, &tv) > 0) {
+        int err = 0;
+        socklen_t el = sizeof(err);
+        getsockopt(fd, SOL_SOCKET, SO_ERROR, &err, &el);
+        ok = (err == 0);
+    }
+    close(fd);
+    return ok;
+}
+
+std::string VoiceInputEngine::healthCheckJson(bool deep) {
+    auto esc = [](const std::string &x) { return flutterJsonEscape(x); };
+    std::ostringstream j;
+    j << "{";
+    j << "\"engine\":\"" << AsrEngineKindToString(config_.asrEngine.value())
+      << "\"";
+
+    // —— Sherpa ——
+    std::string mdir = resolveSherpaModelDir(&config_);
+    auto fileOk = [&mdir](const char *f) {
+        return access((mdir + "/" + f).c_str(), R_OK) == 0;
+    };
+    bool sEnc = fileOk("encoder.int8.onnx"), sDec = fileOk("decoder.int8.onnx"),
+         sTok = fileOk("tokens.txt");
+    j << ",\"sherpa\":{\"model_dir\":\"" << esc(mdir)
+      << "\",\"files\":{\"encoder.int8.onnx\":" << (sEnc ? "true" : "false")
+      << ",\"decoder.int8.onnx\":" << (sDec ? "true" : "false")
+      << ",\"tokens.txt\":" << (sTok ? "true" : "false") << "}";
+    if (deep && sEnc && sDec && sTok && state_ == State::Idle) {
+        // 试加载（~1s，会话中跳过）
+        SherpaOnnxOnlineRecognizerConfig c = {};
+        std::string enc = mdir + "/encoder.int8.onnx";
+        std::string dec = mdir + "/decoder.int8.onnx";
+        std::string tok = mdir + "/tokens.txt";
+        c.feat_config.sample_rate = 16000;
+        c.feat_config.feature_dim = 80;
+        c.model_config.paraformer.encoder = enc.c_str();
+        c.model_config.paraformer.decoder = dec.c_str();
+        c.model_config.tokens = tok.c_str();
+        c.model_config.num_threads = config_.sherpaNumThreads.value();
+        c.model_config.provider = "cpu";
+        c.decoding_method = "greedy_search";
+        auto t0 = std::chrono::steady_clock::now();
+        auto *rec = SherpaOnnxCreateOnlineRecognizer(&c);
+        auto ms = std::chrono::duration_cast<std::chrono::milliseconds>(
+                      std::chrono::steady_clock::now() - t0)
+                      .count();
+        if (rec) {
+            SherpaOnnxDestroyOnlineRecognizer(
+                const_cast<SherpaOnnxOnlineRecognizer *>(rec));
+            j << ",\"deep\":{\"ok\":true,\"load_ms\":" << ms << "}";
+        } else {
+            j << ",\"deep\":{\"ok\":false}";
+        }
+    }
+    j << "}";
+
+    // —— FunASR 服务 ——
+    std::string fhost;
+    int fport = 0;
+    {
+        auto url = config_.funasrUrl.value();
+        auto pos = url.rfind(':');
+        if (pos != std::string::npos) {
+            fhost = url.substr(0, pos);
+            fhost = fhost.substr(fhost.find("//") + 2);
+            fport = atoi(url.c_str() + pos + 1);
+        }
+    }
+    long rss = 0;
+    pid_t fpid = findFunasrPid(fport, &rss);
+    j << ",\"funasr\":{\"running\":" << (fpid > 0 ? "true" : "false");
+    if (fpid > 0) {
+        j << ",\"pid\":" << fpid << ",\"rss_mb\":" << (rss / 1024);
+    }
+    if (!fhost.empty() && fport > 0) {
+        j << ",\"port_listening\":"
+          << (portListening(fhost, fport) ? "true" : "false");
+    }
+    j << "}";
+
+    // —— FunASR Local（GGUF）——
+    const std::string &gdir = config_.funasrLocalModelDir.value();
+    j << ",\"funasr_local\":{\"dir\":\"" << esc(gdir)
+      << "\",\"exists\":" << (access(gdir.c_str(), F_OK) == 0 ? "true" : "false")
+      << "}";
+
+    // —— 建议 ——
+    std::string advice;
+    switch (config_.asrEngine.value()) {
+    case AsrEngineKind::Sherpa:
+        if (!sEnc || !sDec || !sTok) {
+            advice = "模型缺失：scripts/fetch-sherpa-models.sh 下载";
+        } else {
+            advice = "就绪";
+        }
+        break;
+    case AsrEngineKind::FunASR:
+        if (fpid <= 0) {
+            advice = "服务未运行" +
+                     std::string(config_.funasrAutoStart.value()
+                                     ? "（AutoStart 会在下次触发时拉起）"
+                                     : "：funasr-serve.sh start");
+        } else {
+            advice = "服务运行中 pid=" + std::to_string(fpid);
+        }
+        break;
+    case AsrEngineKind::FunASRLocal:
+        advice = access(gdir.c_str(), F_OK) == 0 ? "就绪" : "GGUF 目录缺失";
+        break;
+    default:
+        advice = "调试引擎";
+    }
+    j << ",\"advice\":\"" << esc(advice) << "\"}";
+    return j.str();
+}
+
+void VoiceInputEngine::onEngineChanged(AsrEngineKind next) {
+    if (next == lastEngine_) {
+        return;
+    }
+    lastEngine_ = next;
+    const std::string &cmd = config_.funasrServerCmd.value();
+    std::string host;
+    int port = 0;
+    {
+        auto url = config_.funasrUrl.value();
+        auto pos = url.rfind(':');
+        if (pos != std::string::npos) {
+            host = url.substr(0, pos);
+            host = host.substr(host.find("//") + 2);
+            port = atoi(url.c_str() + pos + 1);
+        }
+    }
+    if (next != AsrEngineKind::FunASR && !cmd.empty() &&
+        findFunasrPid(port, nullptr) > 0) {
+        // 切离 FunASR：服务在跑就停（释放 3.7G RAM + 5.1G VRAM）
+        runServerScript(cmd, "stop");
+        FCITX_INFO() << "VoiceInput: 引擎切换→" << AsrEngineKindToString(next)
+                     << "，已停止 funasr 服务";
+    } else if (next == AsrEngineKind::FunASR &&
+               config_.funasrAutoStart.value() && !cmd.empty() &&
+               findFunasrPid(port, nullptr) <= 0) {
+        // 切回 FunASR 且 AutoStart：拉起（模型加载 15-60s）
+        runServerScript(cmd, "start");
+        FCITX_INFO() << "VoiceInput: 引擎切换→FunASR（AutoStart），拉起服务";
+    }
+}
+
+void VoiceInputEngine::runServerScript(const std::string &cmd,
+                                        const std::string &action) {
+    if (pid_t pid = fork(); pid == 0) {
+        setsid();
+        int devnull = open("/dev/null", O_WRONLY);
+        if (devnull >= 0) {
+            dup2(devnull, 1);
+            dup2(devnull, 2);
+        }
+        char *const argv[] = {const_cast<char *>(cmd.c_str()),
+                              const_cast<char *>(action.c_str()), nullptr};
+        execv(cmd.c_str(), argv);
+        _exit(127);
+    }
 }
 
 // Flutter 资产发现：env 覆盖 → 用户级（~/.local/share）→ 系统包安装路径
@@ -75,6 +334,24 @@ VoiceInputEngine::VoiceInputEngine(Instance *instance)
         if (flutter_) {
             flutter_->onPointer(map[static_cast<int>(kind)],
                                 static_cast<double>(x), static_cast<double>(y));
+        }
+    });
+    // W3 尺寸/scale 统筹：Dart 逻辑尺寸 → popup 物理池+viewport +
+    // 引擎 metrics（pixelRatio=真实 scale → 渲染物理帧，无拉伸模糊）
+    flutter_->setResizeHandler([this](int w, int h) {
+        if (popup_) {
+            popup_->setLogicalSize(w, h);
+            flutter_->updateMetrics(w, h, popup_->scale());
+        } else {
+            flutter_->updateMetrics(w, h, 1.0);
+        }
+    });
+    // 合成器 scale 变化（跨屏移动/用户改缩放）→ 用当前逻辑尺寸重设 metrics
+    popup_->setScaleHandler([this](double s) {
+        if (flutter_ && flutter_->running() && popup_ &&
+            popup_->logicalWidth() > 0) {
+            flutter_->updateMetrics(popup_->logicalWidth(),
+                                    popup_->logicalHeight(), s);
         }
     });
     // Dart → C++：ready/resize 已由引擎处理，selectCandidate/hoverChanged 到这
@@ -181,10 +458,15 @@ void VoiceInputEngine::reloadConfig() {
 // configtool 保存链路：D-Bus SetConfig → setConfig（基类默认 no-op）。
 // 与 classicui 同模式：载入 + 落盘 + 应用
 void VoiceInputEngine::setConfig(const RawConfig &config) {
+    auto prev = config_.asrEngine.value();
     config_.load(config, true);
     if (safeSaveAsIni(config_, "conf/voiceinput.config")) {
         FCITX_INFO() << "VoiceInput: configtool 保存已落盘";
     }
+    if (config_.asrEngine.value() != prev) {
+        onEngineChanged(config_.asrEngine.value());
+    }
+    sendFontToUi(); // 字体热改（UIFont/classicui Font 变化即生效）
     uiNotify("config-saved-via-configtool");
 }
 
@@ -270,6 +552,92 @@ void VoiceInputEngine::pushUiState() {
     }
 }
 
+// —— UI 字体解析（W4）：UIFont 配置 > classicui 的 Font > 内置 NotoSansSC ——
+// 返回 {"path","family","size"}；path 空 = 用内置兜底
+std::string VoiceInputEngine::resolveUiFont() {
+    std::string pango = config_.uiFont.value();
+    if (pango.empty()) {
+        // 跟随 classicui：读其配置文件的 Font（如 "MiSans VF 12"）
+        auto f = StandardPath::global().open(StandardPath::Type::PkgConfig,
+                                              "conf/classicui.conf",
+                                              O_RDONLY);
+        if (f.fd() >= 0) {
+            FILE *fp = fdopen(dup(f.fd()), "r");
+            char line[512];
+            std::string fontLine;
+            while (fgets(line, sizeof(line), fp)) {
+                if (strncmp(line, "Font=", 5) == 0) {
+                    fontLine = line + 5;
+                    break;
+                }
+            }
+            fclose(fp);
+            // 去引号/换行
+            auto clean = [](std::string x) {
+                while (!x.empty() && (x.back() == '\n' || x.back() == '"' ||
+                                      x.back() == '\r' || x.back() == ' ')) {
+                    x.pop_back();
+                }
+                size_t b = x.find_first_not_of(" \"");
+                return b == std::string::npos ? "" : x.substr(b);
+            };
+            pango = clean(fontLine);
+        }
+    }
+    if (pango.empty()) {
+        return "{}";
+    }
+    // Pango 串："Family1,Family2 12"——末尾数字为 size，其余为 family 列表
+    int size = 12;
+    std::string families = pango;
+    auto pos = pango.find_last_of(' ');
+    if (pos != std::string::npos) {
+        int v = atoi(pango.c_str() + pos + 1);
+        if (v > 4 && v < 100) {
+            size = v;
+            families = pango.substr(0, pos);
+        }
+    }
+    // fontconfig 匹配 family → 字体文件
+    std::string path;
+    FcConfig *fc = FcInitLoadConfigAndFonts();
+    if (fc) {
+        FcPattern *pat = FcPatternBuild(nullptr, FC_FAMILY, FcTypeString,
+                                        (FcChar8 *)families.c_str(), nullptr);
+        FcConfigSubstitute(fc, pat, FcMatchPattern);
+        FcDefaultSubstitute(pat);
+        FcResult res = FcResultNoMatch;
+        FcPattern *match = FcFontMatch(fc, pat, &res);
+        if (match && res == FcResultMatch) {
+            FcChar8 *file = nullptr;
+            if (FcPatternGetString(match, FC_FILE, 0, &file) == FcResultMatch &&
+                file) {
+                path = (const char *)file;
+            }
+            FcPatternDestroy(match);
+        }
+        FcPatternDestroy(pat);
+        FcConfigDestroy(fc);
+    }
+    std::ostringstream j;
+    j << "{\"path\":\"" << flutterJsonEscape(path)
+      << "\",\"family\":\"" << flutterJsonEscape(families)
+      << "\",\"size\":" << size << "}";
+    return j.str();
+}
+
+// W4：字体跟随下发（classicui Font → fontconfig 文件 → Dart FontLoader）
+void VoiceInputEngine::sendFontToUi() {
+    if (!flutter_ || !flutter_->running()) {
+        return;
+    }
+    std::string font = resolveUiFont();
+    if (font.length() > 4) { // 非 "{}"
+        flutter_->sendUpdate("{\"state\":\"font\"," + font.substr(1));
+        FCITX_INFO() << "VoiceInput: UI 字体 → " << font;
+    }
+}
+
 void VoiceInputEngine::onFlutterMessage(const std::string &method,
                                         const std::string &args) {
     // {"index":N} / {"row":N}——极简字段提取（协议自约定）
@@ -292,6 +660,7 @@ void VoiceInputEngine::onFlutterMessage(const std::string &method,
     } else if (method == "ready") {
         FCITX_INFO() << "VoiceInput: Flutter UI ready";
         pushUiState();
+        sendFontToUi();
     }
 }
 
@@ -682,6 +1051,11 @@ std::string TestService::InjectKey(std::string key, bool pressed) {
 }
 
 std::string TestService::State() { return engine_->stateName(); }
+
+// 模型部署健康检查：入参 "deep" 时含 sherpa 试加载（~1s）
+std::string TestService::HealthCheck(std::string mode) {
+    return engine_->healthCheckJson(mode == "deep");
+}
 
 // 编译期版本回读：容器/宿主断言加载的二进制与包一致（防"陈旧 dist/
 // ~/.local 不生效"类问题——宿主机实测踩过）

@@ -15,6 +15,8 @@
 #include <unistd.h>
 
 #include "wayland-input-method-unstable-v2-client-protocol.h"
+#include "viewporter-client-protocol.h"
+#include "fractional-scale-v1-client-protocol.h"
 
 namespace fcitx {
 
@@ -26,6 +28,13 @@ static const wl_registry_listener kRegistryListener = {
     /* .global_remove = */ &VoicePopup::registryGlobalRemoveImpl,
 };
 
+static const wl_output_listener kOutputListener = {
+    /* .geometry = */ &VoicePopup::outputGeometry,
+    /* .mode = */ &VoicePopup::outputMode,
+    /* .done = */ &VoicePopup::outputDone,
+    /* .scale = */ &VoicePopup::outputScale,
+};
+
 static const zwp_input_popup_surface_v2_listener kPopupListener = {
     /* .text_input_rectangle = */ &VoicePopup::popupRectangle,
 };
@@ -35,6 +44,10 @@ static const wl_seat_listener kSeatListener = {
     /* .name = */ // v4+ 会发 name 事件；listener 槽为 NULL 时 libwayland
     // 直接 abort（listener function for opcode 1 of wl_seat is NULL）
     [](void *, wl_seat *, const char *) {},
+};
+
+static const wp_fractional_scale_v1_listener kFscaleListener = {
+    /* .preferred_scale = */ &VoicePopup::preferredScale,
 };
 
 static const wl_pointer_listener kPointerListener = {
@@ -81,6 +94,56 @@ void VoicePopup::seatCapabilities(void *data, wl_seat *seat, uint32_t caps) {
     } else if (!(caps & WL_SEAT_CAPABILITY_POINTER) && s->pointer_) {
         wl_pointer_release(s->pointer_);
         s->pointer_ = nullptr;
+    }
+}
+
+// 合成器告知真实缩放（1/120 单位；如 150=1.25）——重算物理池并通知上层
+void VoicePopup::preferredScale(void *data, wp_fractional_scale_v1 *,
+                                uint32_t scale) {
+    auto *s = static_cast<VoicePopup *>(data);
+    std::lock_guard<std::mutex> lock(s->mutex_);
+    s->gotFscale_ = true;
+    if (scale == s->scaleNum_ || scale == 0) {
+        return;
+    }
+    s->scaleNum_ = scale;
+    FCITX_INFO() << "VoicePopup: fractional scale → " << (scale / 120.0);
+    if (s->logicalW_ > 0 && s->viewport_) {
+        // 物理池按新 scale 重建，viewport 保持逻辑尺寸
+        double sc = s->scale();
+        int pw = static_cast<int>(s->logicalW_ * sc + 0.5);
+        int ph = static_cast<int>(s->logicalH_ * sc + 0.5);
+        s->resize(pw, ph);
+        wp_viewport_set_destination(s->viewport_, s->logicalW_, s->logicalH_);
+    }
+    if (s->scaleHandler_) {
+        s->scaleHandler_(s->scaleNum_ / 120.0); // 出锁后调用更稳，这里同线程
+    }
+}
+
+void VoicePopup::outputGeometry(void *, wl_output *, int32_t, int32_t,
+                                int32_t, int32_t, int32_t, const char *,
+                                const char *, int32_t) {}
+void VoicePopup::outputMode(void *, wl_output *, uint32_t, int32_t, int32_t,
+                            int32_t) {}
+void VoicePopup::outputDone(void *, wl_output *) {}
+void VoicePopup::outputScale(void *data, wl_output *, int32_t factor) {
+    auto *s = static_cast<VoicePopup *>(data);
+    std::lock_guard<std::mutex> lock(s->mutex_);
+    if (factor != s->outputScale_ && !s->gotFscale_) {
+        s->outputScale_ = factor;
+        FCITX_INFO() << "VoicePopup: wl_output scale → " << factor;
+        if (s->logicalW_ > 0 && s->viewport_) {
+            int pw = s->logicalW_ * factor, ph = s->logicalH_ * factor;
+            s->resize(pw, ph);
+            wp_viewport_set_destination(s->viewport_, s->logicalW_,
+                                        s->logicalH_);
+        }
+        if (s->scaleHandler_) {
+            s->scaleHandler_(s->scale());
+        }
+    } else if (factor != s->outputScale_) {
+        s->outputScale_ = factor; // fractional 优先，仅记录
     }
 }
 
@@ -152,6 +215,8 @@ VoicePopup::VoicePopup(Instance *instance) : instance_(instance) {
                 std::lock_guard<std::mutex> lock(mutex_);
                 surface_ = nullptr;
                 surfaceCompat_ = nullptr;
+                viewport_ = nullptr;
+                fscale_ = nullptr;
                 popup_ = nullptr;
                 im_ = nullptr;
                 pool_ = nullptr;
@@ -163,6 +228,7 @@ VoicePopup::VoicePopup(Instance *instance) : instance_(instance) {
                 shm_ = nullptr;
                 seat_ = nullptr;
                 pointer_ = nullptr;
+                output_ = nullptr;
                 hasCursorRect_ = false;
                 display_ = nullptr;
             });
@@ -216,6 +282,23 @@ void VoicePopup::registryGlobalImpl(void *data, wl_registry *reg, uint32_t name,
         self->seat_ = static_cast<wl_seat *>(wl_registry_bind(
             reg, name, &wl_seat_interface, sv));
         wl_seat_add_listener(self->seat_, &kSeatListener, self);
+    } else if (strcmp(iface, "wl_output") == 0 && !self->output_) {
+        // W3：wl_output 整数 scale 兜底（niri 不给 IM popup 发 fractional）
+        self->output_ = static_cast<wl_output *>(wl_registry_bind(
+            reg, name, &wl_output_interface, 2)); // v2 起 scale/done 事件
+        wl_output_add_listener(self->output_, &kOutputListener, self);
+        FCITX_INFO() << "VoicePopup: wl_output bound v2 name=" << name;
+    } else if (strcmp(iface, "wp_viewporter") == 0 && !self->viewporter_) {
+        FCITX_INFO() << "VoicePopup: global wp_viewporter v" << version;
+        self->viewporter_ = static_cast<wp_viewporter *>(wl_registry_bind(
+            reg, name, &wp_viewporter_interface, 1));
+    } else if (strcmp(iface, "wp_fractional_scale_manager_v1") == 0 &&
+               !self->fsManager_) {
+        FCITX_INFO() << "VoicePopup: global wp_fractional_scale_manager_v1 v"
+                     << version;
+        self->fsManager_ =
+            static_cast<wp_fractional_scale_manager_v1 *>(wl_registry_bind(
+                reg, name, &wp_fractional_scale_manager_v1_interface, 1));
     } else if (strcmp(iface, "zwp_input_method_manager_v2") == 0) {
         // 仅作为"这是 waylandim 的 IM 连接"的判据；不绑定第二个 IM
         // （协议规定一个 seat 只允许一个 input method，waylandim 已 bind）
@@ -289,6 +372,15 @@ bool VoicePopup::ensurePopup(InputContext *ic) {
     surfaceCompat_ = calloc(1, 0x58);
     wl_proxy_set_user_data(reinterpret_cast<wl_proxy *>(surface_),
                             surfaceCompat_);
+    // W3：viewport（物理 buffer → 逻辑显示）+ fractional scale（真实缩放值）
+    if (viewporter_) {
+        viewport_ = wp_viewporter_get_viewport(viewporter_, surface_);
+    }
+    if (fsManager_) {
+        fscale_ = wp_fractional_scale_manager_v1_get_fractional_scale(
+            fsManager_, surface_);
+        wp_fractional_scale_v1_add_listener(fscale_, &kFscaleListener, this);
+    }
     popup_ = zwp_input_method_v2_get_input_popup_surface(im_, surface_);
     zwp_input_popup_surface_v2_add_listener(popup_, &kPopupListener, this);
     icRef_ = ic->watch();
@@ -425,6 +517,26 @@ void VoicePopup::resize(int w, int h) {
     }
     cur_ = 0;
     FCITX_INFO() << "VoicePopup: shm pool resized to " << w << "x" << h;
+}
+
+// W3：调用方（Dart resize 消息）上报逻辑尺寸；帧本身是物理尺寸
+//（引擎按 metrics physical=逻辑×ratio 渲染），池随物理建，viewport 收逻辑
+void VoicePopup::setLogicalSize(int w, int h) {
+    std::lock_guard<std::mutex> lock(mutex_);
+    logicalW_ = w;
+    logicalH_ = h;
+    if (viewport_) {
+        wp_viewport_set_destination(viewport_, w, h);
+    }
+    double sc = scale();
+    int pw = static_cast<int>(w * sc + 0.5);
+    int ph = static_cast<int>(h * sc + 0.5);
+    if (pw != width_ || ph != height_) {
+        // 物理池与当前不符时先按目标逻辑比例预留（首帧到达会再校准）
+        if (width_ <= 0) {
+            resize(pw, ph);
+        }
+    }
 }
 
 void VoicePopup::pushFrameBGRA(const uint8_t *bgra, int w, int h) {

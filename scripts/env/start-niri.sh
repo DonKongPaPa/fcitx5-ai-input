@@ -9,8 +9,17 @@ DURATION="${DURATION:-10}"
 MODE="${MODE:-sleep}"   # M2 验证用 sleep；M3+ 换成 case 驱动
 
 # 1. cage 无头托管 niri（wlroots headless 有真实帧时钟；weston no-op 会卡死渲染）
+# W3 验证：HiDPI（scale=2）下整轮回归——niri 输出 2x，fractional scale 链路全走
+SCALE="${NIRI_TEST_SCALE:-2.0}"
+mkdir -p "$LOG_DIR/niri-cfg"
+cat > "$LOG_DIR/niri-cfg/config.kdl" <<KDL
+output "*" {
+    scale $SCALE
+}
+KDL
+
 WLR_BACKENDS=headless WLR_LIBINPUT_NO_DEVICES=1 WLR_RENDERER_ALLOW_SOFTWARE=1 \
-    cage -d -s niri >"$LOG_DIR/cage.log" 2>&1 &
+    cage -d -s niri -- -c "$LOG_DIR/niri-cfg/config.kdl" >"$LOG_DIR/cage.log" 2>&1 &
 CAGE_PID=$!
 
 NIRI_SOCK=""

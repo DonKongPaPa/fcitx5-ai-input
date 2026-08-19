@@ -58,6 +58,12 @@ FCITX_CONFIGURATION(
     Option<int> sherpaNumThreads{
         this, "SherpaNumThreads", "Sherpa 解码线程数", 4};
 
+    // —— UI 字体（W4）——
+    Option<std::string> uiFont{
+        this, "UIFont",
+        "悬浮卡片字体（Pango 格式如 \"MiSans VF 13\"；留空 = 跟随 classicui 的字体设置）",
+        ""};
+
     Option<AsrEngineKind, NoConstrain<AsrEngineKind>, DefaultMarshaller<AsrEngineKind>, AsrEngineKindI18NAnnotation> asrEngine{
         this, "AsrEngine", "ASR 引擎（Dummy=调试模拟，FunASR=流式识别，"
                            "FunASRLocal=本地轻量档 zh/en/ja 非流式）",

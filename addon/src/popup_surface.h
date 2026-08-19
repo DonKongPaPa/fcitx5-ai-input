@@ -14,10 +14,15 @@ struct wl_registry;
 struct wl_compositor;
 struct wl_shm;
 struct wl_seat;
+struct wl_output;
 struct wl_pointer;
 struct wl_surface;
 struct wl_shm_pool;
 struct wl_buffer;
+struct wp_viewporter;
+struct wp_viewport;
+struct wp_fractional_scale_manager_v1;
+struct wp_fractional_scale_v1;
 struct zwp_input_method_v2;
 struct zwp_input_popup_surface_v2;
 
@@ -75,6 +80,22 @@ public:
     void resize(int w, int h); // 重建 shm 池（帧尺寸变化）
     void setPatternMode(bool p) { patternMode_ = p; } // 引擎不可用时回退色块
 
+    // W3 fractional scale：逻辑/物理尺寸分离。Dart（或调用方）上报**逻辑**
+    // 尺寸；池按 物理=ceil(逻辑×scale/120) 建，viewport 缩回逻辑显示。
+    // scale 经 preferred_scale 事件异步到达后自动重算并回调（metrics 需更新）
+    void setLogicalSize(int w, int h);
+    // 生效 scale：fractional 事件（精确，1/120）优先；未到则用 wl_output
+    // 整数 scale（niri 不给 IM popup 发 fractional preferred_scale，实测）
+    double scale() const {
+        return gotFscale_ ? scaleNum_ / 120.0 : outputScale_;
+    }
+    int logicalWidth() const { return logicalW_; }
+    int logicalHeight() const { return logicalH_; }
+    // scale 变化回调（voiceinput 据此更新引擎 metrics 重渲物理帧）
+    void setScaleHandler(std::function<void(double)> h) {
+        scaleHandler_ = std::move(h);
+    }
+
     // P3→重构：指针事件原始转发（不再 C++ 侧命中测试——Flutter 引擎直接
     // 收 FlutterPointerEvent，hover/点击由 Dart 命中）。niri 的 IM popup 不
     // 在窗口/层 surface 树里，seat 级 wl_pointer 才能收到表面局部坐标
@@ -93,6 +114,13 @@ public:
                                int32_t x, int32_t y, int32_t w, int32_t h);
     // seat 级指针路由（niri 上 IM popup 不收指针事件，见 setClickHandler）
     static void seatCapabilities(void *data, wl_seat *seat, uint32_t caps);
+    static void outputGeometry(void *data, wl_output *o, int32_t, int32_t,
+                               int32_t, int32_t, int32_t, const char *,
+                               const char *, int32_t);
+    static void outputMode(void *data, wl_output *o, uint32_t, int32_t,
+                           int32_t, int32_t);
+    static void outputScale(void *data, wl_output *o, int32_t factor);
+    static void outputDone(void *data, wl_output *o);
     static void pointerEnter(void *data, wl_pointer *p, uint32_t serial,
                              wl_surface *surface, wl_fixed_t sx, wl_fixed_t sy);
     static void pointerLeave(void *data, wl_pointer *p, uint32_t serial,
@@ -101,6 +129,8 @@ public:
                               wl_fixed_t sx, wl_fixed_t sy);
     static void pointerButton(void *data, wl_pointer *p, uint32_t serial,
                               uint32_t time, uint32_t button, uint32_t state);
+    static void preferredScale(void *data, wp_fractional_scale_v1 *fs,
+                               uint32_t scale);
 
 private:
     void onConnectionCreated(const std::string &name, wl_display *display);
@@ -120,6 +150,17 @@ private:
     wl_shm *shm_ = nullptr;
     wl_seat *seat_ = nullptr;
     wl_pointer *pointer_ = nullptr;
+    wp_viewporter *viewporter_ = nullptr;
+    wp_viewport *viewport_ = nullptr;
+    wp_fractional_scale_manager_v1 *fsManager_ = nullptr;
+    wp_fractional_scale_v1 *fscale_ = nullptr;
+    uint32_t scaleNum_ = 120; // 1/120 单位（协议约定 120=1.0）
+    bool gotFscale_ = false;  // fractional 事件是否到达过
+    int outputScale_ = 1;     // wl_output 整数 scale 兜底
+    wl_output *output_ = nullptr;
+    int logicalW_ = 0, logicalH_ = 0;
+    std::function<void(double)> scaleHandler_;
+
     zwp_input_method_v2 *im_ = nullptr; // 借用：waylandim 所有
     zwp_input_popup_surface_v2 *popup_ = nullptr;
     wl_surface *surface_ = nullptr;

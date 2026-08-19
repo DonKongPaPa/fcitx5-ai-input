@@ -18,6 +18,7 @@
 //              invokeMethod('selectCandidate', {index})
 //              invokeMethod('hoverChanged', {row}) // 测试观测用
 import 'dart:async';
+import 'dart:io';
 
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
@@ -119,8 +120,8 @@ class VoiceUiApp extends StatelessWidget {
       title: 'voice_ui',
       theme: ThemeData(
         useMaterial3: true,
-        // raw embedder 无 fontconfig：CJK 用打包的 NotoSansSC（默认 Roboto
-        // 只覆盖拉丁，中文会 tofu）
+        // raw embedder 无 fontconfig：CJK 用打包的 NotoSansSC 兜底；
+        // classicui 跟随字体（SysFont）在 Home 层覆盖
         fontFamily: 'NotoSansSC',
         colorScheme: ColorScheme.fromSeed(seedColor: const Color(0xFF6750A4)),
       ),
@@ -180,6 +181,8 @@ class _VoiceUiHomeState extends State<VoiceUiHome> {
   SessionData _data = const SessionData();
   Timer? _ticker;
   int _localElapsed = 0;
+  String? _sysFontFamily; // classicui 跟随字体（FontLoader 注册后启用）
+  double _fontScale = 1.0; // size/12 基准
   int _mouseHover = -1; // 鼠标悬停行（本地状态；键盘选择走 data.hover）
   Size _lastReported = Size.zero;
 
@@ -204,6 +207,12 @@ class _VoiceUiHomeState extends State<VoiceUiHome> {
   Future<dynamic> _onCall(MethodCall call) async {
     if (call.method != 'update') return null;
     final msg = (call.arguments as Map?)?.cast<String, dynamic>() ?? {};
+    // 字体跟随（C++ fontconfig 解析后下发）
+    if (msg['state'] == 'font') {
+      await _applyFont(msg['path'] as String? ?? '',
+          (msg['size'] as num?)?.toDouble() ?? 12);
+      return null;
+    }
     switch (msg['state'] as String? ?? 'idle') {
       case 'recording':
         _localElapsed = (msg['elapsed_ms'] as num?)?.toInt() ?? 0;
@@ -271,6 +280,30 @@ class _VoiceUiHomeState extends State<VoiceUiHome> {
     );
   }
 
+  /// 系统字体应用：文件加载进 FontLoader('SysFont')，12pt 为 1.0 基准缩放
+  Future<void> _applyFont(String path, double size) async {
+    try {
+      if (path.isNotEmpty && File(path).existsSync()) {
+        final bytes = await File(path).readAsBytes();
+        final loader = FontLoader('SysFont')
+          ..addFont(Future.value(bytes.buffer.asByteData()));
+        await loader.load();
+        setState(() {
+          _sysFontFamily = 'SysFont';
+          _fontScale = (size / 12.0).clamp(0.7, 2.5);
+        });
+        // ignore: avoid_print
+        print('ui-font: $path size=$size');
+        return;
+      }
+    } catch (e) {
+      // ignore: avoid_print
+      print('ui-font failed: $e');
+    }
+    // 兜底：仅字号缩放（内置 NotoSansSC）
+    setState(() => _fontScale = (size / 12.0).clamp(0.7, 2.5));
+  }
+
   void _onHoverRow(int row) {
     if (_mouseHover != row) {
       setState(() => _mouseHover = row);
@@ -284,23 +317,36 @@ class _VoiceUiHomeState extends State<VoiceUiHome> {
 
   @override
   Widget build(BuildContext context) {
-    final size = panelSizeFor(Theme.of(context), _data);
-    return Scaffold(
-      backgroundColor: Colors.transparent,
-      body: Center(
-        child: SizedBox(
-          width: size.width + kShadowPad * 2,
-          height: size.height + kShadowPad * 2,
-          child: Padding(
-            padding: const EdgeInsets.all(kShadowPad),
-            child: SizedBox(
-              width: size.width,
-              height: size.height,
-              child: VoicePanel(
-                data: _data,
-                mouseHover: _mouseHover,
-                onHover: _onHoverRow,
-                onSelect: _selectCandidate,
+    final base = Theme.of(context);
+    final size = panelSizeFor(base, _data);
+    final theme = base.copyWith(
+      // SysFont = classicui 跟随/UIFont 配置（_applyFont 注册）；
+      // 字号以 classicui Font 的 pt 为基准（12 → 1.0）
+      textTheme: base.textTheme.apply(
+        fontFamily: _sysFontFamily ?? 'NotoSansSC',
+        fontFamilyFallback: const ['NotoSansSC'],
+        fontSizeFactor: _fontScale,
+      ),
+    );
+    return Theme(
+      data: theme,
+      child: Scaffold(
+        backgroundColor: Colors.transparent,
+        body: Center(
+          child: SizedBox(
+            width: size.width * _fontScale + kShadowPad * 2,
+            height: size.height * _fontScale + kShadowPad * 2,
+            child: Padding(
+              padding: const EdgeInsets.all(kShadowPad),
+              child: SizedBox(
+                width: size.width * _fontScale,
+                height: size.height * _fontScale,
+                child: VoicePanel(
+                  data: _data,
+                  mouseHover: _mouseHover,
+                  onHover: _onHoverRow,
+                  onSelect: _selectCandidate,
+                ),
               ),
             ),
           ),

@@ -406,8 +406,8 @@ void FlutterEngineHost::handleMessage(const std::string &payload) {
     if (method == "resize") {
         double w = 0, h = 0;
         if (jsonFindNumber(args, "w", &w) && jsonFindNumber(args, "h", &h) &&
-            w > 0 && h > 0) {
-            updateMetrics(w, h, 1.0);
+            w > 0 && h > 0 && resizeHandler_) {
+            resizeHandler_(static_cast<int>(w), static_cast<int>(h));
         }
     } else if (handler_) {
         handler_(method, args);

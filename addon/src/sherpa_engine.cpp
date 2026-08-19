@@ -14,7 +14,7 @@
 namespace fcitx {
 
 // 模型目录解析：config 覆盖 → env → 用户默认 → 系统共享路径
-static std::string resolveModelDir(const VoiceInputConfig *config) {
+std::string resolveSherpaModelDir(const VoiceInputConfig *config) {
     const auto &cfgDir = config->sherpaModelDir.value();
     if (!cfgDir.empty()) {
         return cfgDir;
@@ -36,7 +36,7 @@ void SherpaOnnxEngine::start(EventLoop *loop, const VoiceInputConfig *config,
     cbs_ = std::move(cbs);
     finished_ = false;
 
-    const std::string dir = resolveModelDir(config);
+    const std::string dir = resolveSherpaModelDir(config);
     const std::string encoder = dir + "/encoder.int8.onnx";
     const std::string decoder = dir + "/decoder.int8.onnx";
     const std::string tokens = dir + "/tokens.txt";

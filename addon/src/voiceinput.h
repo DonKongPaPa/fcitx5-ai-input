@@ -39,6 +39,7 @@ public:
     std::string InjectKey(std::string key, bool pressed);
     std::string State();
     std::string Version();
+    std::string HealthCheck(std::string mode);
     std::vector<std::string> Candidates();
 
     static const char *interface() { return "org.fcitx.VoiceInput.Test"; }
@@ -50,6 +51,7 @@ private:
     FCITX_OBJECT_VTABLE_METHOD(InjectKey, "InjectKey", "sb", "s");
     FCITX_OBJECT_VTABLE_METHOD(State, "State", "", "s");
     FCITX_OBJECT_VTABLE_METHOD(Version, "Version", "", "s");
+    FCITX_OBJECT_VTABLE_METHOD(HealthCheck, "HealthCheck", "s", "s");
     FCITX_OBJECT_VTABLE_METHOD(Candidates, "Candidates", "", "as");
 };
 
@@ -99,6 +101,9 @@ public:
     bool handleKey(const Key &key, bool pressed, InputContext *ic);
 
     std::string stateName() const;
+    std::string healthCheckJson(bool deep); // TestService::HealthCheck 调
+    std::string resolveUiFont();
+    void sendFontToUi();
     const std::vector<std::string> &candidates() const { return candidates_; }
     void commitCandidate(size_t index, InputContext *ic);
 
@@ -117,6 +122,11 @@ private:
 
     bool isTriggerKey(const Key &key) const;
     static std::string polish(const std::string &text);
+
+    // —— 部署健康检查 / 引擎切换联动 ——
+    void onEngineChanged(AsrEngineKind next);
+    void runServerScript(const std::string &cmd, const std::string &action);
+    AsrEngineKind lastEngine_ = AsrEngineKind::Dummy;
 
     // —— Flutter（进程内嵌入引擎）——
     void startFlutterEngine();

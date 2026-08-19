@@ -46,6 +46,11 @@ endif()
 target_link_libraries(voiceinput PRIVATE "${SHERPA_ONNX_LIBRARY}")
 target_link_libraries(voiceinput PRIVATE pthread)
 
+# W4 字体跟随：fontconfig 解析 classicui Font → 字体文件
+find_package(PkgConfig REQUIRED)
+pkg_check_modules(FONTCONFIG REQUIRED IMPORTED_TARGET fontconfig)
+target_link_libraries(voiceinput PRIVATE PkgConfig::FONTCONFIG)
+
 # input-method-v2 协议（wlroots/fcitx5 扩展，不在 wayland-protocols 包内）
 find_program(WAYLAND_SCANNER_EXECUTABLE wayland-scanner REQUIRED)
 set(IM_V2_XML ${CMAKE_CURRENT_SOURCE_DIR}/../protocol/input-method-unstable-v2.xml)
@@ -64,6 +69,24 @@ add_custom_command(
     DEPENDS ${IM_V2_XML}
     VERBATIM)
 target_sources(voiceinput PRIVATE ${GEN_DIR}/imv2-protocol.c)
+
+# —— W3 fractional scale：viewporter + fractional-scale-v1（wayland-protocols 标准件）——
+foreach(proto viewporter fractional-scale-v1)
+    add_custom_command(
+        OUTPUT ${GEN_DIR}/${proto}-protocol.c
+               ${GEN_DIR}/${proto}-client-protocol.h
+        COMMAND ${WAYLAND_SCANNER_EXECUTABLE} client-header
+                ${CMAKE_CURRENT_SOURCE_DIR}/../protocol/${proto}.xml
+                ${GEN_DIR}/${proto}-client-protocol.h
+        COMMAND ${WAYLAND_SCANNER_EXECUTABLE} private-code
+                ${CMAKE_CURRENT_SOURCE_DIR}/../protocol/${proto}.xml
+                ${GEN_DIR}/${proto}-protocol.c
+        COMMAND sed -i "s/^WL_PRIVATE //g" ${GEN_DIR}/${proto}-protocol.c
+        COMMAND sed -i "s/^extern const struct wl_interface/extern __attribute__((visibility(\"default\"))) const struct wl_interface/" ${GEN_DIR}/${proto}-protocol.c
+        DEPENDS ${CMAKE_CURRENT_SOURCE_DIR}/../protocol/${proto}.xml
+        VERBATIM)
+    target_sources(voiceinput PRIVATE ${GEN_DIR}/${proto}-protocol.c)
+endforeach()
 target_include_directories(voiceinput PRIVATE ${GEN_DIR})
 target_link_libraries(voiceinput PRIVATE wayland-client)
 set_target_properties(voiceinput PROPERTIES PREFIX "")

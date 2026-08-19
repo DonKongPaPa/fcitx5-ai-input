@@ -5,6 +5,9 @@
 
 namespace fcitx {
 
+// 模型目录解析（voiceinput.cpp 健康检查共用）
+std::string resolveSherpaModelDir(const VoiceInputConfig *config);
+
 /**
  * sherpa-onnx CPU 流式引擎（实验 004 结论产品化）。
  *
