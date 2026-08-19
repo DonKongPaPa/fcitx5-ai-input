@@ -379,6 +379,7 @@ if [ -d "${VOICEINPUT_SHERPA_MODEL_DIR:-/nonexistent}" ]; then
     sleep 2
     WAV=/samples/中文测试-16k.wav
     [ -f "$WAV" ] || WAV=$(ls /samples/*.wav 2>/dev/null | head -1 || true)
+    r15_mark=$(wc -l < "$FCITX_LOG")
     call SimulateKey "Control+Control_R" true >/dev/null 2>&1 || true; sleep 0.8
     [ -n "$WAV" ] && play_to_mic "$WAV" &
     PLAY_PID=$!
@@ -388,8 +389,9 @@ if [ -d "${VOICEINPUT_SHERPA_MODEL_DIR:-/nonexistent}" ]; then
     sleep 0.5
     call SimulateKey "Control+Control_R" false >/dev/null 2>&1 || true
     sleep 3
-    sherpa_partial="$(grep -a "\[ui\] partial" "$FCITX_LOG" | tail -1 | sed 's/.*partial: //' || true)"
-    sherpa_final="$(grep -aE "\[ui\] (committed|result)" "$FCITX_LOG" | tail -1 | sed 's/.*\[ui\] [a-z]*: //' || true)"
+    r15_win="$(tail -n +$((r15_mark+1)) "$FCITX_LOG")"
+    sherpa_partial="$(printf '%s' "$r15_win" | grep -a "\[ui\] partial" | tail -1 | sed 's/.*partial: //' || true)"
+    sherpa_final="$(printf '%s' "$r15_win" | grep -aE "\[ui\] (committed|result)" | tail -1 | sed 's/.*\[ui\] [a-z]*: //' || true)"
     if [ -n "$sherpa_partial" ] || [ -n "$sherpa_final" ]; then
         record r15-sherpa-engine pass "Sherpa 识别：partial「$sherpa_partial」final「$sherpa_final」"
     else
@@ -399,6 +401,12 @@ if [ -d "${VOICEINPUT_SHERPA_MODEL_DIR:-/nonexistent}" ]; then
     gdbus call --session --dest org.fcitx.Fcitx5 --object-path /controller \
         --method org.fcitx.Fcitx.Controller1.SetConfig \
         "fcitx://config/addon/voiceinput" "<{'AsrEngine': <'Dummy'>}>" >/dev/null 2>&1 || true
+    # 收尾回 idle（Candidates 残留会把 r16 的触发键当选词吃掉——r16 会话整个不跑）
+    case "$(call State 2>/dev/null || true)" in *idle*) ;; *)
+        call SimulateKey "Control+Control_R" true >/dev/null 2>&1 || true
+        sleep 0.3
+        call SimulateKey "Control+Control_R" false >/dev/null 2>&1 || true
+        sleep 2;; esac
 else
     record r15-sherpa-engine pass "（跳过：模型未挂载）"
 fi
@@ -414,18 +422,23 @@ if [ -d "${VOICEINPUT_SHERPA_MODEL_DIR:-/nonexistent}" ] && [ -n "${CAGE_SOCK:-}
     sleep 2
     WAV=/samples/中文测试-16k.wav
     [ -f "$WAV" ] || WAV=$(ls /samples/*.wav 2>/dev/null | head -1 || true)
+    r16_mark=$(wc -l < "$FCITX_LOG")
     call SimulateKey "Control+Control_R" true >/dev/null 2>&1 || true
     sleep 0.6
     [ -n "$WAV" ] && play_to_mic "$WAV" &
     wait $! 2>/dev/null || true
     call SimulateKey "Control+Control_R" false >/dev/null 2>&1 || true  # 喂完立刻松
     sleep 3
-    r16_final="$(grep -a "committed" "$FCITX_LOG" | tail -1 | sed 's/.*committed: //' || true)"
+    r16_final="$(tail -n +$((r16_mark+1)) "$FCITX_LOG" | grep -a "committed" | tail -1 | sed 's/.*committed: //' || true)"
     kill "$R16_PID" 2>/dev/null || true
-    if [ "$r16_final" = "我们出去玩吧" ]; then
+    # 期望=paraformer 对该 wav 的基线（你好这是一段语音测试），
+    # 断言尾段「语音测试」——r16 的目的就是验证松键瞬间尾音不丢。
+    # 会话停在候选态：committed 需再按一次触发键选词，这里直接看候选文本
+    r16_final="$(printf '%s' "$(tail -n +$((r16_mark+1)) "$FCITX_LOG")" | grep -aE "\[ui\] (candidates|committed|result)" | tail -1 | sed 's/.*: //' || true)"
+    if printf '%s' "$r16_final" | grep -q '语音测试'; then
         record r16-tail-audio pass "松键后 final 完整（drain 生效）：「$r16_final」"
     else
-        record r16-tail-audio fail "final「$r16_final」过短（尾音被丢？）"
+        record r16-tail-audio fail "final「$r16_final」缺尾段（尾音被丢？）"
     fi
     gdbus call --session --dest org.fcitx.Fcitx5 --object-path /controller \
         --method org.fcitx.Fcitx.Controller1.SetConfig \
@@ -453,6 +466,7 @@ if [ -d "/models/sherpa-zipformer" ]; then
     sleep 2
     WAV=/samples/中文测试-16k.wav
     [ -f "$WAV" ] || WAV=$(ls /samples/*.wav 2>/dev/null | head -1 || true)
+    r20_mark=$(wc -l < "$FCITX_LOG")
     call SimulateKey "Control+Control_R" true >/dev/null 2>&1 || true; sleep 0.8
     [ -n "$WAV" ] && play_to_mic "$WAV" &
     PLAY_PID=$!
@@ -460,11 +474,12 @@ if [ -d "/models/sherpa-zipformer" ]; then
     wait "$PLAY_PID" 2>/dev/null || true
     call SimulateKey "Control+Control_R" false >/dev/null 2>&1 || true
     sleep 3
-    r20_final="$(grep -aE "\[ui\] (committed|result)" "$FCITX_LOG" | tail -1 | sed 's/.*\[ui\] [a-z]*: //' || true)"
+    r20_win="$(tail -n +$((r20_mark+1)) "$FCITX_LOG")"
+    r20_final="$(printf '%s' "$r20_win" | grep -aE "\[ui\] (candidates|committed|result)" | tail -1 | sed 's/.*: //' || true)"
     kill "$R20_PID" 2>/dev/null || true
-    if grep -aq "zipformer transducer" "$FCITX_LOG" && [ -n "$r20_final" ] && \
-       grep -aq "重建 recognizer" "$FCITX_LOG" && \
-       ! grep -aq "模型缺失.*sherpa-zipformer" "$FCITX_LOG"; then
+    if printf '%s' "$r20_win" | grep -aq "zipformer transducer" && [ -n "$r20_final" ] && \
+       printf '%s' "$r20_win" | grep -aq "重建 recognizer" && \
+       ! printf '%s' "$r20_win" | grep -aq "模型缺失.*sherpa-zipformer"; then
         record r20-sherpa-zipformer pass "zipformer 启动+识别+缓存重建：final「$r20_final」"
     else
         record r20-sherpa-zipformer fail "zipformer 未正确启动（final「$r20_final」；transducer/重建/缺失日志检查未全过）"
@@ -480,6 +495,46 @@ if [ -d "/models/sherpa-zipformer" ]; then
         sleep 2;; esac
 else
     record r20-sherpa-zipformer pass "（跳过：zipformer 模型未挂载）"
+fi
+
+# R21 SenseVoice 松手重识别（final 走离线模型：带标点，混说质量档）
+if [ -d "/models/sensevoice" ] && [ -d "/models/sherpa-zipformer" ]; then
+    gdbus call --session --dest org.fcitx.Fcitx5 --object-path /controller \
+        --method org.fcitx.Fcitx.Controller1.SetConfig \
+        "fcitx://config/addon/voiceinput" "<{'AsrEngine': <'Sherpa'>, 'SherpaModelDir': <'/models/sherpa-zipformer'>, 'SenseVoiceDir': <'/models/sensevoice'>}>" >/dev/null 2>&1 || true
+    sleep 0.5
+    "$DIST_BIN/$TESTAPP" >"$LOG_DIR/testapp-r21.log" 2>&1 &
+    R21_PID=$!
+    sleep 2
+    WAV=/samples/中文测试-16k.wav
+    [ -f "$WAV" ] || WAV=$(ls /samples/*.wav 2>/dev/null | head -1 || true)
+    r21_mark=$(wc -l < "$FCITX_LOG")
+    call SimulateKey "Control+Control_R" true >/dev/null 2>&1 || true; sleep 0.8
+    [ -n "$WAV" ] && play_to_mic "$WAV" &
+    PLAY_PID=$!
+    sleep 6
+    wait "$PLAY_PID" 2>/dev/null || true
+    call SimulateKey "Control+Control_R" false >/dev/null 2>&1 || true
+    sleep 3
+    r21_win="$(tail -n +$((r21_mark+1)) "$FCITX_LOG")"
+    r21_final="$(printf '%s' "$r21_win" | grep -aE "\[ui\] (candidates|committed|result)" | tail -1 | sed 's/.*: //' || true)"
+    r21_sv="$(printf '%s' "$r21_win" | grep -ac "SenseVoice final" || true)"
+    kill "$R21_PID" 2>/dev/null || true
+    if [ "$r21_sv" -ge 1 ] && printf '%s' "$r21_final" | grep -q '。'; then
+        record r21-sensevoice-final pass "final 走离线重识别（带标点）：「$r21_final」"
+    else
+        record r21-sensevoice-final fail "离线 final 未生效（final「$r21_final」，SenseVoice 日志 $r21_sv 次）"
+    fi
+    gdbus call --session --dest org.fcitx.Fcitx5 --object-path /controller \
+        --method org.fcitx.Fcitx.Controller1.SetConfig \
+        "fcitx://config/addon/voiceinput" "<{'AsrEngine': <'Dummy'>, 'SherpaModelDir': <''>, 'SenseVoiceDir': <''>}>" >/dev/null 2>&1 || true
+    case "$(call State 2>/dev/null || true)" in *idle*) ;; *)
+        call SimulateKey "Control+Control_R" true >/dev/null 2>&1 || true
+        sleep 0.3
+        call SimulateKey "Control+Control_R" false >/dev/null 2>&1 || true
+        sleep 2;; esac
+else
+    record r21-sensevoice-final pass "（跳过：sensevoice/zipformer 模型未挂载）"
 fi
 
 # R18 字体跟随（W4：classicui Font → fontconfig → Dart 加载）

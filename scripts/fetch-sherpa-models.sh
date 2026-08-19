@@ -18,15 +18,23 @@ set -euo pipefail
 
 # 模型选择：zipformer（默认，中英混说旗舰 transducer）/ paraformer（轻量）
 MODEL="zipformer"
-case "${1:-}" in zipformer|paraformer) MODEL="$1"; shift;; esac
+case "${1:-}" in zipformer|paraformer|sensevoice) MODEL="$1"; shift;; esac
 SHA256_PARAFORMER="5462a1fce42693deae572af1e8c4687124b12aa85fe61ff4d3168bb5280e205f"
 SHA256_ZIPFORMER="27ffbd9ee24ad186d99acc2f6354d7992b27bcab490812510665fa8f9389c5f8"
+SHA256_SENSEVOICE="f6b2a72ebcb1ac7a764d4cfccd886e6bcb2a95c4657c2199d0ba95ed4b9ea71a"
 BASE_URL="${SHERPA_MIRROR:-https://github.com}/k2-fsa/sherpa-onnx/releases/download"
 if [ "$MODEL" = zipformer ]; then
     URL="$BASE_URL/asr-models/sherpa-onnx-streaming-zipformer-bilingual-zh-en-2023-02-20.tar.bz2"
     SHA256="$SHA256_ZIPFORMER"
-    FILES="encoder-epoch-99-avg-1.onnx decoder-epoch-99-avg-1.int8.onnx joiner-epoch-99-avg-1.int8.onnx tokens.txt"
+    FILES="encoder-epoch-99-avg-1.onnx decoder-epoch-99-avg-1.onnx joiner-epoch-99-avg-1.onnx tokens.txt"
     SUBDIR="sherpa-onnx-streaming-zipformer-bilingual-zh-en-2023-02-20"
+elif [ "$MODEL" = sensevoice ]; then
+    # 离线 final 重识别模型（中英混说/标点/尾音更好，实验 005）。
+    # 压缩包 1G（含 fp32），只落盘 int8 两件
+    URL="$BASE_URL/asr-models/sherpa-onnx-sense-voice-zh-en-ja-ko-yue-2024-07-17.tar.bz2"
+    SHA256="$SHA256_SENSEVOICE"
+    FILES="model.int8.onnx tokens.txt"
+    SUBDIR="sherpa-onnx-sense-voice-zh-en-ja-ko-yue-2024-07-17"
 else
     URL="$BASE_URL/asr-models/sherpa-onnx-streaming-paraformer-bilingual-zh-en.tar.bz2"
     SHA256="$SHA256_PARAFORMER"

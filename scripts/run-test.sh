@@ -37,6 +37,7 @@ podman run --rm \
     -v "$ROOT/scripts:/scripts:ro" \
     -v "$ROOT/artifacts/dist:/opt/dist:ro" \
     -v "$ROOT/tests:/tests:ro" \
+    -v "$ROOT/artifacts/voice-samples:/samples:ro" \
     "${MODEL_ARGS[@]}" \
     -v "$OUT:/out" \
     -e ENV_NAME="$ENV_NAME" \

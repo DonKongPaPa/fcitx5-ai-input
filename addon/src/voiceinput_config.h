@@ -57,6 +57,14 @@ FCITX_CONFIGURATION(
         ""};
     Option<int> sherpaNumThreads{
         this, "SherpaNumThreads", "Sherpa 解码线程数", 4};
+    // 松手后用 SenseVoice 离线模型对整段重识别出 final（流式 partial 仍由
+    // 上面的流式模型驱动）。SenseVoice 对中英混说/标点/结尾完整度都显著
+    // 更好（实验 005）；留空 = 关闭，final 回落到流式结果
+    Option<std::string> senseVoiceDir{
+        this, "SenseVoiceDir",
+        "SenseVoice 离线模型目录（含 model.int8.onnx/tokens.txt，松手后整段"
+        "重识别提升中英混说与标点；留空 = 关闭；下载 scripts/fetch-sherpa-models.sh --model sensevoice）",
+        ""};
 
     // —— UI 字体（W4）——
     Option<std::string> uiFont{

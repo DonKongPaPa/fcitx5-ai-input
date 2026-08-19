@@ -141,13 +141,13 @@ std::string VoiceInputEngine::healthCheckJson(bool deep) {
         return access((mdir + "/" + f).c_str(), R_OK) == 0;
     };
     bool isZipformer =
-        !findModelFile(mdir, "joiner", true).empty();
+        !findModelFile(mdir, "joiner", false).empty();
     bool sEnc, sDec, sTok = fileOk("tokens.txt");
     std::string arch;
     if (isZipformer) {
         arch = "zipformer";
         sEnc = !findModelFile(mdir, "encoder", false).empty();
-        sDec = !findModelFile(mdir, "decoder", true).empty();
+        sDec = !findModelFile(mdir, "decoder", false).empty();
     } else {
         arch = "paraformer";
         sEnc = fileOk("encoder.int8.onnx");
@@ -163,8 +163,8 @@ std::string VoiceInputEngine::healthCheckJson(bool deep) {
         c.feat_config.feature_dim = 80;
         // 路径字符串必须存活到 Create 调用结束（c_str() 悬垂=config 错误）
         std::string enc = findModelFile(mdir, "encoder", !isZipformer);
-        std::string dec = findModelFile(mdir, "decoder", true);
-        std::string jn = findModelFile(mdir, "joiner", true);
+        std::string dec = findModelFile(mdir, "decoder", !isZipformer);
+        std::string jn = findModelFile(mdir, "joiner", false);
         if (isZipformer) {
             c.model_config.transducer.encoder = enc.c_str();
             c.model_config.transducer.decoder = dec.c_str();
@@ -222,12 +222,25 @@ std::string VoiceInputEngine::healthCheckJson(bool deep) {
       << "\",\"exists\":" << (access(gdir.c_str(), F_OK) == 0 ? "true" : "false")
       << "}";
 
+    // —— SenseVoice（Sherpa 松手重识别，可选）——
+    const std::string &svDir = config_.senseVoiceDir.value();
+    bool svOk = !svDir.empty() &&
+                access((svDir + "/model.int8.onnx").c_str(), R_OK) == 0 &&
+                access((svDir + "/tokens.txt").c_str(), R_OK) == 0;
+    j << ",\"sensevoice\":{\"dir\":\"" << esc(svDir) << "\",\"ok\":"
+      << (svOk ? "true" : "false") << ",\"enabled\":"
+      << (svDir.empty() ? "false" : "true") << "}";
+
     // —— 建议 ——
     std::string advice;
     switch (config_.asrEngine.value()) {
     case AsrEngineKind::Sherpa:
         if (!sEnc || !sDec || !sTok) {
             advice = "模型缺失：scripts/fetch-sherpa-models.sh 下载";
+        } else if (!svDir.empty() && !svOk) {
+            advice = "SenseVoice 目录配置了但模型缺失："
+                     "fetch-sherpa-models.sh --model sensevoice，"
+                     "或清空 SenseVoiceDir 关闭";
         } else {
             advice = "就绪";
         }

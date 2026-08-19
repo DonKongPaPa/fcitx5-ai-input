@@ -34,6 +34,7 @@ public:
 private:
     void finishSession(const std::string &text);
     void teardownAll();
+    void initOfflineRecognizer(const VoiceInputConfig *config);
 
     EventLoop *loop_ = nullptr;
     const VoiceInputConfig *config_ = nullptr;
@@ -48,6 +49,12 @@ private:
     std::string lastPartial_;
     bool firstChunk_ = true; // 首块延迟诊断（漏字定位）
     std::chrono::steady_clock::time_point startedAt_;
+
+    // —— SenseVoice 松手重识别（实验 005）——
+    // 流式 partial 的最终质量受流式模型上限约束（混说/标点/尾音），
+    // stop() 时对整段会话缓冲离线重识别出 final。
+    void *offlineRec_ = nullptr; // 进程级缓存（同 recognizer_ 纪律）
+    std::vector<float> sessionAudio_; // 会话全量音频（含尾部宽限）
 };
 
 } // namespace fcitx

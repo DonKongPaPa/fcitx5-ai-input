@@ -76,7 +76,9 @@ setup_virtual_mic() {
 
 play_to_mic() {
     local wav="$1"
-    pw-play --target "$VIRTUAL_MIC_SINK" "$wav" >"$LOG_DIR/pw-play.log" 2>&1
+    # case-driver 是 start-niri 的子进程，未 export 的 VIRTUAL_MIC_SINK
+    # 传不下去——默认 vi_mic 与 setup_virtual_mic 一致
+    pw-play --target "${VIRTUAL_MIC_SINK:-vi_mic}" "$wav" >"$LOG_DIR/pw-play.log" 2>&1
 }
 
 # fcitx5 守护进程（加载我们的 addon：dist 预先安装在容器 /opt/dist）
