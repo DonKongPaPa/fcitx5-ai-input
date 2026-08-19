@@ -167,6 +167,7 @@ private:
     TrackableObjectReference<InputContext> sessionIcRef_;
     bool toggleReleased_ = false; // Toggle 模式：起始按的键已松开
     std::unique_ptr<EventSourceTime> thresholdTimer_;
+    std::unique_ptr<EventSourceTime> tailTimer_; // 松开后尾音宽限 350ms
     std::unique_ptr<EventSourceTime> resultTimer_;
     std::unique_ptr<AsrEngine> asr_;
     std::string partial_;                 // 当前流式中间文本

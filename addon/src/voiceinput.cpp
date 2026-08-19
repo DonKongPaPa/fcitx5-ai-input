@@ -945,10 +945,21 @@ void VoiceInputEngine::beginRecording(InputContext *ic) {
 
 void VoiceInputEngine::finishRecording() {
     uiNotify("recording-stop");
-    if (asr_) {
-        asr_->stop(); // 触发 onFinish
-    } else {
-        onAsrFinish(partial_);
+    // 尾音宽限：parec/PulseAudio 链路还有 ~200-300ms 已采音频在路上，
+    // 且解码需要时间追平——立刻 stop 会截掉松开前的内容（漏字）。
+    // 期间保持 Recording（partial 继续推进），350ms 后取 final
+    tailTimer_ = instance_->eventLoop().addTimeEvent(
+        CLOCK_MONOTONIC, nowUs() + 350000, 0,
+        [this](EventSourceTime *, uint64_t) {
+            if (state_ == State::Recording && asr_) {
+                asr_->stop(); // 触发 onFinish（stop 内含管道 drain）
+            } else if (state_ == State::Recording) {
+                onAsrFinish(partial_);
+            }
+            return false;
+        });
+    if (tailTimer_) {
+        tailTimer_->setOneShot();
     }
 }
 
@@ -1022,6 +1033,7 @@ void VoiceInputEngine::enterIdle() {
     }
     state_ = State::Idle;
     thresholdTimer_.reset();
+    tailTimer_.reset();
     resultTimer_.reset();
     if (asr_) {
         asr_->stop();
