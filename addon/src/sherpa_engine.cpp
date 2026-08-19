@@ -73,9 +73,6 @@ void SherpaOnnxEngine::start(EventLoop *loop, const VoiceInputConfig *config,
         cachedRec = const_cast<SherpaOnnxOnlineRecognizer *>(
             SherpaOnnxCreateOnlineRecognizer(&c));
         cachedThreads = c.model_config.num_threads;
-        recognizerOwned_ = true;
-    } else {
-        recognizerOwned_ = false; // 复用缓存（析构不销毁）
     }
     recognizer_ = cachedRec;
     if (!recognizer_) {
@@ -184,11 +181,10 @@ void SherpaOnnxEngine::teardownAll() {
             static_cast<SherpaOnnxOnlineStream *>(stream_));
         stream_ = nullptr;
     }
-    if (recognizer_ && recognizerOwned_) {
-        SherpaOnnxDestroyOnlineRecognizer(
-            static_cast<SherpaOnnxOnlineRecognizer *>(recognizer_));
-    }
-    recognizer_ = nullptr; // 缓存的 recognizer 留给下个会话
+    // 缓存的 recognizer 永不随会话销毁：跨会话复用是它的使命；进程退出
+    // 由 OS 统一回收（会话 teardown 销毁会让 static 指针悬垂——第二段
+    // 语音 CreateOnlineStream 直接 SEGV，宿主机实测 235M core）
+    recognizer_ = nullptr;
     pending_.clear();
     lastPartial_.clear();
 }

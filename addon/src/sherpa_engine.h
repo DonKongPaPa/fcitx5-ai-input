@@ -41,8 +41,7 @@ private:
 
     std::unique_ptr<class AudioCapture> capture_;
     // sherpa C API 不透明句柄
-    void *recognizer_ = nullptr;
-    bool recognizerOwned_ = false; // 缓存复用时 false（不随会话销毁）
+    void *recognizer_ = nullptr; // 进程级缓存（见 cpp，不随会话销毁）
     void *stream_ = nullptr;
     std::vector<float> pending_; // s16→float 攒 ~100ms（1600 样本）
     std::string lastPartial_;
