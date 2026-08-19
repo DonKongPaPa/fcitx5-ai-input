@@ -13,7 +13,11 @@
                       │     累积窗口流式：每 720ms 全量重识别 + 剪尾）
                       │   · FunASRLocal（GGUF 本地档）：录音落盘 wav →
                       │     llama-funasr-cli 子进程（zh/en/ja 非流式，CPU ~1.5G）
-                      │   · Dummy（调试/管线确定性回归）
+                      │   · Sherpa（CPU 流式档）：进程内直链 sherpa-onnx v1.13.6 C API +
+     双语 paraformer int8（实验 004：RSS 412MB/首字 0.07s/RTF 0.04/
+     **0 显存常驻**——模型不进包，scripts/fetch-sherpa-models.sh 下载，
+     sha256 钉死；引擎切换在 configtool）
+   · Dummy（调试/管线确定性回归）
                       │
                       │ MethodChannel 'fcitx5/flutterui'（JSONMethodCodec）
                       ▼
