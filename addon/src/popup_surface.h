@@ -123,6 +123,7 @@ private:
     zwp_input_method_v2 *im_ = nullptr; // 借用：waylandim 所有
     zwp_input_popup_surface_v2 *popup_ = nullptr;
     wl_surface *surface_ = nullptr;
+    void *surfaceCompat_ = nullptr; // WlSurface wrapper 布局占位（见 cpp）
     TrackableObjectReference<InputContext> icRef_; // popup 所属 IC
 
     // 指针路由状态

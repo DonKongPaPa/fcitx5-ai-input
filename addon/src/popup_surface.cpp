@@ -151,6 +151,7 @@ VoicePopup::VoicePopup(Instance *instance) : instance_(instance) {
                 // 连接已死：只清指针，不 destroy（对象已随 display 失效）
                 std::lock_guard<std::mutex> lock(mutex_);
                 surface_ = nullptr;
+                surfaceCompat_ = nullptr;
                 popup_ = nullptr;
                 im_ = nullptr;
                 pool_ = nullptr;
@@ -278,6 +279,16 @@ bool VoicePopup::ensurePopup(InputContext *ic) {
     }
 
     surface_ = wl_compositor_create_surface(compositor_);
+    // fcitx wayland C++ wrapper 兼容层（宿主机崩溃修复）：classicui 等
+    // 组件的 wl_pointer enter thunk 会把 wl_surface 的 user_data 直接
+    // reinterpret 成 fcitx::wayland::WlSurface* 再读 userData_（+0x48）。
+    // 裸 C API 创建的 proxy user_data=NULL → 经典 UI 解引用 NULL 直接
+    // SIGSEGV（实测：鼠标进入本 popup 必崩）。挂一块与 WlSurface 布局
+    // 等大的零填充占位：userData_ 偏移处为 0 → 对方的 if(!window) return
+    // 路径安全返回。字段只读这一个偏移，其余不参与跨组件调用。
+    surfaceCompat_ = calloc(1, 0x58);
+    wl_proxy_set_user_data(reinterpret_cast<wl_proxy *>(surface_),
+                            surfaceCompat_);
     popup_ = zwp_input_method_v2_get_input_popup_surface(im_, surface_);
     zwp_input_popup_surface_v2_add_listener(popup_, &kPopupListener, this);
     icRef_ = ic->watch();
@@ -294,6 +305,10 @@ void VoicePopup::destroyPopupSurface() {
     if (surface_) {
         wl_surface_destroy(surface_);
         surface_ = nullptr;
+    }
+    if (surfaceCompat_) {
+        free(surfaceCompat_);
+        surfaceCompat_ = nullptr;
     }
 }
 
