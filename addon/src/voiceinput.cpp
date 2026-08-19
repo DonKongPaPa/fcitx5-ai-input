@@ -135,27 +135,44 @@ std::string VoiceInputEngine::healthCheckJson(bool deep) {
     j << "\"engine\":\"" << AsrEngineKindToString(config_.asrEngine.value())
       << "\"";
 
-    // —— Sherpa ——
+    // —— Sherpa（双架构：joiner 存在 = zipformer，否则 paraformer）——
     std::string mdir = resolveSherpaModelDir(&config_);
     auto fileOk = [&mdir](const char *f) {
         return access((mdir + "/" + f).c_str(), R_OK) == 0;
     };
-    bool sEnc = fileOk("encoder.int8.onnx"), sDec = fileOk("decoder.int8.onnx"),
-         sTok = fileOk("tokens.txt");
-    j << ",\"sherpa\":{\"model_dir\":\"" << esc(mdir)
-      << "\",\"files\":{\"encoder.int8.onnx\":" << (sEnc ? "true" : "false")
-      << ",\"decoder.int8.onnx\":" << (sDec ? "true" : "false")
-      << ",\"tokens.txt\":" << (sTok ? "true" : "false") << "}";
+    bool isZipformer =
+        !findModelFile(mdir, "joiner", true).empty();
+    bool sEnc, sDec, sTok = fileOk("tokens.txt");
+    std::string arch;
+    if (isZipformer) {
+        arch = "zipformer";
+        sEnc = !findModelFile(mdir, "encoder", false).empty();
+        sDec = !findModelFile(mdir, "decoder", true).empty();
+    } else {
+        arch = "paraformer";
+        sEnc = fileOk("encoder.int8.onnx");
+        sDec = fileOk("decoder.int8.onnx");
+    }
+    j << ",\"sherpa\":{\"model_dir\":\"" << esc(mdir) << "\",\"arch\":\""
+      << arch << "\",\"ok\":" << ((sEnc && sDec && sTok) ? "true" : "false");
     if (deep && sEnc && sDec && sTok && state_ == State::Idle) {
         // 试加载（~1s，会话中跳过）
         SherpaOnnxOnlineRecognizerConfig c = {};
-        std::string enc = mdir + "/encoder.int8.onnx";
-        std::string dec = mdir + "/decoder.int8.onnx";
         std::string tok = mdir + "/tokens.txt";
         c.feat_config.sample_rate = 16000;
         c.feat_config.feature_dim = 80;
-        c.model_config.paraformer.encoder = enc.c_str();
-        c.model_config.paraformer.decoder = dec.c_str();
+        // 路径字符串必须存活到 Create 调用结束（c_str() 悬垂=config 错误）
+        std::string enc = findModelFile(mdir, "encoder", !isZipformer);
+        std::string dec = findModelFile(mdir, "decoder", true);
+        std::string jn = findModelFile(mdir, "joiner", true);
+        if (isZipformer) {
+            c.model_config.transducer.encoder = enc.c_str();
+            c.model_config.transducer.decoder = dec.c_str();
+            c.model_config.transducer.joiner = jn.c_str();
+        } else {
+            c.model_config.paraformer.encoder = enc.c_str();
+            c.model_config.paraformer.decoder = dec.c_str();
+        }
         c.model_config.tokens = tok.c_str();
         c.model_config.num_threads = config_.sherpaNumThreads.value();
         c.model_config.provider = "cpu";

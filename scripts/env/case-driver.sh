@@ -430,6 +430,12 @@ if [ -d "${VOICEINPUT_SHERPA_MODEL_DIR:-/nonexistent}" ] && [ -n "${CAGE_SOCK:-}
     gdbus call --session --dest org.fcitx.Fcitx5 --object-path /controller \
         --method org.fcitx.Fcitx.Controller1.SetConfig \
         "fcitx://config/addon/voiceinput" "<{'AsrEngine': <'Dummy'>}>" >/dev/null 2>&1 || true
+    # 收尾回 idle（Candidates 残留会跳过 r19 的 deep 检查）
+    case "$(call State 2>/dev/null || true)" in *idle*) ;; *)
+        call SimulateKey "Control+Control_R" true >/dev/null 2>&1 || true
+        sleep 0.3
+        call SimulateKey "Control+Control_R" false >/dev/null 2>&1 || true
+        sleep 2;; esac
 else
     record r16-tail-audio pass "（跳过：无模型/音频环境）"
 fi

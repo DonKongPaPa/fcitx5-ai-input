@@ -9,11 +9,46 @@
 
 #include <chrono>
 #include <cstdlib>
+#include <dirent.h>
 #include <cstring>
 
 namespace fcitx {
 
 // 模型目录解析：config 覆盖 → env → 用户默认 → 系统共享路径
+// 目录内按前缀找模型文件：preferInt8 时优先 *.int8.onnx，否则任意 .onnx。
+// zipformer 的文件名带 epoch（encoder-epoch-99-avg-1.onnx），通配匹配
+std::string findModelFile(const std::string &dir, const char *prefix,
+                          bool preferInt8) {
+    DIR *d = opendir(dir.c_str());
+    if (!d) {
+        return "";
+    }
+    std::string best, bestInt8;
+    struct dirent *e;
+    while ((e = readdir(d)) != nullptr) {
+        std::string n = e->d_name;
+        if (n.size() < 5 || n.substr(n.size() - 5) != ".onnx" ||
+            n.rfind(prefix, 0) != 0) {
+            continue;
+        }
+        if (n.find(".int8.onnx") != std::string::npos) {
+            if (bestInt8.empty() || n < bestInt8) {
+                bestInt8 = n;
+            }
+        } else if (best.empty() || n < best) {
+            best = n;
+        }
+    }
+    closedir(d);
+    if (preferInt8 && !bestInt8.empty()) {
+        return dir + "/" + bestInt8;
+    }
+    if (!best.empty()) {
+        return dir + "/" + best;
+    }
+    return !bestInt8.empty() ? dir + "/" + bestInt8 : "";
+}
+
 std::string resolveSherpaModelDir(const VoiceInputConfig *config) {
     const auto &cfgDir = config->sherpaModelDir.value();
     if (!cfgDir.empty()) {
@@ -51,11 +86,23 @@ void SherpaOnnxEngine::start(EventLoop *loop, const VoiceInputConfig *config,
     }
 
     // —— 配置（对齐实验 004 的 python 参数：16k/80 维/4 线程/cpu）——
+    // 双架构：目录有 joiner*.int8.onnx → zipformer transducer（中英混说
+    // 旗舰）；否则 paraformer（encoder.int8+decoder.int8）
     SherpaOnnxOnlineRecognizerConfig c = {};
     c.feat_config.sample_rate = 16000;
     c.feat_config.feature_dim = 80;
-    c.model_config.paraformer.encoder = encoder.c_str();
-    c.model_config.paraformer.decoder = decoder.c_str();
+    std::string joiner = findModelFile(dir, "joiner", true);
+    std::string zfEnc = findModelFile(dir, "encoder", false); // fp32 encoder
+    std::string zfDec = findModelFile(dir, "decoder", true);
+    if (!joiner.empty() && !zfEnc.empty() && !zfDec.empty()) {
+        c.model_config.transducer.encoder = zfEnc.c_str();
+        c.model_config.transducer.decoder = zfDec.c_str();
+        c.model_config.transducer.joiner = joiner.c_str();
+        FCITX_INFO() << "Sherpa: zipformer transducer（双语混说档）";
+    } else {
+        c.model_config.paraformer.encoder = encoder.c_str();
+        c.model_config.paraformer.decoder = decoder.c_str();
+    }
     c.model_config.tokens = tokens.c_str();
     c.model_config.num_threads = config->sherpaNumThreads.value();
     c.model_config.provider = "cpu";
@@ -95,8 +142,20 @@ void SherpaOnnxEngine::start(EventLoop *loop, const VoiceInputConfig *config,
     FCITX_INFO() << "Sherpa: 模型就绪（加载 " << loadMs << "ms，threads="
                  << config->sherpaNumThreads.value() << "）";
 
+    firstChunk_ = true;
+    startedAt_ = std::chrono::steady_clock::now();
     capture_ = std::make_unique<AudioCapture>();
     if (!capture_->start(loop_, [this](const uint8_t *d, size_t n) {
+            if (firstChunk_) {
+                firstChunk_ = false;
+                FCITX_INFO() << "Sherpa: 首块音频到达（begin 后 "
+                             << std::chrono::duration_cast<
+                                    std::chrono::milliseconds>(
+                                    std::chrono::steady_clock::now() -
+                                    startedAt_)
+                                    .count()
+                             << "ms，>200ms 说明开头丢字源于采集启动延迟）";
+            }
             // s16le → float，攒 ~100ms（1600 样本）喂一窗（比实验的 0.6s
             // 窗更细——partial 出字更快，解码开销同量级）
             const auto *s16 = reinterpret_cast<const int16_t *>(d);

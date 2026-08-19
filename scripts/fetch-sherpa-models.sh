@@ -16,11 +16,25 @@
 # 上游重传会导致校验失败——此时需人工核对模型后更新本脚本的 SHA256。
 set -euo pipefail
 
-SHA256="5462a1fce42693deae572af1e8c4687124b12aa85fe61ff4d3168bb5280e205f"
+# 模型选择：zipformer（默认，中英混说旗舰 transducer）/ paraformer（轻量）
+MODEL="zipformer"
+case "${1:-}" in zipformer|paraformer) MODEL="$1"; shift;; esac
+SHA256_PARAFORMER="5462a1fce42693deae572af1e8c4687124b12aa85fe61ff4d3168bb5280e205f"
+SHA256_ZIPFORMER="27ffbd9ee24ad186d99acc2f6354d7992b27bcab490812510665fa8f9389c5f8"
 BASE_URL="${SHERPA_MIRROR:-https://github.com}/k2-fsa/sherpa-onnx/releases/download"
-URL="$BASE_URL/asr-models/sherpa-onnx-streaming-paraformer-bilingual-zh-en.tar.bz2"
+if [ "$MODEL" = zipformer ]; then
+    URL="$BASE_URL/asr-models/sherpa-onnx-streaming-zipformer-bilingual-zh-en-2023-02-20.tar.bz2"
+    SHA256="$SHA256_ZIPFORMER"
+    FILES="encoder-epoch-99-avg-1.onnx decoder-epoch-99-avg-1.int8.onnx joiner-epoch-99-avg-1.int8.onnx tokens.txt"
+    SUBDIR="sherpa-onnx-streaming-zipformer-bilingual-zh-en-2023-02-20"
+else
+    URL="$BASE_URL/asr-models/sherpa-onnx-streaming-paraformer-bilingual-zh-en.tar.bz2"
+    SHA256="$SHA256_PARAFORMER"
+    FILES="encoder.int8.onnx decoder.int8.onnx tokens.txt"
+    SUBDIR="sherpa-onnx-streaming-paraformer-bilingual-zh-en"
+fi
 
-DEST="$HOME/.local/share/fcitx5-voiceinput/models/sherpa-paraformer"
+DEST="$HOME/.local/share/fcitx5-voiceinput/models/sherpa-$MODEL"
 FROM_LOCAL=""
 
 while [[ $# -gt 0 ]]; do
@@ -31,18 +45,20 @@ while [[ $# -gt 0 ]]; do
     esac
 done
 
-if [[ -f "$DEST/tokens.txt" && -f "$DEST/encoder.int8.onnx" &&
-      -f "$DEST/decoder.int8.onnx" ]]; then
-    echo "模型已齐: $DEST"
+all_present() {
+    for f in $FILES; do [[ -f "$DEST/$f" ]] || return 1; done
+}
+if all_present; then
+    echo "模型已齐: $DEST（$MODEL）"
     exit 0
 fi
 
 install_files() {  # $1 = 源目录
     mkdir -p "$DEST"
-    for f in tokens.txt encoder.int8.onnx decoder.int8.onnx; do
+    for f in $FILES; do
         [[ -f "$1/$f" ]] || { echo "!! 源目录缺 $f: $1" >&2; exit 1; }
     done
-    cp "$1/tokens.txt" "$1/encoder.int8.onnx" "$1/decoder.int8.onnx" "$DEST/"
+    for f in $FILES; do cp "$1/$f" "$DEST/"; done
 }
 
 if [[ -n "$FROM_LOCAL" ]]; then
@@ -58,7 +74,7 @@ fi
 
 TMP=$(mktemp -d)
 trap 'rm -rf "$TMP"' EXIT
-echo "下载 $URL（约 1GB，含未用的 fp32 变体）"
+echo "下载 $MODEL 模型（$URL）"
 curl -fL "$URL" -o "$TMP/model.tar.bz2"
 
 actual=$(sha256sum "$TMP/model.tar.bz2" | cut -d' ' -f1)
@@ -69,5 +85,5 @@ if [[ "$actual" != "$SHA256" ]]; then
 fi
 
 tar xf "$TMP/model.tar.bz2" -C "$TMP"
-install_files "$TMP"/sherpa-onnx-streaming-paraformer-bilingual-zh-en
+install_files "$TMP/$SUBDIR"
 echo "完成: $DEST（$(du -sh "$DEST" | cut -f1)）"

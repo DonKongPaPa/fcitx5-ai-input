@@ -7,6 +7,7 @@ namespace fcitx {
 
 // 模型目录解析（voiceinput.cpp 健康检查共用）
 std::string resolveSherpaModelDir(const VoiceInputConfig *config);
+std::string findModelFile(const std::string &dir, const char *prefix, bool preferInt8);
 
 /**
  * sherpa-onnx CPU 流式引擎（实验 004 结论产品化）。
@@ -45,6 +46,8 @@ private:
     void *stream_ = nullptr;
     std::vector<float> pending_; // s16→float 攒 ~100ms（1600 样本）
     std::string lastPartial_;
+    bool firstChunk_ = true; // 首块延迟诊断（漏字定位）
+    std::chrono::steady_clock::time_point startedAt_;
 };
 
 } // namespace fcitx
