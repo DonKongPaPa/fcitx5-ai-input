@@ -13,6 +13,7 @@
 #include <fcitx/instance.h>
 #include <fcitx-utils/trackableobject.h>
 
+#include <atomic>
 #include <memory>
 
 namespace fcitx {
@@ -104,6 +105,12 @@ public:
     std::string healthCheckJson(bool deep); // TestService::HealthCheck 调
     std::string resolveUiFont();
     void sendFontToUi();
+    // 字体解析后台线程 → pipe 唤醒主循环（fontconfig 锁与 pango 死锁）
+    int fontPipe_[2] = {-1, -1};
+    std::unique_ptr<EventSourceIO> fontIo_;
+    std::mutex fontMutex_;
+    std::string fontJson_;
+    std::atomic<bool> fontResolving_{false};
     void deferredMetrics(int w, int h);
     std::unique_ptr<EventSourceTime> metricsTimer_;
     int pendingMW_ = 64, pendingMH_ = 64;

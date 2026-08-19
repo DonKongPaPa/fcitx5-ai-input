@@ -64,8 +64,20 @@ void SherpaOnnxEngine::start(EventLoop *loop, const VoiceInputConfig *config,
     c.enable_endpoint = 0; // 按键控录音：不需要 VAD 断句
 
     const auto t0 = std::chrono::steady_clock::now();
-    recognizer_ = const_cast<SherpaOnnxOnlineRecognizer *>(
-        SherpaOnnxCreateOnlineRecognizer(&c));
+    // recognizer 常驻缓存：模型加载 ~0.9s，若每会话新建会在按键瞬间
+    // 阻塞主循环（grab 下全部键盘输入冻结——宿主机实测"打不了字"）。
+    // 进程级单例，stream 才是会话级
+    static SherpaOnnxOnlineRecognizer *cachedRec = nullptr;
+    static int cachedThreads = 0;
+    if (!cachedRec || cachedThreads != c.model_config.num_threads) {
+        cachedRec = const_cast<SherpaOnnxOnlineRecognizer *>(
+            SherpaOnnxCreateOnlineRecognizer(&c));
+        cachedThreads = c.model_config.num_threads;
+        recognizerOwned_ = true;
+    } else {
+        recognizerOwned_ = false; // 复用缓存（析构不销毁）
+    }
+    recognizer_ = cachedRec;
     if (!recognizer_) {
         FCITX_WARN() << "Sherpa: 创建 recognizer 失败（模型损坏？）";
         finishSession("");
@@ -172,11 +184,11 @@ void SherpaOnnxEngine::teardownAll() {
             static_cast<SherpaOnnxOnlineStream *>(stream_));
         stream_ = nullptr;
     }
-    if (recognizer_) {
+    if (recognizer_ && recognizerOwned_) {
         SherpaOnnxDestroyOnlineRecognizer(
             static_cast<SherpaOnnxOnlineRecognizer *>(recognizer_));
-        recognizer_ = nullptr;
     }
+    recognizer_ = nullptr; // 缓存的 recognizer 留给下个会话
     pending_.clear();
     lastPartial_.clear();
 }

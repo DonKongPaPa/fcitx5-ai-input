@@ -23,6 +23,7 @@
 
 #include <chrono>
 #include <sstream>
+#include <thread>
 
 #include <fontconfig/fontconfig.h>
 #include <fcitx-utils/standardpath.h>
@@ -443,7 +444,12 @@ VoiceInputEngine::VoiceInputEngine(Instance *instance)
                  << ")——全局热键模式，与其他输入法共存";
 }
 
-VoiceInputEngine::~VoiceInputEngine() = default;
+VoiceInputEngine::~VoiceInputEngine() {
+    // 故意泄漏 VoicePopup：addon unload 后 wayland display 仍会 dispatch
+    // 若干轮（fractional scale/output 事件），销毁对象会让回调打进已释放
+    // 内存（SIGTERM 退出 SEGV，宿主机实测）。进程退出统一回收
+    (void)popup_.release();
+}
 
 AddonInstance *VoiceInputEngineFactory::create(AddonManager *manager) {
     return new VoiceInputEngine(manager->instance());
@@ -625,16 +631,52 @@ std::string VoiceInputEngine::resolveUiFont() {
     return j.str();
 }
 
-// W4：字体跟随下发（classicui Font → fontconfig 文件 → Dart FontLoader）
+// W4：字体跟随下发（classicui Font → fontconfig 文件 → Dart FontLoader）。
+// 解析必须放后台线程：fontconfig 全局锁与 classicui/pango 的字体线程
+// 互等——主循环同步调 FcInitLoadConfigAndFonts 会死锁（宿主机实测主线程
+// 与 [pango] fontcon 双双 futex 等待，键盘输入全冻结）
 void VoiceInputEngine::sendFontToUi() {
-    if (!flutter_ || !flutter_->running()) {
+    if (!flutter_ || !flutter_->running() || fontResolving_) {
         return;
     }
-    std::string font = resolveUiFont();
-    if (font.length() > 4) { // 非 "{}"
-        flutter_->sendUpdate("{\"state\":\"font\"," + font.substr(1));
-        FCITX_INFO() << "VoiceInput: UI 字体 → " << font;
+    fontResolving_ = true;
+    // 结果经 pipe 唤醒主循环下发（EventSourceIO）
+    if (fontPipe_[1] < 0 && pipe(fontPipe_) != 0) {
+        fontResolving_ = false;
+        return;
     }
+    // 读端非阻塞：IO 回调里的排空循环靠 EAGAIN 返回，否则第二次 read
+    // 会把主循环卡死在管道上（容器实测 State 全超时）
+    int fl = fcntl(fontPipe_[0], F_GETFL);
+    fcntl(fontPipe_[0], F_SETFL, fl | O_NONBLOCK);
+    fontIo_ = instance_->eventLoop().addIOEvent(
+        fontPipe_[0], IOEventFlag::In,
+        [this](EventSourceIO *, int fd, IOEventFlags) {
+            char buf[64];
+            while (read(fd, buf, sizeof(buf)) > 0) {
+            }
+            fontIo_.reset();
+            std::string json;
+            {
+                std::lock_guard<std::mutex> lock(fontMutex_);
+                json = std::move(fontJson_);
+            }
+            fontResolving_ = false;
+            if (json.length() > 4) {
+                flutter_->sendUpdate("{\"state\":\"font\"," + json.substr(1));
+                FCITX_INFO() << "VoiceInput: UI 字体 → " << json;
+            }
+            return true;
+        });
+    std::thread([this] {
+        std::string json = resolveUiFont();
+        {
+            std::lock_guard<std::mutex> lock(fontMutex_);
+            fontJson_ = std::move(json);
+        }
+        char one = 1;
+        (void)!write(fontPipe_[1], &one, 1);
+    }).detach();
 }
 
 // metrics 更新统一 defer（防 dispatch/平台回调上下文重入引擎锁）
