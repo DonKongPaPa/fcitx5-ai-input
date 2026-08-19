@@ -593,6 +593,49 @@ else
     record r22-layer-top-center pass "（跳过：无 cage/grim 环境）"
 fi
 
+# R23 top 模式可见态交互（chromium 回退的完整闭环）：候选态卡片 hover +
+# 点击选词——r22 只测了隐藏后穿透，这里测可见时输入区确实恢复（用户实测
+# 回归：加空输入区后 hover/点击全失效）
+if [ -n "${CAGE_SOCK:-}" ] && command -v virtpoint >/dev/null 2>&1 && \
+   [ -x "$DIST_BIN/virtpoint" ]; then
+    gdbus call --session --dest org.fcitx.Fcitx5 --object-path /controller \
+        --method org.fcitx.Fcitx.Controller1.SetConfig \
+        "fcitx://config/addon/voiceinput" "<{'PositionMode': <'top'>}>" >/dev/null 2>&1 || true
+    sleep 0.5
+    "$DIST_BIN/$TESTAPP" >"$LOG_DIR/testapp-r23.log" 2>&1 &
+    R23_PID=$!
+    sleep 2
+    r23_mark=$(wc -l < "$FCITX_LOG")
+    call SimulateKey "Control+Control_R" true >/dev/null 2>&1 || true
+    sleep 0.8
+    call SimulateKey "Control+Control_R" false >/dev/null 2>&1 || true
+    sleep 2.5  # Dummy 引擎吐字 + 进候选态（卡片可见，顶部居中）
+    # hover：移到卡片候选行 1 区域（顶部居中 ≈640,110）
+    "$DIST_BIN/virtpoint" move 640 110 1280 720 2>/dev/null || true
+    sleep 0.6
+    "$DIST_BIN/virtpoint" click left 2>/dev/null || true
+    sleep 1.5
+    r23_win="$(tail -n +$((r23_mark+1)) "$FCITX_LOG")"
+    r23_click="$(printf '%s' "$r23_win" | grep -ac 'mouse-click-row' || true)"
+    r23_commit="$(printf '%s' "$r23_win" | grep -ac 'committed' || true)"
+    kill "$R23_PID" 2>/dev/null || true
+    if [ "$r23_click" -ge 1 ] && [ "$r23_commit" -ge 1 ]; then
+        record r23-top-card-interact pass "top 模式可见态：hover+点击选词闭环（click=$r23_click commit=$r23_commit）"
+    else
+        record r23-top-card-interact fail "可见态交互失效（click=$r23_click commit=$r23_commit——输入区未随显示恢复？）"
+    fi
+    gdbus call --session --dest org.fcitx.Fcitx5 --object-path /controller \
+        --method org.fcitx.Fcitx.Controller1.SetConfig \
+        "fcitx://config/addon/voiceinput" "<{'PositionMode': <'auto'>}>" >/dev/null 2>&1 || true
+    case "$(call State 2>/dev/null || true)" in *idle*) ;; *)
+        call SimulateKey "Control+Control_R" true >/dev/null 2>&1 || true
+        sleep 0.3
+        call SimulateKey "Control+Control_R" false >/dev/null 2>&1 || true
+        sleep 2;; esac
+else
+    record r23-top-card-interact pass "（跳过：无 virtpoint 环境）"
+fi
+
 # R18 字体跟随（W4：classicui Font → fontconfig → Dart 加载）
 printf 'Font="Noto Sans CJK SC 12"\n' >> /home/testuser/.config/fcitx5/conf/classicui.conf 2>/dev/null || true
 gdbus call --session --dest org.fcitx.Fcitx5 --object-path /controller \

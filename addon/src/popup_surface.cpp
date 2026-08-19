@@ -180,6 +180,10 @@ void VoicePopup::pointerEnter(void *data, wl_pointer *, uint32_t,
     auto *s = static_cast<VoicePopup *>(data);
     s->ptrX_ = wl_fixed_to_int(sx);
     s->ptrY_ = wl_fixed_to_int(sy);
+    FCITX_INFO() << "VoicePopup: pointer enter surface=" << surface
+                 << "（ours=" << s->surface_ << "）at "
+                 << s->ptrX_ << "," << s->ptrY_
+                 << (surface == s->surface_ ? " [命中]" : " [非本卡片]");
     if (surface == s->surface_) {
         // niri 实测：IM popup 收得到 pointer enter（同 classicui 机制），
         // 坐标即面板局部（含阴影余量）——直接转发给 Flutter 引擎，
@@ -629,6 +633,15 @@ void VoicePopup::show(InputContext *ic) {
         cur_ = 1 - cur_;
         wl_display_flush(display_);
     }
+    // 恢复输入区：创建/隐藏时设为空 region（不可见不挡交互），show 时
+    // 恢复全量。surface state 随下一次 commit 生效（flutter 模式=首帧，
+    // 色块模式=下方立即 commit）。注意不能放在 pushFrameBGRA 的
+    // !visible_ 分支——那里是早退路径，show 已置 true，永远走不到
+    if (emptyRegion_) {
+        wl_surface_set_input_region(surface_, nullptr);
+        FCITX_INFO() << "VoicePopup: 输入区恢复全量（show，"
+                     << (topMode_ ? "layer" : "popup") << " 模式）";
+    }
     // flutter 模式：不主动 commit，等 UiBridge 首帧（无 buffer 不 map）
     visible_ = true;
 }
@@ -738,9 +751,6 @@ void VoicePopup::pushFrameBGRA(const uint8_t *bgra, int w, int h) {
     size_t bufSize = static_cast<size_t>(width_) * height_ * 4;
     // 引擎软渲输出即 wl_shm ARGB8888 小端字节序（BGRA），直接 memcpy
     memcpy(pixels_ + cur_ * bufSize, bgra, bufSize);
-    if (!visible_) { // 透明/隐藏 → 可见：恢复输入区（卡片可点选）
-        wl_surface_set_input_region(surface_, nullptr);
-    }
     wl_surface_attach(surface_, buffers_[cur_], 0, 0);
     damageSurface(surface_, compositorVersion_, width_, height_);
     wl_surface_commit(surface_);
