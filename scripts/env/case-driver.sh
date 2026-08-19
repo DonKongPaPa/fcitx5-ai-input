@@ -175,6 +175,7 @@ for _ in $(seq 1 60); do
     [ -n "$r4_actual" ] && break
     sleep 0.1
 done
+[ -n "$r4_actual" ] && sleep 1.2  # 录屏取证：捕到 Result 收尾/上屏后的画面
 if [ -n "${R4_REC_PID:-}" ]; then
     kill -INT "$R4_REC_PID" 2>/dev/null || true
     for _ in $(seq 1 20); do kill -0 "$R4_REC_PID" 2>/dev/null || break; sleep 0.3; done

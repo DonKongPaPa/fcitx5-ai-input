@@ -28,7 +28,14 @@ const double kMaxW = 420;
 // 超出边界 ~11px）；指针坐标是含余量的表面局部坐标，Padding 天然吸收
 const double kShadowPad = 12;
 
-void main() {
+Future<void> main() async {
+  WidgetsFlutterBinding.ensureInitialized();
+  // raw embedder 引擎不走 fontconfig（无系统字体 fallback），CJK 字体
+  // 打进 assets 并运行时注册（legacy `flutter build bundle` 不生成
+  // pubspec fonts: 的 FontManifest，故不走 theme.fontFamily 的静态解析）
+  final loader = FontLoader('NotoSansSC')
+    ..addFont(rootBundle.load('assets/fonts/NotoSansSC-Regular.otf'));
+  await loader.load();
   runApp(const VoiceUiApp());
 }
 
@@ -112,6 +119,9 @@ class VoiceUiApp extends StatelessWidget {
       title: 'voice_ui',
       theme: ThemeData(
         useMaterial3: true,
+        // raw embedder 无 fontconfig：CJK 用打包的 NotoSansSC（默认 Roboto
+        // 只覆盖拉丁，中文会 tofu）
+        fontFamily: 'NotoSansSC',
         colorScheme: ColorScheme.fromSeed(seedColor: const Color(0xFF6750A4)),
       ),
       home: const VoiceUiHome(),
@@ -256,6 +266,7 @@ class _VoiceUiHomeState extends State<VoiceUiHome> {
     final brightness = WidgetsBinding.instance.platformDispatcher.platformBrightness;
     return ThemeData(
       useMaterial3: true,
+      fontFamily: 'NotoSansSC',
       colorScheme: ColorScheme.fromSeed(seedColor: const Color(0xFF6750A4), brightness: brightness),
     );
   }
