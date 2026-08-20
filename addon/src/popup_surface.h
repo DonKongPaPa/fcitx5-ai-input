@@ -106,6 +106,10 @@ public:
     // 无意义）。调用方持锁或主循环单线程
     void beginPreeditProbe(InputContext *ic);
     void endPreeditProbe();
+    // 探针逐字打出（用户方案）：一次性整串 set 不稳定（组合只变一次，
+    // 报文可有可无）；逐字 = 每字一次组合变化 = 每字一次报文机会——
+    // 流式 partial 逐字必到已双向验证，同机制
+    void typeProbeNext(InputContext *ic);
     // 录音中把流式 partial 写进组合文本（探针挂着时）——组合增长逼
     // 应用持续重报矩形，卡片实时跟随文字
     void updatePreeditText(const std::string &text);
@@ -241,6 +245,8 @@ private:
                                // "top"），true=底部居中（默认，用户偏好）
     int popupAttachCount_ = 0; // popup 模式 attach 计数（>1 即重建）
     bool preeditProbeActive_ = false; // 预输入探针是否在挂
+    int probeTypingIdx_ = 0; // 探针逐字进度（5=打完/让位给 partial）
+    std::unique_ptr<EventSourceTime> probeTypeTimer_;
     // 应用级跟随知识（进程生命周期）：矩形事件或上屏记账成功过的程序
     // 名集合——重聚焦产生新 IC 时凭此首下即跟随（Electron 的 text-input
     // 按会话重建 IC，IC 级标志每次清零）

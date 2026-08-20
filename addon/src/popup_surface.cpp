@@ -458,25 +458,70 @@ void VoicePopup::beginPreeditProbe(InputContext *ic) {
     if (!ic || preeditProbeActive_) {
         return;
     }
-    // 可见组合文本（用户方案：雾凇拼音 F4 方案选单同款机制）。preedit
+    // 可见组合文本（用户方案）：雾凇拼音 F4 方案选单同款机制。preedit
     // 永不入文；录音中由 updatePreeditText 把流式 partial 灌进来——组
     // 合文本增长=打拼音的等价物，应用随文字增长持续重报矩形，卡片
-    // 实时跟随。上屏时 commitString 按协议替换 preedit
-    Text preedit("\u8bed\u97f3\u8f93\u5165\u4e2d");
+    // 实时跟随。上屏时 commitString 按协议替换 preedit。
+    // 逐字打出（用户方案 v2）：一次性整串的组合变化只有一次、报文
+    // 可有可无（触发不稳定）；逐字=每字一次组合变化=每字一次报文
+    // 机会——流式 partial 逐字必到已验证，同机制
+    static const char *const kProbe = "\u8bed\u97f3\u8f93\u5165\u4e2d"; // 语音输入中
+    Text preedit(std::string(kProbe, 3)); // 首字「语」
     ic->inputPanel().setClientPreedit(preedit);
     // updatePreedit 才会把 client preedit 推给应用（UpdatePreeditEvent →
     // waylandim）；updateUserInterface 只刷新 UI 插件——此前探针"无效"
     // 的真因（从未送达）
     ic->updatePreedit();
     preeditProbeActive_ = true;
+    probeTypingIdx_ = 1;
+    probeTypeTimer_.reset();
+    typeProbeNext(ic);
     FCITX_INFO() << "VoicePopup: 预输入探针已置（可见组合文本，逼应用重报光标矩形）";
 }
 
+static uint64_t nowUsSafe() {
+    return std::chrono::duration_cast<std::chrono::microseconds>(
+               std::chrono::steady_clock::now().time_since_epoch())
+        .count();
+}
+
+void VoicePopup::typeProbeNext(InputContext *ic) {
+    static const char *const kProbe =
+        "\u8bed\u97f3\u8f93\u5165\u4e2d"; // 语音输入中（每字 3 字节）
+    if (!ic || !preeditProbeActive_ || sawRealRect_ || probeTypingIdx_ >= 5) {
+        probeTypeTimer_.reset();
+        return;
+    }
+    if (probeTypeTimer_) {
+        probeTypeTimer_.reset();
+    }
+    const int idx = probeTypingIdx_;
+    probeTypeTimer_ = instance_->eventLoop().addTimeEvent(
+        CLOCK_MONOTONIC, nowUsSafe() + 40'000ull, 0,
+        [this, idx](EventSourceTime *, uint64_t) {
+            std::lock_guard<std::mutex> lock(mutex_);
+            probeTypeTimer_.reset();
+            if (auto *ic2 = icRef_.get()) {
+                if (preeditProbeActive_ && !sawRealRect_ &&
+                    probeTypingIdx_ == idx && idx < 5) {
+                    probeTypingIdx_ = idx + 1;
+                    std::string txt(std::string(kProbe, (idx + 1) * 3));
+                    ic2->inputPanel().setClientPreedit(Text(txt));
+                    ic2->updatePreedit(); // 每字一次组合变化=报文机会
+                    typeProbeNext(ic2);
+                }
+            }
+            return true;
+        });
+}
+
 void VoicePopup::endPreeditProbe() {
+    probeTypeTimer_.reset();
     if (!preeditProbeActive_) {
         return;
     }
     preeditProbeActive_ = false;
+    probeTypingIdx_ = 5;
     if (auto *ic = icRef_.get()) {
         ic->inputPanel().setClientPreedit(Text());
         ic->updatePreedit();
@@ -504,6 +549,8 @@ void VoicePopup::updatePreeditText(const std::string &text) {
     if (!preeditProbeActive_) {
         return;
     }
+    probeTypeTimer_.reset(); // partial 接管组合，逐字链让位
+    probeTypingIdx_ = 5;
     if (auto *ic = icRef_.get()) {
         ic->inputPanel().setClientPreedit(Text(text));
         ic->updatePreedit();
