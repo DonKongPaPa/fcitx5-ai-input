@@ -665,6 +665,14 @@ bool VoicePopup::ensurePopup(InputContext *ic, bool atShow) {
     // W3：viewport（物理 buffer → 逻辑显示）+ fractional scale（真实缩放值）
     if (viewporter_) {
         viewport_ = wp_viewporter_get_viewport(viewporter_, surface_);
+        // 关键：每个新 surface 的 viewport 必须立即设 destination。它原本
+        // 只在 Dart resize 消息里设（首启流程发过一次），之后尺寸不变
+        // 就不再发——切应用重建 surface 后 destination 缺失 → 物理缓冲
+        // 按原尺寸显示（放大 scale 倍）+ 指针坐标落在物理空间全越界
+        // → 候选框鼠标失灵（宿主机稳定复现：重启后首个应用正常）
+        if (logicalW_ > 0 && logicalH_ > 0) {
+            wp_viewport_set_destination(viewport_, logicalW_, logicalH_);
+        }
     }
     if (fsManager_) {
         fscale_ = wp_fractional_scale_manager_v1_get_fractional_scale(
