@@ -491,7 +491,12 @@ bool VoicePopup::ensurePopup(InputContext *ic) {
     }
     if (topMode_) {
         // layer-shell 顶部居中：不依赖应用上报光标矩形，合成器按我们
-        // 的 anchor/margin/size 摆放。configure 到达前不提交 buffer
+        // 的 anchor/margin/size 摆放。configure 到达前不提交 buffer。
+        // registry global 是异步到达的——IC 早激活时（容器快速触发场景
+        // 实测）可能尚未 bind，roundtrip 等一轮再判
+        if (!layerShell_ && display_) {
+            wl_display_roundtrip(display_);
+        }
         if (!layerShell_) {
             FCITX_WARN() << "VoicePopup: 合成器无 zwlr_layer_shell_v1，"
                             "回退光标跟随";
