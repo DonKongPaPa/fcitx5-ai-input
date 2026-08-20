@@ -13,6 +13,8 @@ extern "C" const wl_interface xdg_popup_interface = {};
 #include <fcitx-utils/log.h>
 #include <fcitx/addonmanager.h>
 #include <fcitx/inputcontext.h>
+#include <fcitx/inputpanel.h>
+#include <fcitx/text.h>
 #include <wayland_public.h>
 
 #include <fcntl.h>
@@ -110,6 +112,10 @@ void VoicePopup::popupRectangle(void *data, zwp_input_popup_surface_v2 *,
             FCITX_INFO() << "VoicePopup: 收到真实光标矩形（本 IC 支持跟随）";
         }
         s->sawRealRect_ = true;
+        if (s->preeditProbeActive_) {
+            s->endPreeditProbe();
+            FCITX_INFO() << "VoicePopup: 探针奏效——矩形已按当前光标重报";
+        }
     }
     FCITX_INFO() << "VoicePopup: text_input_rectangle " << x << "," << y << " "
                  << w << "x" << h << "（窗口局部）";
@@ -417,11 +423,40 @@ void VoicePopup::setPositionPolicy(const std::string &mode,
 
 void VoicePopup::notifyCommit() {
     std::lock_guard<std::mutex> lock(mutex_);
+    endPreeditProbe();
     if (!committedInThisIC_) {
         FCITX_INFO() << "VoicePopup: 本 IC 已上屏 → handle 有新鲜光标矩形"
                         "可继承，auto 下轮跟随";
     }
     committedInThisIC_ = true;
+}
+
+// —— 预输入探针（classicui 拼音候选窗实时跟随的同款机制）——
+// 录音开始时设零宽空格 client preedit：应用重排组合文本 → 按当前光标
+// 重报矩形 → 正被追踪（show 刚重建）的我们被合成器实时挪位
+void VoicePopup::beginPreeditProbe(InputContext *ic) {
+    if (!ic || preeditProbeActive_) {
+        return;
+    }
+    // 单个空格：必须有实际宽度才会引起应用重排→重报矩形（ZWSP 零宽
+    // 实测两家都无视，r29 首跑 rect=0）。preedit 永不入文：清除即从
+    // 显示中消失，矩形一到（~1-2 帧）即撤，用户几乎无感
+    Text preedit(" ");
+    ic->inputPanel().setClientPreedit(preedit);
+    ic->updateUserInterface(UserInterfaceComponent::InputPanel);
+    preeditProbeActive_ = true;
+    FCITX_INFO() << "VoicePopup: 预输入探针已置（单空格 preedit，逼应用重报光标矩形）";
+}
+
+void VoicePopup::endPreeditProbe() {
+    if (!preeditProbeActive_) {
+        return;
+    }
+    preeditProbeActive_ = false;
+    if (auto *ic = icRef_.get()) {
+        ic->inputPanel().setClientPreedit(Text());
+        ic->updateUserInterface(UserInterfaceComponent::InputPanel);
+    }
 }
 
 // 定位模式决策：policy × 应用名单 × 矩形上报能力。
@@ -679,6 +714,9 @@ void VoicePopup::show(InputContext *ic) {
         FCITX_WARN() << "VoicePopup::show but popup not ready";
         return;
     }
+    if (!topMode_) {
+        beginPreeditProbe(ic); // 换行/重聚焦/Electron 首句实时跟随
+    }
     if (patternMode_ && (!topMode_ || layerConfigured_)) {
         size_t bufSize = width_ * height_ * 4;
         uint8_t *dst = pixels_ + cur_ * bufSize;
@@ -704,6 +742,7 @@ void VoicePopup::show(InputContext *ic) {
 
 void VoicePopup::hide() {
     std::lock_guard<std::mutex> lock(mutex_);
+    endPreeditProbe(); // 防御：无矩形到达的字段不留悬挂组合
     if (!surface_) {
         visible_ = false;
         return;

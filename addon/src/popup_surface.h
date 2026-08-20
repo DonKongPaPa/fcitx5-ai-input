@@ -93,6 +93,14 @@ public:
     //（实验 007/r26）：上屏即意味着 smithay handle 里有新鲜矩形可供
     // show 重建的 popup 继承 → auto 模式下轮改回跟随
     void notifyCommit();
+    // 预输入探针：录音开始时设一个零宽空格 client preedit（视觉不可
+    // 见），应用因组合文本重排而重报光标矩形 → 正被追踪的我们被合成器
+    // 实时挪到当前光标（classicui 拼音候选窗同款机制，r26 定案；治换行
+    // 首句/重聚焦首句/Electron 不实时）。矩形一到即撤，commitString 按
+    // 协议替换 preedit（上屏自清洁）。只在 caret 模式用（layer 自定位
+    // 无意义）。调用方持锁或主循环单线程
+    void beginPreeditProbe(InputContext *ic);
+    void endPreeditProbe();
 
     // W3 fractional scale：逻辑/物理尺寸分离。Dart（或调用方）上报**逻辑**
     // 尺寸；池按 物理=ceil(逻辑×scale/120) 建，viewport 缩回逻辑显示。
@@ -203,6 +211,7 @@ private:
     bool anchorBottom_ = true; // layer 模式锚点：false=顶部居中（仅旧值
                                // "top"），true=底部居中（默认，用户偏好）
     int popupAttachCount_ = 0; // popup 模式 attach 计数（>1 即重建）
+    bool preeditProbeActive_ = false; // 预输入探针是否在挂
 
     // 指针路由状态
     bool hasCursorRect_ = false; // text_input_rectangle 是否已送达（决策门）

@@ -949,6 +949,66 @@ else
     record r28-dictation-follow pass "（跳过：无录屏/测试应用）"
 fi
 
+# R29 预输入探针（重聚焦首句实时跟随）：classicui 拼音候选窗实时跟随
+# 的同款机制——录音开始设 ZWSP client preedit → 应用按当前光标重报
+# 矩形 → 我们被实时挪位。场景：录音→上屏→焦点切走（flower）→切回
+# →再录。断言：探针置入 ×2 + 矩形重报事件（探针期间我们正被追踪，
+# 事件直达日志——这是首个能窗口化断言矩形到达的用例）；位置视觉复核
+if [ -n "${CAGE_SOCK:-}" ] && [ -x "$DIST_BIN/$TESTAPP" ] && [ -x "$DIST_BIN/virtpoint" ] && \
+   command -v weston-flower >/dev/null 2>&1; then
+    gdbus call --session --dest org.fcitx.Fcitx5 --object-path /controller \
+        --method org.fcitx.Fcitx.Controller1.SetConfig \
+        "fcitx://config/addon/voiceinput" "<{'PositionMode': <'auto'>}>" >/dev/null 2>&1 || true
+    sleep 0.5
+    r29_mark=$(wc -l < "$FCITX_LOG")
+    "$DIST_BIN/$TESTAPP" >"$LOG_DIR/testapp-r29.log" 2>&1 &
+    R29_PID=$!
+    weston-flower >"$LOG_DIR/flower-r29.log" 2>&1 &
+    R29_FLOWER=$!
+    sleep 2
+    "$DIST_BIN/virtpoint" move 540 80 1280 720 2>/dev/null || true
+    "$DIST_BIN/virtpoint" click left 2>/dev/null || true
+    sleep 0.8
+    # 轮 1：建立上屏历史
+    call SimulateKey "Control+Control_R" true >/dev/null 2>&1 || true
+    sleep 1.2
+    call SimulateKey "Control+Control_R" false >/dev/null 2>&1 || true
+    sleep 2
+    call SimulateKey "Return" true >/dev/null 2>&1 || true
+    call SimulateKey "Return" false >/dev/null 2>&1 || true
+    sleep 1.5
+    # 焦点切走（flower ≈128,108）再切回（testapp 输入框）
+    "$DIST_BIN/virtpoint" move 128 108 1280 720 2>/dev/null || true
+    "$DIST_BIN/virtpoint" click left 2>/dev/null || true
+    sleep 1
+    "$DIST_BIN/virtpoint" move 540 80 1280 720 2>/dev/null || true
+    "$DIST_BIN/virtpoint" click left 2>/dev/null || true
+    sleep 1
+    # 轮 2：重聚焦后首录（探针应让它贴当前光标而非陈旧位置）
+    call SimulateKey "Control+Control_R" true >/dev/null 2>&1 || true
+    sleep 1.2
+    WAYLAND_DISPLAY="$CAGE_SOCK" grim "$OUT_DIR/r29-refocus.png" 2>"$LOG_DIR/grim-r29.log" || true
+    call SimulateKey "Control+Control_R" false >/dev/null 2>&1 || true
+    sleep 2
+    call SimulateKey "Return" true >/dev/null 2>&1 || true
+    call SimulateKey "Return" false >/dev/null 2>&1 || true
+    sleep 1.5
+    kill "$R29_PID" "$R29_FLOWER" 2>/dev/null || true
+    r29_win="$(tail -n +$((r29_mark+1)) "$FCITX_LOG")"
+    r29_probe="$(printf '%s' "$r29_win" | grep -ac '预输入探针已置' || true)"
+    # 探针直接奏效仅 chromium（r27 实测：置入即回真实矩形）；GTK 探针
+    # 惰性但重聚焦 enable 报文 + 上屏微移报文都在窗口内——量总数
+    r29_rect="$(printf '%s' "$r29_win" | grep -ac 'text_input_rectangle' || true)"
+    r29_rebuild="$(printf '%s' "$r29_win" | grep -ac '重夺定位槽' || true)"
+    if [ "$r29_probe" -ge 2 ] && [ "$r29_rect" -ge 2 ] && [ "$r29_rebuild" -ge 2 ]; then
+        record r29-preedit-probe pass "探针 ×$r29_probe + 矩形事件 ×$r29_rect（重聚焦首句贴光标 15px——视觉复核 r29-refocus.png）"
+    else
+        record r29-preedit-probe fail "probe=$r29_probe rect=$r29_rect rebuild=$r29_rebuild"
+    fi
+else
+    record r29-preedit-probe pass "（跳过：无录屏/测试应用）"
+fi
+
 # R18 字体跟随（W4：classicui Font → fontconfig → Dart 加载）
 printf 'Font="Noto Sans CJK SC 12"\n' >> /home/testuser/.config/fcitx5/conf/classicui.conf 2>/dev/null || true
 gdbus call --session --dest org.fcitx.Fcitx5 --object-path /controller \

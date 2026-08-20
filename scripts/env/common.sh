@@ -46,6 +46,10 @@ wait_dbus_name() {
 # 音频栈：pipewire + pulse 兼容层 + wireplumber
 start_audio() {
     pipewire >"$LOG_DIR/pipewire.log" 2>&1 &
+    # pipewire 主进程与 pipewire-pulse 抢先 mkdir /run/user/1000/pulse，
+    # 后者赢了会让主进程 "could not load mandatory module" 整体崩（竞态
+    # 翻面实测）——主进程先行 0.4s 定序
+    sleep 0.4
     pipewire-pulse >"$LOG_DIR/pipewire-pulse.log" 2>&1 &
     wireplumber >"$LOG_DIR/wireplumber.log" 2>&1 &
     # 等待 pulse 兼容层可用
