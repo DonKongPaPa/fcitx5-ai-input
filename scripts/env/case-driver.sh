@@ -3,6 +3,14 @@
 # 前置：合成器已就绪，$WAYLAND_DISPLAY 指向被测合成器，$CAGE_SOCK 用于录屏，
 #       fcitx5 + addon 已安装运行（/opt/dist），testapp 可执行
 # 产物：$OUT_DIR/case-results.jsonl（每例一行）+ $OUT_DIR/rec-<case>.mp4
+#
+# 用例地图（r1-r31，编号即执行序）：
+#   机制 r1-r14   模块加载/输入法共存/按键语义/软渲帧/指针/异常 IC
+#   引擎 r15-r21  sherpa 流式、尾音 drain、zipformer 双架构、SenseVoice 重识
+#   UI   r17-r19  fractional scale、字体跟随、部署健康检查
+#   定位 r22-r31  layer 模式、chromium 跟随、preedit 探针、跨应用首聚
+# 门控：r15/r16/r20/r21 需挂载 sherpa 模型；r9/r22-r31 需录屏/chromium/
+#   virtpoint——依赖缺失时记"pass（跳过）"，完整 33 例仅在 ENV=niri 达成
 set -euo pipefail
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 # shellcheck source=common.sh
@@ -411,7 +419,7 @@ else
     record r15-sherpa-engine pass "（跳过：模型未挂载）"
 fi
 
-# R16 尾音完整（W2 drain：松键瞬间管道尾音不再丢弃）
+# R16 尾音完整（drain：松键瞬间管道尾音不再丢弃）
 if [ -d "${VOICEINPUT_SHERPA_MODEL_DIR:-/nonexistent}" ] && [ -n "${CAGE_SOCK:-}" ]; then
     gdbus call --session --dest org.fcitx.Fcitx5 --object-path /controller \
         --method org.fcitx.Fcitx.Controller1.SetConfig \
@@ -451,6 +459,44 @@ if [ -d "${VOICEINPUT_SHERPA_MODEL_DIR:-/nonexistent}" ] && [ -n "${CAGE_SOCK:-}
         sleep 2;; esac
 else
     record r16-tail-audio pass "（跳过：无模型/音频环境）"
+fi
+
+# R17 fractional scale（HiDPI 物理帧 + viewport 收逻辑）
+# 机制挂载验证（niri 嵌套模式不外发 scale 值——真实 HiDPI 由宿主机验收）：
+# 协议 global 绑定 + wl_output 监听 + 物理池=逻辑×当前 scale 的链路完整性
+if grep -aq "global wp_fractional_scale_manager_v1" "$FCITX_LOG" && \
+   grep -aq "global wp_viewporter" "$FCITX_LOG" && \
+   grep -aq "wl_output bound" "$FCITX_LOG"; then
+    record r17-fractional-scale pass "scale 机制挂载完整（viewporter/fsm/wl_output；嵌套 niri 不外发值，真实 HiDPI 宿主机验收）"
+else
+    record r17-fractional-scale fail "scale 机制未挂载（global/bind 日志缺失）"
+fi
+
+# R18 字体跟随（classicui Font → fontconfig → Dart 加载）
+printf 'Font="Noto Sans CJK SC 12"\n' >> /home/testuser/.config/fcitx5/conf/classicui.conf 2>/dev/null || true
+gdbus call --session --dest org.fcitx.Fcitx5 --object-path /controller \
+    --method org.fcitx.Fcitx.Controller1.SetConfig \
+    "fcitx://config/addon/voiceinput" "<{'StreamingEnabled': <'True'>}>" >/dev/null 2>&1 || true
+sleep 2
+if grep -aq "UI 字体 →" "$FCITX_LOG" && grep -aq "ui-font:" "$FCITX_LOG"; then
+    record r18-font-follow pass "classicui 字体已解析并加载（$(grep -a 'ui-font:' "$FCITX_LOG" | tail -1 | sed 's/.*ui-font: //')）"
+else
+    record r18-font-follow fail "字体链路未通（检查 fontconfig/消息日志）"
+fi
+
+# R19 部署健康检查（HealthCheck JSON 各字段）
+hc="$(call HealthCheck "" 2>/dev/null || true)"
+if echo "$hc" | grep -q "sherpa" && echo "$hc" | grep -q "funasr" && \
+   echo "$hc" | grep -q "advice"; then
+    record r19-healthcheck pass "HealthCheck 输出完整（含 sherpa/funasr/advice）"
+else
+    record r19-healthcheck fail "HealthCheck 异常：${hc:0:80}"
+fi
+hcd="$(call HealthCheck deep 2>/dev/null || true)"
+if echo "$hcd" | grep -q "load_ms"; then
+    record r19-healthcheck-deep pass "deep 试加载返回耗时"
+else
+    record r19-healthcheck-deep fail "deep 缺 load_ms：${hcd:0:80}"
 fi
 
 # R20 zipformer 双架构启动（宿主机回归：启动前置检查曾只认 paraformer
@@ -537,7 +583,7 @@ else
     record r21-sensevoice-final pass "（跳过：sensevoice/zipformer 模型未挂载）"
 fi
 
-# R22 layer-shell 顶部居中模式（chromium 系定位回退）：
+# R22 layer-shell 顶部居中（PositionMode=top 显式档）：
 # a) 日志链：layer surface created + configured
 # b) 截图断言（vision）：卡片在屏幕顶部水平居中（r22-top-center.png）
 # c) 隐藏后无输入遮挡：卡片区域下方的 testapp 输入框可被点击夺回焦点
@@ -593,7 +639,7 @@ else
     record r22-layer-top-center pass "（跳过：无 cage/grim 环境）"
 fi
 
-# R23 top 模式可见态交互（chromium 回退的完整闭环）：候选态卡片 hover +
+# R23 top 模式可见态交互（显式档的完整闭环）：候选态卡片 hover +
 # 点击选词——r22 只测了隐藏后穿透，这里测可见时输入区确实恢复（用户实测
 # 回归：加空输入区后 hover/点击全失效）
 if [ -n "${CAGE_SOCK:-}" ] && command -v virtpoint >/dev/null 2>&1 && \
@@ -683,8 +729,8 @@ if [ -n "${CAGE_SOCK:-}" ] && command -v chromium >/dev/null 2>&1; then
         pkill -f "chrome-r24-$r24_variant" 2>/dev/null || true
         sleep 1
         r24_win="$(tail -n +$((r24_mark+1)) "$FCITX_LOG")"
-        # 新契约（触发键探针落地后）：chromium 首下即跟随——探针空格上屏
-        # +回删 → 文本变化 → 矩形重报（0.8ms 实测）→ show 决策已有知识
+        # 新契约（触发键探针落地后）：chromium 首下即跟随——探针组合
+        # 文本变化 → 矩形重报 → show 决策已有知识
         r24_prime="$(printf '%s' "$r24_win" | grep -ac '触发键探针' || true)"
         r24_follow="$(printf '%s' "$r24_win" | grep -ac '重夺定位槽' || true)"
         r24_nolayer="$(printf '%s' "$r24_win" | grep -ac 'layer surface created' || true)"
@@ -698,7 +744,6 @@ if [ -n "${CAGE_SOCK:-}" ] && command -v chromium >/dev/null 2>&1; then
     done
 else
     record r24-chromium-ime pass "（跳过：无 chromium/录屏）"
-    record r24-chromium-noime pass "（跳过：无 chromium/录屏）"
 fi
 
 # R25 输入后位置更新（classicui 抢占定位槽复现）：GTK 应用两次录音，
@@ -1137,44 +1182,6 @@ if [ -n "${CAGE_SOCK:-}" ] && command -v chromium >/dev/null 2>&1 && [ -x "$DIST
     fi
 else
     record r31-cross-app-first pass "（跳过：无 chromium/录屏）"
-fi
-
-# R18 字体跟随（W4：classicui Font → fontconfig → Dart 加载）
-printf 'Font="Noto Sans CJK SC 12"\n' >> /home/testuser/.config/fcitx5/conf/classicui.conf 2>/dev/null || true
-gdbus call --session --dest org.fcitx.Fcitx5 --object-path /controller \
-    --method org.fcitx.Fcitx.Controller1.SetConfig \
-    "fcitx://config/addon/voiceinput" "<{'StreamingEnabled': <'True'>}>" >/dev/null 2>&1 || true
-sleep 2
-if grep -aq "UI 字体 →" "$FCITX_LOG" && grep -aq "ui-font:" "$FCITX_LOG"; then
-    record r18-font-follow pass "classicui 字体已解析并加载（$(grep -a 'ui-font:' "$FCITX_LOG" | tail -1 | sed 's/.*ui-font: //')）"
-else
-    record r18-font-follow fail "字体链路未通（检查 fontconfig/消息日志）"
-fi
-
-# R19 部署健康检查（W5：HealthCheck JSON 各字段）
-hc="$(call HealthCheck "" 2>/dev/null || true)"
-if echo "$hc" | grep -q "sherpa" && echo "$hc" | grep -q "funasr" && \
-   echo "$hc" | grep -q "advice"; then
-    record r19-healthcheck pass "HealthCheck 输出完整（含 sherpa/funasr/advice）"
-else
-    record r19-healthcheck fail "HealthCheck 异常：${hc:0:80}"
-fi
-hcd="$(call HealthCheck deep 2>/dev/null || true)"
-if echo "$hcd" | grep -q "load_ms"; then
-    record r19-healthcheck-deep pass "deep 试加载返回耗时"
-else
-    record r19-healthcheck-deep fail "deep 缺 load_ms：${hcd:0:80}"
-fi
-
-# R17 fractional scale（W3：HiDPI 物理帧 + viewport 收逻辑）
-# 机制挂载验证（niri 嵌套模式不外发 scale 值——真实 HiDPI 由宿主机验收）：
-# 协议 global 绑定 + wl_output 监听 + 物理池=逻辑×当前 scale 的链路完整性
-if grep -aq "global wp_fractional_scale_manager_v1" "$FCITX_LOG" && \
-   grep -aq "global wp_viewporter" "$FCITX_LOG" && \
-   grep -aq "wl_output bound" "$FCITX_LOG"; then
-    record r17-fractional-scale pass "scale 机制挂载完整（viewporter/fsm/wl_output；嵌套 niri 不外发值，真实 HiDPI 宿主机验收）"
-else
-    record r17-fractional-scale fail "scale 机制未挂载（global/bind 日志缺失）"
 fi
 
 # 停采样器并等它写出 summary
