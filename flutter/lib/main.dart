@@ -164,19 +164,11 @@ Size panelSizeFor(ThemeData theme, SessionData d, double fontScale) {
           final need = measureWidth(items[i], style) + (i == 0 ? 24 : 0);
           if (need > textW) textW = need;
         }
-        // 头部行也参与宽度决策（提示文字曾溢出）：图标 14 + 间距 4 +
-        // "LLM 优化" + 提示文字 + 行 padding 24 + 弹性余量 24（实测
-        // 余量 8 时 Row 可用宽仍差 ~16px，差 1-2 个字符触发省略）
-        final labelStyle = theme.textTheme.labelSmall!;
-        final headerW = 14 + 4 +
-            measureWidth('LLM 优化', labelStyle) +
-            measureWidth('Enter=上屏 · Esc=取消', labelStyle) +
-            24 + 24;
-        var w = (textW + 22 + 16 + 24 + 8).clamp(minW, maxW);
-        if (w < headerW) {
-          // 头部提示撑宽：允许超出常规 maxW（提示完整显示优先于宽度收敛）
-          w = headerW.clamp(minW, maxW * 1.3);
-        }
+        // 宽度下限 360（随 fontScale）：头部提示行在 MiSans VF 12 下
+        // 实测需 ~250px 且可变字体测量有 ±5% 偏差——280 最小宽时仅剩
+        // 4px 余量（用户实测贴边"超出"）。360 下限让头部在任何字体下
+        // 都有一倍余量，不再依赖测量精度（用户：卡片理论上要变长）
+        final w = (textW + 22 + 16 + 24 + 8).clamp(360.0 * fontScale, maxW);
         return Size(w, (44 + items.length * 52 + 8 /* 首条 subtitle */) * fontScale);
       }
     case UiState.idle:
