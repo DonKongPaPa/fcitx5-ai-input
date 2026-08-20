@@ -490,8 +490,25 @@ AddonInstance *VoiceInputEngineFactory::create(AddonManager *manager) {
     return new VoiceInputEngine(manager->instance());
 }
 
+// 旧版默认回退名单：与新"跟随优先"语义冲突（chromium 上屏后可继承
+// 跟随），存量配置里原样存在时迁移为空（用户显式自定义的不动）
+static const char *kLegacyFallbackApps =
+    "chromium,chrome,brave,msedge,vivaldi,opera,electron,vscode,code,"
+    "slack,discord,teams,qq,telegram";
+
+void VoiceInputEngine::migrateLegacyConfig() {
+    if (config_.positionFallbackApps.value() == kLegacyFallbackApps) {
+        config_.positionFallbackApps.setValue(std::string(""));
+        if (safeSaveAsIni(config_, "conf/voiceinput.config")) {
+            FCITX_INFO() << "VoiceInput: 迁移——旧默认定位回退名单已清空"
+                            "（跟随优先语义）";
+        }
+    }
+}
+
 void VoiceInputEngine::reloadConfig() {
     readAsIni(config_, "conf/voiceinput.config");
+    migrateLegacyConfig();
     if (popup_) { // 定位策略热更新（PositionMode/PositionFallbackApps）
         popup_->setPositionPolicy(config_.positionMode.value(),
                                   config_.positionFallbackApps.value());
@@ -504,6 +521,7 @@ void VoiceInputEngine::reloadConfig() {
 void VoiceInputEngine::setConfig(const RawConfig &config) {
     auto prev = config_.asrEngine.value();
     config_.load(config, true);
+    migrateLegacyConfig();
     if (safeSaveAsIni(config_, "conf/voiceinput.config")) {
         FCITX_INFO() << "VoiceInput: configtool 保存已落盘";
     }
@@ -900,9 +918,13 @@ bool VoiceInputEngine::handleKey(const Key &key, bool pressed,
                 if (popup_) {
                     popup_->notifyCommit();
                 }
+                uiNotify("committed", finalText_);
+                enterIdle();
+                nudgeCaretRect(ic);
+            } else {
+                uiNotify("committed", finalText_);
+                enterIdle();
             }
-            uiNotify("committed", finalText_);
-            enterIdle();
             return true;
         }
         break;
@@ -1050,6 +1072,9 @@ void VoiceInputEngine::startResultTimer() {
                     popup_->notifyCommit();
                 }
                 uiNotify("committed", finalText_);
+                enterIdle();
+                nudgeCaretRect(ic);
+                return true;
             }
             enterIdle();
             return true;
@@ -1057,6 +1082,26 @@ void VoiceInputEngine::startResultTimer() {
     if (resultTimer_) {
         resultTimer_->setOneShot();
     }
+}
+
+// Left+Right 键对经真实事件管线注入（与 TestService::InjectKey 同法）：
+// 此时状态已 Idle（调用点都在 enterIdle 后），我们的 PreInputMethod
+// watcher 不拦非触发键 → 到达应用 → 光标往返一次 → 应用重报光标矩形。
+// focus 不可能在 commitString 与本调用之间变化（同一主循环迭代）
+void VoiceInputEngine::nudgeCaretRect(InputContext *ic) {
+    if (!ic) {
+        return;
+    }
+    for (const char *name : {"Left", "Right"}) {
+        for (bool press : {true, false}) {
+            KeyEvent ev(ic, Key(name), !press);
+            instance_->postEvent(ev);
+            if (!ev.filtered()) {
+                ic->forwardKey(Key(name), !press);
+            }
+        }
+    }
+    FCITX_LOG(Info) << "VoiceInput: 上屏后光标微移已注入（触发矩形重报）";
 }
 
 void VoiceInputEngine::notifyUiCommit() {
@@ -1080,6 +1125,7 @@ void VoiceInputEngine::commitCandidate(size_t index, InputContext *ic) {
     }
     uiNotify("committed", text);
     enterIdle();
+    nudgeCaretRect(ic ? ic : sessionIcRef_.get());
 }
 
 void VoiceInputEngine::enterIdle() {

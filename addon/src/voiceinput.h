@@ -122,6 +122,12 @@ public:
 private:
     enum class State { Idle, Pressing, Recording, Result, Candidates };
 
+    void migrateLegacyConfig();
+    // 上屏后注入 Left+Right 无净位移键对：应用的光标矩形重报只发生在
+    // 光标移动/文本变化时（GTK 程序性 commit 不重报、chromium 报插入
+    // 点），逼它按真实光标重报，下一轮卡片不再"迟一步"
+    void nudgeCaretRect(InputContext *ic);
+
     void beginRecording(InputContext *ic);
     void finishRecording();
     void onAsrFinish(const std::string &text);

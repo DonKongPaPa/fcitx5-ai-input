@@ -908,6 +908,47 @@ else
     record r27-auto-commit-follow pass "（跳过：无 chromium/录屏）"
 fi
 
+# R28 连续听写跟随（上屏后"迟一步"修复验证）：三轮录音全自动（无点击
+# 重新定位光标），上屏后注入 Left+Right 微移逼应用按真实光标重报矩形。
+# 断言：微移注入日志 ×轮数、popup 重建；位置（卡片应随文字增长走到
+# 文字末尾而非停在上一段插入点）由视觉复核 r28-s*.png
+if [ -n "${CAGE_SOCK:-}" ] && [ -x "$DIST_BIN/$TESTAPP" ] && [ -x "$DIST_BIN/virtpoint" ]; then
+    gdbus call --session --dest org.fcitx.Fcitx5 --object-path /controller \
+        --method org.fcitx.Fcitx.Controller1.SetConfig \
+        "fcitx://config/addon/voiceinput" "<{'PositionMode': <'auto'>}>" >/dev/null 2>&1 || true
+    sleep 0.5
+    r28_mark=$(wc -l < "$FCITX_LOG")
+    "$DIST_BIN/$TESTAPP" >"$LOG_DIR/testapp-r28.log" 2>&1 &
+    R28_PID=$!
+    sleep 2
+    "$DIST_BIN/virtpoint" move 540 80 1280 720 2>/dev/null || true
+    "$DIST_BIN/virtpoint" click left 2>/dev/null || true
+    sleep 0.8
+    for r28_round in 1 2 3; do
+        call SimulateKey "Control+Control_R" true >/dev/null 2>&1 || true
+        sleep 1.2
+        WAYLAND_DISPLAY="$CAGE_SOCK" grim "$OUT_DIR/r28-s$r28_round.png" 2>>"$LOG_DIR/grim-r28.log" || true
+        call SimulateKey "Control+Control_R" false >/dev/null 2>&1 || true
+        sleep 2
+        call SimulateKey "Return" true >/dev/null 2>&1 || true
+        call SimulateKey "Return" false >/dev/null 2>&1 || true
+        sleep 1.8
+    done
+    kill "$R28_PID" 2>/dev/null || true
+    r28_win="$(tail -n +$((r28_mark+1)) "$FCITX_LOG")"
+    r28_nudge="$(printf '%s' "$r28_win" | grep -ac '光标微移已注入' || true)"
+    r28_rebuild="$(printf '%s' "$r28_win" | grep -ac '重夺定位槽' || true)"
+    r28_shots=0
+    for i in 1 2 3; do [ -s "$OUT_DIR/r28-s$i.png" ] && r28_shots=$((r28_shots+1)); done
+    if [ "$r28_nudge" -ge 3 ] && [ "$r28_rebuild" -ge 3 ] && [ "$r28_shots" -eq 3 ]; then
+        record r28-dictation-follow pass "三轮连续听写：微移注入 ×$r28_nudge + popup 重建 ×$r28_rebuild（卡片随文字增长走到行尾——视觉复核 r28-s1/2/3）"
+    else
+        record r28-dictation-follow fail "nudge=$r28_nudge rebuild=$r28_rebuild shots=$r28_shots"
+    fi
+else
+    record r28-dictation-follow pass "（跳过：无录屏/测试应用）"
+fi
+
 # R18 字体跟随（W4：classicui Font → fontconfig → Dart 加载）
 printf 'Font="Noto Sans CJK SC 12"\n' >> /home/testuser/.config/fcitx5/conf/classicui.conf 2>/dev/null || true
 gdbus call --session --dest org.fcitx.Fcitx5 --object-path /controller \
