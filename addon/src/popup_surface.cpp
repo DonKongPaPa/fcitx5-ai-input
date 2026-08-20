@@ -891,11 +891,12 @@ static void paintTestPattern(uint8_t *argb, int w, int h) {
 
 void VoicePopup::prepare(InputContext *ic) {
     std::lock_guard<std::mutex> lock(mutex_);
-    // 光标矩形诊断：fcitx 核心从前端（wayland text-input / XIM spot）汇总
+    // 光标矩形诊断：fcitx 核心从前端（wayland text-input / XIM spot）汇总。
+    // 不打 frontendName()——那是 5.1 API（bookworm 5.0.21 编不过）；前端
+    // 判断走 getInputMethodV2 是否返回 null（见 ensurePopup）
     const auto &cr = ic->cursorRect();
     FCITX_INFO() << "VoicePopup: ic cursorRect " << cr.left() << ","
-                 << cr.top() << " " << cr.width() << "x" << cr.height()
-                 << "（前端=" << ic->frontendName() << "）";
+                 << cr.top() << " " << cr.width() << "x" << cr.height();
     if (!ensurePopup(ic, /*atShow=*/false)) {
         return;
     }
