@@ -861,6 +861,14 @@ bool VoiceInputEngine::handleKey(const Key &key, bool pressed,
             }
             sessionIcRef_ = ic->watch();
             state_ = State::Pressing;
+            // 阈值窗口（默认 450ms）内先挂空格 preedit 探针：chromium 系
+            // 会立刻按当前光标重报矩形（r27 实测 0ms），show 决策时已有
+            // 知识 → 首下跟随。不碰文本（空格上屏+回删方案实测会扰动
+            // 状态机编舞，r25 两跑同败）；GTK 探针惰性但重聚焦有 enable
+            // 报文兜底
+            if (popup_) {
+                popup_->primePreedit(ic);
+            }
             startThresholdTimer();
             uiNotify("pressing");
             return true; // 状态机已处理（watcher 决定是否吞——触发键不吞）

@@ -459,6 +459,20 @@ void VoicePopup::endPreeditProbe() {
     }
 }
 
+void VoicePopup::primePreedit(InputContext *ic) {
+    std::lock_guard<std::mutex> lock(mutex_);
+    if (!ic || sawRealRect_ || committedInThisIC_ || topMode_) {
+        return;
+    }
+    if (!surface_ && !ensurePopup(ic, /*atShow=*/false)) {
+        return; // 非 wayland_v2 前端：无 popup 可探
+    }
+    if (topMode_) {
+        return; // policy/名单判成 layer：无需矩形
+    }
+    beginPreeditProbe(ic);
+}
+
 // 定位模式决策：policy × 应用名单 × 矩形上报能力。
 // - chromium 系的 wayland text-input 恒报 0,0 0x0 → 合成器把 input popup
 //   放到窗口左上角；此类应用改用 layer-shell（anchor 由 policy 决定，

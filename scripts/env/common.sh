@@ -45,36 +45,59 @@ wait_dbus_name() {
 
 # 音频栈：pipewire + pulse 兼容层 + wireplumber
 start_audio() {
-    pipewire >"$LOG_DIR/pipewire.log" 2>&1 &
-    # pipewire 主进程与 pipewire-pulse 抢先 mkdir /run/user/1000/pulse，
-    # 后者赢了会让主进程 "could not load mandatory module" 整体崩（竞态
-    # 翻面实测）——主进程先行 0.4s 定序
-    sleep 0.4
-    pipewire-pulse >"$LOG_DIR/pipewire-pulse.log" 2>&1 &
-    wireplumber >"$LOG_DIR/wireplumber.log" 2>&1 &
-    # 等待 pulse 兼容层可用
-    for _ in $(seq 1 40); do
-        pactl info >/dev/null 2>&1 && break
-        sleep 0.5
-    done
-    pactl info >/dev/null 2>&1 || { echo "pipewire/pulse 启动失败"; return 1; }
+    # pipewire 主进程/pipewire-pulse 的 pulse 模块加载互抢 socket（结果随
+    # 时序变化，多种翻法实测）。回归朴素三行启动 + 一次自愈重试（竞态
+    # 结果轮次间会变，重试即高概率成功）
+    _pw_start() {
+        pipewire >"$LOG_DIR/pipewire.log" 2>&1 &
+        pipewire-pulse >"$LOG_DIR/pipewire-pulse.log" 2>&1 &
+        wireplumber >"$LOG_DIR/wireplumber.log" 2>&1 &
+        for _ in $(seq 1 40); do
+            pactl info >/dev/null 2>&1 && break
+            sleep 0.5
+        done
+        pactl info >/dev/null 2>&1
+    }
+    if ! _pw_start; then
+        echo "audio 首次启动未就绪，自愈重试一次"
+        pkill -x pipewire 2>/dev/null || true
+        pkill -x pipewire-pulse 2>/dev/null || true
+        pkill -x wireplumber 2>/dev/null || true
+        rm -rf "${XDG_RUNTIME_DIR:-/run/user/1000}/pulse" 2>/dev/null || true
+        sleep 1
+        _pw_start || { echo "pipewire/pulse 启动失败"; return 1; }
+    fi
 }
 
 # 虚拟麦克风：null sink 的 monitor 即"麦克风采集到的声音"
 # 用法：play_to_mic file.wav —— 将测试音频作为麦克风输入播放
 setup_virtual_mic() {
     VIRTUAL_MIC_SINK="vi_mic"
-    # pipewire 刚启动时 load-module 可能报 Not supported，重试
+    # pipewire 刚启动时 load-module 可能报 Not supported，重试。坑：pactl
+    # 的错误文本打在 stdout（"Failure: Not supported" 非空会被当成模块
+    # ID 判成功，set-default-source 再炸 + set -e 杀全局——会话首跑翻车
+    # 的真凶）——必须校验纯数字，并以 source 真正存在为准
     local tries=0 id=""
-    while [ $tries -lt 10 ]; do
+    while [ $tries -lt 15 ]; do
         id="$(pactl load-module module-null-sink sink_name="$VIRTUAL_MIC_SINK" \
             sink_properties=device.description=voiceinput-test-mic 2>>"$LOG_DIR/pactl-load.log" || true)"
+        case "$id" in
+            ''|*[!0-9]*) id="" ;;
+        esac
         [ -n "$id" ] && break
         tries=$((tries + 1))
         sleep 1
     done
-    [ -n "$id" ] || { echo "虚拟麦克风创建失败"; return 1; }
-    pactl set-default-source "${VIRTUAL_MIC_SINK}.monitor"
+    local ok=""
+    for _ in $(seq 1 20); do
+        if pactl list short sources 2>/dev/null | grep -q "${VIRTUAL_MIC_SINK}.monitor"; then
+            ok=1
+            break
+        fi
+        sleep 0.5
+    done
+    [ -n "$ok" ] || { echo "虚拟麦克风创建失败"; return 1; }
+    pactl set-default-source "${VIRTUAL_MIC_SINK}.monitor" >/dev/null 2>&1 || true
     echo "$VIRTUAL_MIC_SINK"
 }
 

@@ -101,6 +101,11 @@ public:
     // 无意义）。调用方持锁或主循环单线程
     void beginPreeditProbe(InputContext *ic);
     void endPreeditProbe();
+    // 触发键按下时对未知能力的 IC 挂 preedit 探针（仅当尚无 popup-mode
+    // surface 时现建）。空格 preedit 零文本副作用；chromium 即刻重报
+    // 矩形 → 450ms 阈值窗口内攒到知识 → 首下不回退
+    void primePreedit(InputContext *ic);
+
 
     // W3 fractional scale：逻辑/物理尺寸分离。Dart（或调用方）上报**逻辑**
     // 尺寸；池按 物理=ceil(逻辑×scale/120) 建，viewport 缩回逻辑显示。

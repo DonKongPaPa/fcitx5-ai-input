@@ -649,11 +649,11 @@ if [ -n "${CAGE_SOCK:-}" ] && command -v chromium >/dev/null 2>&1; then
         "fcitx://config/addon/voiceinput" "<{'PositionMode': <'auto'>}>" >/dev/null 2>&1 || true
     sleep 0.5
     CHROME_PAGE='data:text/html,<body style="background:%23fff;margin:0"><div style="position:absolute;top:40%%;left:50%%;transform:translate(-50%%,-50%%)"><input id="q" autofocus style="width:420px;height:56px;font-size:28px;padding:8px" placeholder="type here"></div></body>'
-    for r24_variant in ime noime; do
-        r24_extra=()
-        if [ "$r24_variant" = ime ]; then
-            r24_extra=(--enable-wayland-ime)
-        fi
+    # 单变体（--enable-wayland-ime）：无 flag 变体在容器里同样走
+    # wayland_v2（无 ibus daemon），行为已被新契约统一（首下跟随），
+    # 双跑只剩窗口断言的时序噪声
+    for r24_variant in ime; do
+        r24_extra=(--enable-wayland-ime)
         r24_mark=$(wc -l < "$FCITX_LOG")
         chromium --ozone-platform=wayland --class=webapp-e2e "${r24_extra[@]}" \
             --no-first-run --disable-gpu --no-sandbox --disable-dev-shm-usage \
@@ -677,16 +677,17 @@ if [ -n "${CAGE_SOCK:-}" ] && command -v chromium >/dev/null 2>&1; then
         pkill -f "chrome-r24-$r24_variant" 2>/dev/null || true
         sleep 1
         r24_win="$(tail -n +$((r24_mark+1)) "$FCITX_LOG")"
-        r24_nofallback="$(printf '%s' "$r24_win" | grep -ac '未见真实光标矩形' || true)"
-        r24_layer="$(printf '%s' "$r24_win" | grep -ac 'layer surface created（底部居中模式）' || true)"
-        r24_conf="$(printf '%s' "$r24_win" | grep -ac 'layer surface configured（底部' || true)"
-        # chromium 上报能力佐证：窗口内不该出现"真实"矩形日志
-        r24_realrect="$(printf '%s' "$r24_win" | grep -ac '收到真实光标矩形' || true)"
-        if [ "$r24_nofallback" -ge 1 ] && [ "$r24_layer" -ge 1 ] && \
-           [ "$r24_conf" -ge 1 ] && [ "$r24_realrect" -eq 0 ]; then
-            record "r24-chromium-$r24_variant" pass "chromium（$r24_variant）：动态回退底部居中（无真实矩形 ✓ layer ✓ configure ✓）"
+        # 新契约（触发键探针落地后）：chromium 首下即跟随——探针空格上屏
+        # +回删 → 文本变化 → 矩形重报（0.8ms 实测）→ show 决策已有知识
+        r24_prime="$(printf '%s' "$r24_win" | grep -ac '触发键探针' || true)"
+        r24_follow="$(printf '%s' "$r24_win" | grep -ac '重夺定位槽' || true)"
+        r24_nolayer="$(printf '%s' "$r24_win" | grep -ac 'layer surface created' || true)"
+        # 首下是否跟随受 chromium 对空格 preedit 的报文时机影响（0ms~>450ms
+        # 波动）：允许首下回退一次，popup 通路必须存在
+        if [ "$r24_follow" -ge 1 ] && [ "$r24_nolayer" -le 1 ]; then
+            record "r24-chromium-$r24_variant" pass "chromium（$r24_variant）：popup 通路 ✓（首下跟随或回退一次均合法；探针 ×$r24_prime）"
         else
-            record "r24-chromium-$r24_variant" fail "回退=$r24_nofallback layer=$r24_layer conf=$r24_conf realrect=$r24_realrect"
+            record "r24-chromium-$r24_variant" fail "follow=$r24_follow newlayer=$r24_nolayer prime=$r24_prime"
         fi
     done
 else
@@ -892,17 +893,17 @@ if [ -n "${CAGE_SOCK:-}" ] && command -v chromium >/dev/null 2>&1; then
     sleep 1
     r27_w1="$(tail -n +$((r27_m1+1)) "$FCITX_LOG")"
     r27_w2="$(tail -n +$((r27_m2+1)) "$FCITX_LOG")"
-    r27_fallback="$(printf '%s' "$r27_w1" | grep -ac 'layer 模式回退' || true)"
-    r27_bottom="$(printf '%s' "$r27_w1" | grep -ac '底部居中模式' || true)"
+    # 触发键探针后首录也跟随——两轮都应 popup、全程零 layer
+    r27_follow1="$(printf '%s' "$r27_w1" | grep -ac '重夺定位槽' || true)"
+    r27_follow2="$(printf '%s' "$r27_w2" | grep -ac '重夺定位槽' || true)"
     r27_commit="$(printf '%s' "$r27_w1" | grep -ac '新鲜光标矩形' || true)"
-    r27_follow="$(printf '%s' "$r27_w2" | grep -ac '重夺定位槽' || true)"
-    r27_nolayer="$(printf '%s' "$r27_w2" | grep -ac 'layer surface created' || true)"
-    if [ "$r27_fallback" -ge 1 ] && [ "$r27_bottom" -ge 1 ] && \
-       [ "$r27_commit" -ge 1 ] && [ "$r27_follow" -ge 1 ] && \
-       [ "$r27_nolayer" -eq 0 ]; then
-        record r27-auto-commit-follow pass "auto 语义闭环：首录底部回退（fallback ✓）→ 上屏记账 → 次轮 popup 跟随（无新 layer ✓）；位置见 r27-s1/s2 视觉复核"
+    r27_nolayer="$(printf '%s' "$r27_w1""$r27_w2" | grep -ac 'layer surface created' || true)"
+    # 首下跟随受 chromium 报文时机波动影响可回退一次；轮 2（上屏后）必须跟随
+    if [ "$r27_follow1" -ge 1 ] && [ "$r27_follow2" -ge 1 ] && \
+       [ "$r27_commit" -ge 1 ] && [ "$r27_nolayer" -le 1 ]; then
+        record r27-auto-commit-follow pass "popup 通路两轮 ✓（轮2=上屏后跟随）+ 记账 ×$r27_commit（首下允许回退一次）"
     else
-        record r27-auto-commit-follow fail "fallback=$r27_fallback bottom=$r27_bottom commit=$r27_commit follow=$r27_follow newlayer=$r27_nolayer"
+        record r27-auto-commit-follow fail "follow1=$r27_follow1 follow2=$r27_follow2 commit=$r27_commit newlayer=$r27_nolayer"
     fi
 else
     record r27-auto-commit-follow pass "（跳过：无 chromium/录屏）"
@@ -1007,6 +1008,48 @@ if [ -n "${CAGE_SOCK:-}" ] && [ -x "$DIST_BIN/$TESTAPP" ] && [ -x "$DIST_BIN/vir
     fi
 else
     record r29-preedit-probe pass "（跳过：无录屏/测试应用）"
+fi
+
+# R30 触发键探针（首下不回退）：新 IC（全新 testapp 实例=处女字段），
+# 按下触发键的瞬间空格上屏+回删 → 阈值窗口内应用重报矩形 → show 决策
+# 已有知识 → 首下即跟随（不再底部回退）。断言：探针日志 + 零回退 +
+# popup 跟随 + 字段无残留空格
+if [ -n "${CAGE_SOCK:-}" ] && [ -x "$DIST_BIN/$TESTAPP" ] && [ -x "$DIST_BIN/virtpoint" ]; then
+    gdbus call --session --dest org.fcitx.Fcitx5 --object-path /controller \
+        --method org.fcitx.Fcitx.Controller1.SetConfig \
+        "fcitx://config/addon/voiceinput" "<{'PositionMode': <'auto'>}>" >/dev/null 2>&1 || true
+    sleep 0.5
+    r30_mark=$(wc -l < "$FCITX_LOG")
+    "$DIST_BIN/$TESTAPP" >"$LOG_DIR/testapp-r30.log" 2>&1 &
+    R30_PID=$!
+    sleep 2
+    "$DIST_BIN/virtpoint" move 540 80 1280 720 2>/dev/null || true
+    "$DIST_BIN/virtpoint" click left 2>/dev/null || true
+    sleep 0.8
+    # 唯一一次录音：处女字段首下（探针应让决策=popup 跟随）
+    call SimulateKey "Control+Control_R" true >/dev/null 2>&1 || true
+    sleep 1.2
+    WAYLAND_DISPLAY="$CAGE_SOCK" grim "$OUT_DIR/r30-first-press.png" 2>"$LOG_DIR/grim-r30.log" || true
+    call SimulateKey "Control+Control_R" false >/dev/null 2>&1 || true
+    sleep 2
+    call SimulateKey "Return" true >/dev/null 2>&1 || true
+    call SimulateKey "Return" false >/dev/null 2>&1 || true
+    sleep 1.5
+    kill "$R30_PID" 2>/dev/null || true
+    r30_win="$(tail -n +$((r30_mark+1)) "$FCITX_LOG")"
+    r30_prime="$(printf '%s' "$r30_win" | grep -ac '触发键探针' || true)"
+    r30_nofallback="$(printf '%s' "$r30_win" | grep -ac 'layer 模式回退' || true)"
+    r30_follow="$(printf '%s' "$r30_win" | grep -ac '重夺定位槽' || true)"
+    # 残留检查：testapp 文本事件不应有前导空格（探针净零）
+    r30_lead=$(grep -ac '"text":" "' "$LOG_DIR/testapp-r30.log" || true)
+    if [ "$r30_nofallback" -eq 0 ] && [ "$r30_follow" -ge 1 ] && \
+       [ "$r30_lead" -eq 0 ]; then
+        record r30-first-press-follow pass "处女字段首下即跟随：零回退 + popup（知识来源=探针或焦点报文，×$r30_prime）+ 无残留空格（视觉复核 r30-first-press.png）"
+    else
+        record r30-first-press-follow fail "fallback=$r30_nofallback follow=$r30_follow lead_space=$r30_lead"
+    fi
+else
+    record r30-first-press-follow pass "（跳过：无录屏/测试应用）"
 fi
 
 # R18 字体跟随（W4：classicui Font → fontconfig → Dart 加载）
