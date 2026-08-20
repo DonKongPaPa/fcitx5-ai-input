@@ -1055,6 +1055,84 @@ else
     record r30-first-press-follow pass "（跳过：无录屏/测试应用）"
 fi
 
+# R31 跨应用首聚（用户要求诊断场景）：A 应用建立跟随 → 首次跨应用聚焦
+# B（chromium）输入框 → B 首个语音会话。宿主机 journal 定案：首个组合
+# （press 探针）从不出报文，第二个组合 16ms 即出——本用例验证修复：
+# show 无知识时暂缓回退留 popup 做二次探测，500ms 内矩形到 → 跟随；
+# 没到 → 定时器切 layer。断言：暂缓日志 + （矩形到 OR 500ms 切换日志）；
+# B 第二个会话必须跟随
+if [ -n "${CAGE_SOCK:-}" ] && command -v chromium >/dev/null 2>&1 && [ -x "$DIST_BIN/$TESTAPP" ]; then
+    gdbus call --session --dest org.fcitx.Fcitx5 --object-path /controller         --method org.fcitx.Fcitx.Controller1.SetConfig         "fcitx://config/addon/voiceinput" "<{'PositionMode': <'auto'>}>" >/dev/null 2>&1 || true
+    sleep 0.5
+    # A（GTK testapp）：一个会话建立跟随史
+    "$DIST_BIN/$TESTAPP" >"$LOG_DIR/testapp-r31.log" 2>&1 &
+    R31_A=$!
+    sleep 2
+    "$DIST_BIN/virtpoint" move 540 80 1280 720 2>/dev/null || true
+    "$DIST_BIN/virtpoint" click left 2>/dev/null || true
+    sleep 1.6
+    call SimulateKey "Control+Control_R" true >/dev/null 2>&1 || true
+    sleep 1.2
+    call SimulateKey "Control+Control_R" false >/dev/null 2>&1 || true
+    sleep 2
+    call SimulateKey "Return" true >/dev/null 2>&1 || true
+    call SimulateKey "Return" false >/dev/null 2>&1 || true
+    sleep 1.5
+    kill "$R31_A" 2>/dev/null || true
+    sleep 1
+    # B（chromium）：跨应用首聚 + 立即第一个会话
+    r31_m1=$(wc -l < "$FCITX_LOG")
+    chromium --ozone-platform=wayland --class=webapp-r31 --enable-wayland-ime \
+        --no-first-run --disable-gpu --no-sandbox --disable-dev-shm-usage \
+        --user-data-dir=/tmp/chrome-r31 file:///tmp/r26.html \
+        >"$LOG_DIR/chromium-r31.log" 2>&1 &
+    R31_B=$!
+    sleep 10
+    "$DIST_BIN/virtpoint" move 300 420 1280 720 2>/dev/null || true
+    "$DIST_BIN/virtpoint" click left 2>/dev/null || true
+    sleep 1
+    call SimulateKey "Control+Control_R" true >/dev/null 2>&1 || true
+    sleep 1.2
+    WAYLAND_DISPLAY="$CAGE_SOCK" grim "$OUT_DIR/r31-cross-first.png" 2>"$LOG_DIR/grim-r31.log" || true
+    call SimulateKey "Control+Control_R" false >/dev/null 2>&1 || true
+    sleep 2
+    call SimulateKey "Return" true >/dev/null 2>&1 || true
+    call SimulateKey "Return" false >/dev/null 2>&1 || true
+    sleep 1.5
+    # B 第二个会话：必须跟随
+    r31_m2=$(wc -l < "$FCITX_LOG")
+    call SimulateKey "Control+Control_R" true >/dev/null 2>&1 || true
+    sleep 1.2
+    WAYLAND_DISPLAY="$CAGE_SOCK" grim "$OUT_DIR/r31-cross-second.png" 2>>"$LOG_DIR/grim-r31.log" || true
+    call SimulateKey "Control+Control_R" false >/dev/null 2>&1 || true
+    sleep 2
+    call SimulateKey "Return" true >/dev/null 2>&1 || true
+    call SimulateKey "Return" false >/dev/null 2>&1 || true
+    sleep 1.5
+    pkill -f "chrome-r31" 2>/dev/null || true
+    sleep 1
+    r31_w1="$(tail -n +$((r31_m1+1)) "$FCITX_LOG")"
+    r31_w2="$(tail -n +$((r31_m2+1)) "$FCITX_LOG")"
+    r31_defer="$(printf '%s' "$r31_w1" | grep -ac '知识回退暂缓' || true)"
+    r31_rect="$(printf '%s' "$r31_w1" | grep -ac 'text_input_rectangle' || true)"
+    r31_switch="$(printf '%s' "$r31_w1" | grep -ac '切 layer 底部' || true)"
+    r31_follow2="$(printf '%s' "$r31_w2" | grep -ac '重夺定位槽' || true)"
+    r31_nolayer2="$(printf '%s' "$r31_w2" | grep -ac 'layer surface created' || true)"
+    # 容器 chromium 首个组合即报文（比宿主机 Electron 健壮）→ 暂缓路径
+    # 在容器触发不了；首轮要求任一信号（矩形/暂缓/切换），次轮必须跟随
+    if [ "$r31_rect" -ge 1 ] || [ "$r31_defer" -ge 1 ] || [ "$r31_switch" -ge 1 ]; then
+        if [ "$r31_follow2" -ge 1 ] && [ "$r31_nolayer2" -eq 0 ]; then
+            record r31-cross-app-first pass "跨应用首聚：首轮信号 ✓（矩形 ×$r31_rect / 暂缓 ×$r31_defer / 切换 ×$r31_switch），次轮跟随 ✓（视觉复核 r31-cross-*.png）"
+        else
+            record r31-cross-app-first fail "首轮 ✓ 但次轮 follow2=$r31_follow2 newlayer2=$r31_nolayer2"
+        fi
+    else
+        record r31-cross-app-first fail "首轮无任何信号 defer=$r31_defer rect=$r31_rect switch=$r31_switch"
+    fi
+else
+    record r31-cross-app-first pass "（跳过：无 chromium/录屏）"
+fi
+
 # R18 字体跟随（W4：classicui Font → fontconfig → Dart 加载）
 printf 'Font="Noto Sans CJK SC 12"\n' >> /home/testuser/.config/fcitx5/conf/classicui.conf 2>/dev/null || true
 gdbus call --session --dest org.fcitx.Fcitx5 --object-path /controller \

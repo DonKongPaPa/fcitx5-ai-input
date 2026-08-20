@@ -2,6 +2,7 @@
 #define _FCITX5_VOICEINPUT_POPUP_SURFACE_H_
 
 #include <fcitx/instance.h>
+#include <fcitx-utils/event.h>
 #include <fcitx-utils/trackableobject.h>
 #include <wayland_public.h>
 
@@ -106,6 +107,12 @@ public:
     // 录音中把流式 partial 写进组合文本（探针挂着时）——组合增长逼
     // 应用持续重报矩形，卡片实时跟随文字
     void updatePreeditText(const std::string &text);
+    // 跨应用首聚修复：无知识时首个组合不出报文（宿主机实测），第二个
+    // 组合 16ms 即出——show 时留在 popup 模式做第二次探测，500ms 内
+    // 矩形到 → 跟随；没到 → 定时器切 layer 底部并通知引擎重绘
+    void setModeSwitchHandler(std::function<void()> h) {
+        modeSwitchHandler_ = std::move(h);
+    }
     // 触发键按下时对未知能力的 IC 挂 preedit 探针（仅当尚无 popup-mode
     // surface 时现建）。空格 preedit 零文本副作用；chromium 即刻重报
     // 矩形 → 450ms 阈值窗口内攒到知识 → 首下不回退
@@ -228,6 +235,11 @@ private:
     // 按会话重建 IC，IC 级标志每次清零）
     std::string lastProgram_;
     std::set<std::string> followingApps_;
+    bool lastDecisionWasKnowledgeFallback_ = false; // wantTopMode 的回退分支
+    bool probeDeferralUsed_ = false; // 本会话已用过二次探测暂缓（防递归）
+    std::function<void()> modeSwitchHandler_;
+    void armProbeFallbackTimer();
+    std::unique_ptr<EventSourceTime> probeTimer_;
 
 
     // 指针路由状态

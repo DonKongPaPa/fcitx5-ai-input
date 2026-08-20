@@ -14,12 +14,14 @@ extern "C" const wl_interface xdg_popup_interface = {};
 #include <fcitx/addonmanager.h>
 #include <fcitx/inputcontext.h>
 #include <fcitx/inputpanel.h>
+#include <fcitx-utils/event.h>
 #include <fcitx/text.h>
 #include <wayland_public.h>
 
 #include <fcntl.h>
 
 #include <cctype>
+#include <chrono>
 #include <cstring>
 #include <sstream>
 #include <sys/mman.h>
@@ -112,6 +114,7 @@ void VoicePopup::popupRectangle(void *data, zwp_input_popup_surface_v2 *,
             FCITX_INFO() << "VoicePopup: 收到真实光标矩形（本 IC 支持跟随）";
         }
         s->sawRealRect_ = true;
+        s->probeTimer_.reset(); // 矩形已到：跟随成立，无需切 layer
         // 应用级知识：重聚焦若换新 IC（Electron 会话级 text-input），
         // 凭程序名直接跟随，首下不再回退
         if (!s->lastProgram_.empty()) {
@@ -498,6 +501,33 @@ void VoicePopup::updatePreeditText(const std::string &text) {
     }
 }
 
+void VoicePopup::armProbeFallbackTimer() {
+    const uint64_t deadlineUs =
+        std::chrono::duration_cast<std::chrono::microseconds>(
+            std::chrono::steady_clock::now().time_since_epoch())
+            .count() +
+        500'000ull;
+    probeTimer_ = instance_->eventLoop().addTimeEvent(
+        CLOCK_MONOTONIC, deadlineUs, 0, [this](EventSourceTime *, uint64_t) {
+            std::lock_guard<std::mutex> lock(mutex_);
+            probeTimer_.reset();
+            if (visible_ && !topMode_ && !sawRealRect_ &&
+                !committedInThisIC_ && surface_) {
+                FCITX_INFO() << "VoicePopup: 二次探测 500ms 无矩形 → 切 "
+                                "layer 底部";
+                if (auto *ic = icRef_.get()) {
+                    // probeDeferralUsed_ 已置位 → 不再暂缓，知识仍缺 →
+                    // 真实回退 layer
+                    ensurePopup(ic, /*atShow=*/true);
+                    if (modeSwitchHandler_) {
+                        modeSwitchHandler_(); // 引擎重推 UI（新 surface）
+                    }
+                }
+            }
+            return true;
+        });
+}
+
 // 定位模式决策：policy × 应用名单 × 矩形上报能力。
 // - chromium 系的 wayland text-input 恒报 0,0 0x0 → 合成器把 input popup
 //   放到窗口左上角；此类应用改用 layer-shell（anchor 由 policy 决定，
@@ -507,6 +537,7 @@ void VoicePopup::updatePreeditText(const std::string &text) {
 //   （在 prepare 就判 !sawRealRect_ 会自锁：popup 都没建过，矩形永远
 //   收不到）
 bool VoicePopup::wantTopMode(InputContext *ic, bool atShow) {
+    lastDecisionWasKnowledgeFallback_ = false;
     anchorBottom_ = true; // "top" 之外全部底部居中
     if (positionMode_ == "top") {
         anchorBottom_ = false;
@@ -532,8 +563,9 @@ bool VoicePopup::wantTopMode(InputContext *ic, bool atShow) {
             followingApps_.count(toLower(ic->program())) > 0) {
             return false; // 该应用跟随成功过：重聚焦新 IC 首下直接跟随
         }
+        lastDecisionWasKnowledgeFallback_ = true;
         FCITX_INFO() << "VoicePopup: auto：本 IC 未见真实光标矩形且无上屏"
-                        "历史（该应用首次会话）→ layer 模式回退";
+                        "历史（该应用首次会话）";
         return true;
     }
     return false;
@@ -547,8 +579,29 @@ bool VoicePopup::ensurePopup(InputContext *ic, bool atShow) {
     if (icChanged) {
         sawRealRect_ = false;      // 矩形上报能力按 IC 记账
         committedInThisIC_ = false; // 上屏历史同样按 IC
+        probeDeferralUsed_ = false; // 新 IC 重新给一次二次探测
     }
-    const bool top = wantTopMode(ic, atShow);
+    const bool top = [&]() {
+        const bool want = wantTopMode(ic, atShow);
+        // 知识回退 + 非强制（policy/名单）+ IM proxy 可用：show 时刻先不落
+        // layer——留 popup 给第二个组合探测（首个组合实测从不出报文，
+        // 第二个 16ms 即出），500ms 无矩形再由定时器切换
+        if (want && lastDecisionWasKnowledgeFallback_ && atShow &&
+            !topMode_ && !probeDeferralUsed_) {
+            probeDeferralUsed_ = true; // 本会话只暂缓一次（定时器重入不暂缓）
+            auto *waylandim = instance_->addonManager().addon("waylandim", true);
+            if (waylandim) {
+                auto *imWrapper =
+                    waylandim->call<IWaylandIMModule::getInputMethodV2>(ic);
+                if (wayland::rawPointer(imWrapper)) {
+                    FCITX_INFO() << "VoicePopup: 知识回退暂缓——popup 模式"
+                                    "二次探测（500ms 内矩形到则跟随）";
+                    return false;
+                }
+            }
+        }
+        return want;
+    }();
     // layer 模式同 IC 复用（layer 定位权在我们手里，不涉及槽位竞争）；
     // popup 模式每次都重建：smithay 的 input popup 追踪槽是单槽、
     // last-create-wins（classicui 每次显示都重建 popup 重夺槽位）——我们
@@ -760,6 +813,9 @@ void VoicePopup::show(InputContext *ic) {
     }
     if (!topMode_) {
         beginPreeditProbe(ic); // 换行/重聚焦/Electron 首句实时跟随
+        if (lastDecisionWasKnowledgeFallback_) {
+            armProbeFallbackTimer();
+        }
     }
     if (patternMode_ && (!topMode_ || layerConfigured_)) {
         size_t bufSize = width_ * height_ * 4;
@@ -786,6 +842,8 @@ void VoicePopup::show(InputContext *ic) {
 
 void VoicePopup::hide() {
     std::lock_guard<std::mutex> lock(mutex_);
+    probeTimer_.reset();       // 会话结束，切换定时器作废
+    probeDeferralUsed_ = false; // 下一会话可再用二次探测
     endPreeditProbe(); // 防御：无矩形到达的字段不留悬挂组合
     if (!surface_) {
         visible_ = false;

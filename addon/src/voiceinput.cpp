@@ -351,6 +351,11 @@ VoiceInputEngine::VoiceInputEngine(Instance *instance)
     reloadConfig();
 
     popup_ = std::make_unique<VoicePopup>(instance_);
+    popup_->setModeSwitchHandler([this]() {
+        // 二次探测超时切 layer：新 surface 需要重推一帧
+        pushUiState();
+    });
+
     popup_->setPositionPolicy(config_.positionMode.value(),
                               config_.positionFallbackApps.value());
     flutter_ = std::make_unique<FlutterEngineHost>(&instance_->eventLoop());
