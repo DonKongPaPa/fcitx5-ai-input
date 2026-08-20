@@ -479,6 +479,18 @@ void VoicePopup::beginPreeditProbe(InputContext *ic) {
     FCITX_INFO() << "VoicePopup: 预输入探针已置（可见组合文本，逼应用重报光标矩形）";
 }
 
+// 探针逐字未完时排队的 partial，打完放行（持锁）
+void VoicePopup::flushPendingPreeditLocked() {
+    if (!hasPendingPreedit_) {
+        return;
+    }
+    hasPendingPreedit_ = false;
+    if (auto *ic = icRef_.get()) {
+        ic->inputPanel().setClientPreedit(Text(pendingPreedit_));
+        ic->updatePreedit();
+    }
+}
+
 static uint64_t nowUsSafe() {
     return std::chrono::duration_cast<std::chrono::microseconds>(
                std::chrono::steady_clock::now().time_since_epoch())
@@ -488,7 +500,10 @@ static uint64_t nowUsSafe() {
 void VoicePopup::typeProbeNext(InputContext *ic) {
     static const char *const kProbe =
         "\u8bed\u97f3\u8f93\u5165\u4e2d"; // 语音输入中（每字 3 字节）
-    if (!ic || !preeditProbeActive_ || sawRealRect_ || probeTypingIdx_ >= 5) {
+    if (!ic || !preeditProbeActive_ || probeTypingIdx_ >= 5) {
+        if (probeTypingIdx_ >= 5) {
+            flushPendingPreeditLocked(); // 打完：放行排队的 partial
+        }
         probeTypeTimer_.reset();
         return;
     }
@@ -502,8 +517,9 @@ void VoicePopup::typeProbeNext(InputContext *ic) {
             std::lock_guard<std::mutex> lock(mutex_);
             probeTypeTimer_.reset();
             if (auto *ic2 = icRef_.get()) {
-                if (preeditProbeActive_ && !sawRealRect_ &&
-                    probeTypingIdx_ == idx && idx < 5) {
+                // 矩形到也不停链：探针五个字要打完（视觉完整性，用户
+                // 需求），partial 在队列里等
+                if (preeditProbeActive_ && probeTypingIdx_ == idx && idx < 5) {
                     probeTypingIdx_ = idx + 1;
                     std::string txt(std::string(kProbe, (idx + 1) * 3));
                     ic2->inputPanel().setClientPreedit(Text(txt));
@@ -522,6 +538,7 @@ void VoicePopup::endPreeditProbe() {
     }
     preeditProbeActive_ = false;
     probeTypingIdx_ = 5;
+    hasPendingPreedit_ = false;
     if (auto *ic = icRef_.get()) {
         ic->inputPanel().setClientPreedit(Text());
         ic->updatePreedit();
@@ -549,8 +566,13 @@ void VoicePopup::updatePreeditText(const std::string &text) {
     if (!preeditProbeActive_) {
         return;
     }
-    probeTypeTimer_.reset(); // partial 接管组合，逐字链让位
-    probeTypingIdx_ = 5;
+    if (probeTypingIdx_ < 5) {
+        // 逐字未完：排队等打完（后到覆盖先到，永远显示最新）
+        pendingPreedit_ = text;
+        hasPendingPreedit_ = true;
+        return;
+    }
+    probeTypeTimer_.reset();
     if (auto *ic = icRef_.get()) {
         ic->inputPanel().setClientPreedit(Text(text));
         ic->updatePreedit();
