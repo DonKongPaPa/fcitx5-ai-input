@@ -127,7 +127,12 @@ public:
     // 生效 scale：fractional 事件（精确，1/120）优先；未到则用 wl_output
     // 整数 scale（niri 不给 IM popup 发 fractional preferred_scale，实测）
     double scale() const {
-        return gotFscale_ ? scaleNum_ / 120.0 : outputScale_;
+        if (gotFscale_) {
+            return scaleNum_ / 120.0;
+        }
+        // 新 surface 的 fractional 未到：上次 fractional > 整数兜底
+        //（wl_output 整数是取整值，混 scale 双屏上差 33-60%）
+        return lastFscaleNum_ > 0 ? lastFscaleNum_ / 120.0 : outputScale_;
     }
     int logicalWidth() const { return logicalW_; }
     int logicalHeight() const { return logicalH_; }
@@ -200,6 +205,10 @@ private:
     wp_fractional_scale_v1 *fscale_ = nullptr;
     uint32_t scaleNum_ = 120; // 1/120 单位（协议约定 120=1.0）
     bool gotFscale_ = false;  // fractional 事件是否到达过
+    // 最后一次 fractional 值（跨 surface 记忆）：layer surface 可能收不到
+    // fractional 事件，此时整数兜底 wl_output scale 是向上取整的 2
+    //（宿主机双屏 1.25/1.5 实测）→ 放大；用上次 fractional 兜底永远更准
+    uint32_t lastFscaleNum_ = 0;
     int outputScale_ = 1;     // wl_output 整数 scale 兜底
     wl_output *output_ = nullptr;
     int logicalW_ = 0, logicalH_ = 0;

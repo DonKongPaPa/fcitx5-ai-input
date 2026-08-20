@@ -158,6 +158,9 @@ void VoicePopup::preferredScale(void *data, wp_fractional_scale_v1 *,
     auto *s = static_cast<VoicePopup *>(data);
     std::lock_guard<std::mutex> lock(s->mutex_);
     s->gotFscale_ = true;
+    if (scale != 0) {
+        s->lastFscaleNum_ = scale; // 跨 surface 记忆（layer 无 fractional 时兜底）
+    }
     if (scale == s->scaleNum_ || scale == 0) {
         return;
     }
