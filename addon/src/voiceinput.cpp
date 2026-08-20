@@ -313,7 +313,10 @@ void VoiceInputEngine::runServerScript(const std::string &cmd,
     }
 }
 
-// Flutter 资产发现：env 覆盖 → 用户级（~/.local/share）→ 系统包安装路径
+// Flutter 资产发现：env 覆盖 → 系统包安装路径 → 用户级（~/.local/share）。
+// 系统包必须优先：~/.local 排前面时，早期手动部署的残留副本会永久遮蔽
+// 包管理器的新安装（宿主机实测：连装三轮"没效果"，进程 maps 显示加载
+// 的是 8 月旧副本）。~/.local 保留给 tarball/手动安装（无系统包时兜底）
 static bool findFlutterAssets(std::string *assetsDir, std::string *icuPath) {
     if (const char *env = getenv("VOICEINPUT_FLUTTER_DIR"); env && *env) {
         *assetsDir = std::string(env) + "/flutter_assets";
@@ -321,14 +324,14 @@ static bool findFlutterAssets(std::string *assetsDir, std::string *icuPath) {
         return true;
     }
     std::vector<std::string> candidates;
+    candidates.push_back("/usr/share/fcitx5-voiceinput/flutter");
+    candidates.push_back("/usr/local/share/fcitx5-voiceinput/flutter");
     if (const char *xdg = getenv("XDG_DATA_HOME"); xdg && *xdg) {
         candidates.push_back(std::string(xdg) + "/fcitx5-voiceinput/flutter");
     } else if (const char *home = getenv("HOME"); home && *home) {
         candidates.push_back(std::string(home) +
                              "/.local/share/fcitx5-voiceinput/flutter");
     }
-    candidates.push_back("/usr/share/fcitx5-voiceinput/flutter");
-    candidates.push_back("/usr/local/share/fcitx5-voiceinput/flutter");
     for (const auto &dir : candidates) {
         std::string assets = dir + "/flutter_assets";
         std::string icu = dir + "/icudtl.dat";
