@@ -897,6 +897,9 @@ bool VoiceInputEngine::handleKey(const Key &key, bool pressed,
             resultTimer_.reset();
             if (auto *ic = sessionIcRef_.get()) {
                 ic->commitString(finalText_);
+                if (popup_) {
+                    popup_->notifyCommit();
+                }
             }
             uiNotify("committed", finalText_);
             enterIdle();
@@ -1043,6 +1046,9 @@ void VoiceInputEngine::startResultTimer() {
             if (auto *ic = sessionIcRef_.get();
                 state_ == State::Result && ic) {
                 ic->commitString(finalText_);
+                if (popup_) {
+                    popup_->notifyCommit();
+                }
                 uiNotify("committed", finalText_);
             }
             enterIdle();
@@ -1050,6 +1056,12 @@ void VoiceInputEngine::startResultTimer() {
         });
     if (resultTimer_) {
         resultTimer_->setOneShot();
+    }
+}
+
+void VoiceInputEngine::notifyUiCommit() {
+    if (popup_) {
+        popup_->notifyCommit();
     }
 }
 
@@ -1062,6 +1074,9 @@ void VoiceInputEngine::commitCandidate(size_t index, InputContext *ic) {
         ic->commitString(text);
     } else if (auto *ic = sessionIcRef_.get()) {
         ic->commitString(text);
+    }
+    if (popup_) {
+        popup_->notifyCommit();
     }
     uiNotify("committed", text);
     enterIdle();
@@ -1137,6 +1152,7 @@ std::string TestService::Trigger(std::string text) {
         return "error: no focused input context";
     }
     ic->commitString(text);
+    engine_->notifyUiCommit();
     return "ok: " + text;
 }
 

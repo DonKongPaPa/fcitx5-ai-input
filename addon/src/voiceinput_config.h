@@ -73,19 +73,19 @@ FCITX_CONFIGURATION(
         ""};
 
     // —— 卡片定位 ——
-    // chromium 系应用的 wayland text-input 恒报 0,0 0x0 光标矩形，合成器
-    // 会把 input popup 放到窗口左上角。auto：名单命中或实测无真实矩形的
-    // 应用改用 layer-shell 底部居中，其余跟随光标；caret：始终跟随光标
-    //（chromium 系会落在窗口左上角）；top/bottom：全部顶部/底部居中
+    // chromium 系只在文本/光标变化时上报 text-input 光标矩形（焦点时不
+    // 报，实验 007/r26）。auto：收到过真实矩形（GTK/Qt）或本 IC 上屏过
+    // （上屏即有新鲜矩形可继承，chromium 也跟随）→ 跟随光标；否则（处女
+    // 字段）layer-shell 底部居中。caret：强制跟随。top/bottom：全部
+    // 顶部/底部居中
     Option<std::string> positionMode{
         this, "PositionMode",
-        "卡片定位模式（auto=能跟随光标则跟随，不能则底部居中 / caret=强制跟随光标 / bottom=全部底部居中 / top=全部顶部居中）",
+        "卡片定位模式（auto=可跟随则跟随（含 chromium 上屏后继承），否则底部居中 / caret=强制跟随光标 / bottom=全部底部居中 / top=全部顶部居中）",
         "auto"};
     Option<std::string> positionFallbackApps{
         this, "PositionFallbackApps",
-        "auto 模式下直接改用底部居中的应用列表（逗号分隔，匹配程序名/app-id 子串；名单外应用按是否上报光标矩形自动判断）",
-        "chromium,chrome,brave,msedge,vivaldi,opera,electron,vscode,code,"
-        "slack,discord,teams,qq,telegram"};
+        "强制底部居中的应用列表（逗号分隔，匹配程序名/app-id 子串；留空=自动判断——默认自动）",
+        ""};
 
     Option<AsrEngineKind, NoConstrain<AsrEngineKind>, DefaultMarshaller<AsrEngineKind>, AsrEngineKindI18NAnnotation> asrEngine{
         this, "AsrEngine", "ASR 引擎（Dummy=调试模拟，FunASR=流式识别，"

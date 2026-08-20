@@ -415,6 +415,15 @@ void VoicePopup::setPositionPolicy(const std::string &mode,
     }
 }
 
+void VoicePopup::notifyCommit() {
+    std::lock_guard<std::mutex> lock(mutex_);
+    if (!committedInThisIC_) {
+        FCITX_INFO() << "VoicePopup: 本 IC 已上屏 → handle 有新鲜光标矩形"
+                        "可继承，auto 下轮跟随";
+    }
+    committedInThisIC_ = true;
+}
+
 // 定位模式决策：policy × 应用名单 × 矩形上报能力。
 // - chromium 系的 wayland text-input 恒报 0,0 0x0 → 合成器把 input popup
 //   放到窗口左上角；此类应用改用 layer-shell（anchor 由 policy 决定，
@@ -444,9 +453,9 @@ bool VoicePopup::wantTopMode(InputContext *ic, bool atShow) {
             return true;
         }
     }
-    if (atShow && !sawRealRect_) {
-        FCITX_INFO() << "VoicePopup: auto：本 IC 未见真实光标矩形"
-                     << "（chromium 系特征）→ layer 模式回退";
+    if (atShow && !sawRealRect_ && !committedInThisIC_) {
+        FCITX_INFO() << "VoicePopup: auto：本 IC 未见真实光标矩形且无上屏"
+                        "历史（chromium 系处女字段特征）→ layer 模式回退";
         return true;
     }
     return false;
@@ -458,7 +467,8 @@ bool VoicePopup::ensurePopup(InputContext *ic, bool atShow) {
     }
     const bool icChanged = icRef_.get() != ic;
     if (icChanged) {
-        sawRealRect_ = false; // 矩形上报能力按 IC 记账
+        sawRealRect_ = false;      // 矩形上报能力按 IC 记账
+        committedInThisIC_ = false; // 上屏历史同样按 IC
     }
     const bool top = wantTopMode(ic, atShow);
     // layer 模式同 IC 复用（layer 定位权在我们手里，不涉及槽位竞争）；

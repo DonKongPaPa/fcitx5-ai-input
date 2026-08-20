@@ -37,8 +37,8 @@
 - `scripts/funasr-server/`：宿主 WS 识别服务（uv venv python3.12 + funasr/torch-CUDA，`scripts/funasr-serve.sh start` 管理）
 - 定位不由我们计算：popup 挂在 waylandim 的 `zwp_input_method_v2` 上，合成器按 text-input 光标矩形放置（协议规定一个 seat 仅一个 IM，必须复用 waylandim 的连接，不能自 bind）
 - **popup 生命周期照抄 classicui（实验 007）**：smithay 对每条 IM 连接只追踪最后一个 input popup（单槽 last-create-wins），光标矩形/重定位只发给槽内者——show 每次销毁重建 popup（重夺槽 + 最新矩形），hide 先 attach(null) unmap 再销毁；长期持有隐藏 popup 会在被 classicui 抢槽后停在旧光标处
-- **定位模式（PositionMode）**：`auto`（默认）= 能跟随光标则跟随（按 IC 是否上报过真实矩形动态判断），不能则 layer-shell **底部居中**；`caret`=强制跟随（chromium 系会落窗口左上角）；`bottom`/`top`=全部底部/顶部居中；chromium 系恒 0,0 0x0 矩形（实验 006，r24 两轮复核），名单 PositionFallbackApps 直走 layer 快路径
-- **chromium 矩形上报时机（实验 007/r26 定案）**：chromium 只在**文本/光标变化时**（上屏、拼音组合）报 set_cursor_rectangle，焦点时不报——classicui"在 chromium 里也跟随"正是这个：它只在打字时出现，永远赶得上新鲜矩形。我们的 show 重建 popup 会**继承** smithay handle 里保留的最后矩形：`caret` 模式下语音上屏后的下一轮录音会贴住上屏文字（实测 38px）；处女字段无矩形可继承 → auto 的底部居中回退是稳定默认
+- **定位模式（PositionMode）**：`auto`（默认）= **跟随优先**——收到过真实矩形（GTK/Qt 焦点即报）或本 IC 上屏过（上屏触发 chromium 报新鲜矩形进 handle，show 重建的 popup 继承，r27 实测贴文字 48px）→ 跟随光标；两者皆无（chromium 处女字段）→ layer-shell **底部居中** fallback；`caret`=强制跟随；`bottom`/`top`=全部底部/顶部居中；PositionFallbackApps（默认空）= 用户手动强制底部的覆盖名单
+- **chromium 矩形上报时机（实验 007/r26 定案）**：chromium 只在**文本/光标变化时**（上屏、拼音组合）报 set_cursor_rectangle，焦点时不报——classicui"在 chromium 里也跟随"正是这个：它只在打字时出现，永远赶得上新鲜矩形。我们的 show 重建 popup 会**继承** smithay handle 里保留的最后矩形：语音上屏后的下一轮录音贴住上屏文字（实测 48px）
 
 ## 测试环境（一个桌面 = 一个独立容器）
 

@@ -116,6 +116,8 @@ public:
     int pendingMW_ = 64, pendingMH_ = 64;
     const std::vector<std::string> &candidates() const { return candidates_; }
     void commitCandidate(size_t index, InputContext *ic);
+    // 上屏后通知 popup（auto 模式继承跟随；TestService::Trigger 也走这里）
+    void notifyUiCommit();
 
 private:
     enum class State { Idle, Pressing, Recording, Result, Candidates };

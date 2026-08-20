@@ -86,9 +86,13 @@ public:
     void setPatternMode(bool p) { patternMode_ = p; } // 引擎不可用时回退色块
 
     // —— 卡片定位模式（chromium 系不报光标矩形 → input popup 被合成器
-    // 放到窗口左上角；此类应用改用 layer-shell 顶部居中自定位）——
+    // 放到窗口左上角；此类应用改用 layer-shell 自定位）——
     void setPositionPolicy(const std::string &mode,
                            const std::string &fallbackAppsCsv);
+    // 本 IC 我们上屏过文本。chromium 系只在**文本变化时**报光标矩形
+    //（实验 007/r26）：上屏即意味着 smithay handle 里有新鲜矩形可供
+    // show 重建的 popup 继承 → auto 模式下轮改回跟随
+    void notifyCommit();
 
     // W3 fractional scale：逻辑/物理尺寸分离。Dart（或调用方）上报**逻辑**
     // 尺寸；池按 物理=ceil(逻辑×scale/120) 建，viewport 缩回逻辑显示。
@@ -193,6 +197,9 @@ private:
     // 本 IC 自激活以来是否收到过"真实"（非 0x0）光标矩形。chromium 系
     // 恒 0,0 0x0 → auto 模式据此回退 layer-shell；GTK/Qt 焦点后很快上报
     bool sawRealRect_ = false;
+    // 本 IC 是否上屏过文本（我们自己 commitString）——chromium 的矩形
+    // 只在文本变化时上报，上屏 = handle 里必有新鲜矩形可继承
+    bool committedInThisIC_ = false;
     bool anchorBottom_ = true; // layer 模式锚点：false=顶部居中（仅旧值
                                // "top"），true=底部居中（默认，用户偏好）
     int popupAttachCount_ = 0; // popup 模式 attach 计数（>1 即重建）

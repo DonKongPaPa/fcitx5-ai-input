@@ -848,6 +848,66 @@ else
     record r26-chromium-rect-timing pass "（跳过：无 chromium/录屏）"
 fi
 
+# R27 chromium auto 模式：首录底部回退 → 上屏后下轮跟随（用户定案的
+# 产品语义：跟随优先，底部只做 fallback）。机制：上屏触发 chromium 报
+# 新鲜矩形进 smithay handle（当时无人接收也不丢）→ notifyCommit 记账
+# → 下轮 show 重建 popup 继承。断言：轮 1 layer 底部回退日志；轮 2
+# popup 重建且**无**新 layer 创建；位置视觉复核（r27-s2 贴上屏文字）
+if [ -n "${CAGE_SOCK:-}" ] && command -v chromium >/dev/null 2>&1; then
+    gdbus call --session --dest org.fcitx.Fcitx5 --object-path /controller \
+        --method org.fcitx.Fcitx.Controller1.SetConfig \
+        "fcitx://config/addon/voiceinput" "<{'PositionMode': <'auto'>}>" >/dev/null 2>&1 || true
+    sleep 0.5
+    pkill -f "chrome-r27" 2>/dev/null || true
+    chromium --ozone-platform=wayland --class=webapp-e2e --enable-wayland-ime \
+        --no-first-run --disable-gpu --no-sandbox --disable-dev-shm-usage \
+        --user-data-dir=/tmp/chrome-r27 file:///tmp/r26.html \
+        >"$LOG_DIR/chromium-r27.log" 2>&1 &
+    sleep 10
+    # 轮 1：点击字段 → 录音（处女字段：无矩形无上屏 → 底部回退）
+    r27_m1=$(wc -l < "$FCITX_LOG")
+    "$DIST_BIN/virtpoint" move 300 420 1280 720 2>/dev/null || true
+    "$DIST_BIN/virtpoint" click left 2>/dev/null || true
+    sleep 0.8
+    call SimulateKey "Control+Control_R" true >/dev/null 2>&1 || true
+    sleep 1.2
+    WAYLAND_DISPLAY="$CAGE_SOCK" grim "$OUT_DIR/r27-s1.png" 2>"$LOG_DIR/grim-r27-s1.log" || true
+    call SimulateKey "Control+Control_R" false >/dev/null 2>&1 || true
+    sleep 2
+    # Enter 上屏（notifyCommit 记账 + chromium 报新鲜矩形）
+    call SimulateKey "Return" true >/dev/null 2>&1 || true
+    call SimulateKey "Return" false >/dev/null 2>&1 || true
+    sleep 1.5
+    # 轮 2：直接录音（应继承上屏后的矩形 → popup 跟随，不再回退）
+    r27_m2=$(wc -l < "$FCITX_LOG")
+    call SimulateKey "Control+Control_R" true >/dev/null 2>&1 || true
+    sleep 1.2
+    WAYLAND_DISPLAY="$CAGE_SOCK" grim "$OUT_DIR/r27-s2.png" 2>"$LOG_DIR/grim-r27-s2.log" || true
+    call SimulateKey "Control+Control_R" false >/dev/null 2>&1 || true
+    sleep 2
+    call SimulateKey "Return" true >/dev/null 2>&1 || true
+    call SimulateKey "Return" false >/dev/null 2>&1 || true
+    sleep 1.5
+    pkill -f "chrome-r27" 2>/dev/null || true
+    sleep 1
+    r27_w1="$(tail -n +$((r27_m1+1)) "$FCITX_LOG")"
+    r27_w2="$(tail -n +$((r27_m2+1)) "$FCITX_LOG")"
+    r27_fallback="$(printf '%s' "$r27_w1" | grep -ac 'layer 模式回退' || true)"
+    r27_bottom="$(printf '%s' "$r27_w1" | grep -ac '底部居中模式' || true)"
+    r27_commit="$(printf '%s' "$r27_w1" | grep -ac '新鲜光标矩形' || true)"
+    r27_follow="$(printf '%s' "$r27_w2" | grep -ac '重夺定位槽' || true)"
+    r27_nolayer="$(printf '%s' "$r27_w2" | grep -ac 'layer surface created' || true)"
+    if [ "$r27_fallback" -ge 1 ] && [ "$r27_bottom" -ge 1 ] && \
+       [ "$r27_commit" -ge 1 ] && [ "$r27_follow" -ge 1 ] && \
+       [ "$r27_nolayer" -eq 0 ]; then
+        record r27-auto-commit-follow pass "auto 语义闭环：首录底部回退（fallback ✓）→ 上屏记账 → 次轮 popup 跟随（无新 layer ✓）；位置见 r27-s1/s2 视觉复核"
+    else
+        record r27-auto-commit-follow fail "fallback=$r27_fallback bottom=$r27_bottom commit=$r27_commit follow=$r27_follow newlayer=$r27_nolayer"
+    fi
+else
+    record r27-auto-commit-follow pass "（跳过：无 chromium/录屏）"
+fi
+
 # R18 字体跟随（W4：classicui Font → fontconfig → Dart 加载）
 printf 'Font="Noto Sans CJK SC 12"\n' >> /home/testuser/.config/fcitx5/conf/classicui.conf 2>/dev/null || true
 gdbus call --session --dest org.fcitx.Fcitx5 --object-path /controller \
