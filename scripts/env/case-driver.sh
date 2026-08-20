@@ -674,7 +674,7 @@ if [ -n "${CAGE_SOCK:-}" ] && command -v chromium >/dev/null 2>&1; then
         "$DIST_BIN/virtpoint" move 640 600 1280 720 2>/dev/null || true
         "$DIST_BIN/virtpoint" click left 2>/dev/null || true
         sleep 1.5
-        kill "$R24_CHROME" 2>/dev/null || true
+        pkill -f "chrome-r24-$r24_variant" 2>/dev/null || true
         sleep 1
         r24_win="$(tail -n +$((r24_mark+1)) "$FCITX_LOG")"
         r24_nofallback="$(printf '%s' "$r24_win" | grep -ac '未见真实光标矩形' || true)"
@@ -761,6 +761,91 @@ if [ -n "${CAGE_SOCK:-}" ] && [ -x "$DIST_BIN/$TESTAPP" ] && [ -x "$DIST_BIN/vir
     fi
 else
     record r25-caret-refollow pass "（跳过：无录屏/测试应用）"
+fi
+
+# R26 chromium 光标矩形上报时机 + classicui 之谜（决定性实验，位置由视觉复核）：
+# 事实链（r26 前两轮实测）：chromium **不在焦点时**报 text_input_rectangle，
+# 只在**文本/光标变化时**（语音上屏、拼音组合）上报；事件只发给当时的
+# 追踪槽 popup（classicui 或已销毁的我们），但 smithay handle 会保留最后
+# 矩形 → 我们 show 重建的 popup 继承它 → 第二轮卡片贴住上轮上屏文字的
+# 光标。classicui "chromium 里也跟随" = 它只在打字（组合）时出现，恰好
+# 只见过真实矩形。注意：InjectKey 裸字母（keyboard-us 直通）从不落字段
+# （原因未查，拼音组合正常），本轮用语音上屏触发光标变化
+if [ -n "${CAGE_SOCK:-}" ] && command -v chromium >/dev/null 2>&1; then
+    gdbus call --session --dest org.fcitx.Fcitx5 --object-path /controller \
+        --method org.fcitx.Fcitx.Controller1.SetConfig \
+        "fcitx://config/addon/voiceinput" "<{'PositionMode': <'caret'>}>" >/dev/null 2>&1 || true
+    sleep 0.5
+    r26_mark=$(wc -l < "$FCITX_LOG")
+    cat >/tmp/r26.html <<'HTML'
+<!doctype html><html><body style="margin:0">
+<input id="q" autofocus style="position:absolute;left:0;top:0;width:100%;height:100%;font-size:32px;border:8px solid #d00" placeholder="type here">
+</body></html>
+HTML
+    pkill -f "chrome-r2[46]" 2>/dev/null || true
+    sleep 2
+    chromium --ozone-platform=wayland --class=webapp-e2e --enable-wayland-ime \
+        --no-first-run --disable-gpu --no-sandbox --disable-dev-shm-usage \
+        --user-data-dir=/tmp/chrome-r26 file:///tmp/r26.html \
+        >"$LOG_DIR/chromium-r26.log" 2>&1 &
+    sleep 10
+    # 第 1 轮：点击字段左中部 → 录音 → Enter 上屏（空字段首录：无矩形可继
+    # 承 → 卡片应在窗口上部/陈旧位置；上屏本身让 chromium 报出真实矩形）
+    "$DIST_BIN/virtpoint" move 300 420 1280 720 2>/dev/null || true
+    "$DIST_BIN/virtpoint" click left 2>/dev/null || true
+    sleep 0.8
+    call SimulateKey "Control+Control_R" true >/dev/null 2>&1 || true
+    sleep 1.2
+    WAYLAND_DISPLAY="$CAGE_SOCK" grim "$OUT_DIR/r26-s1.png" 2>"$LOG_DIR/grim-r26-s1.log" || true
+    call SimulateKey "Control+Control_R" false >/dev/null 2>&1 || true
+    sleep 2
+    call SimulateKey "Return" true >/dev/null 2>&1 || true
+    call SimulateKey "Return" false >/dev/null 2>&1 || true
+    sleep 1.5
+    # 第 2 轮：不再动光标直接录音——重建的 popup 应继承上屏后的真实矩形
+    # （卡片贴住已上屏文字），全程不会有任何 text_input_rectangle 事件到我们
+    call SimulateKey "Control+Control_R" true >/dev/null 2>&1 || true
+    sleep 1.2
+    WAYLAND_DISPLAY="$CAGE_SOCK" grim "$OUT_DIR/r26-s2.png" 2>"$LOG_DIR/grim-r26-s2.log" || true
+    call SimulateKey "Control+Control_R" false >/dev/null 2>&1 || true
+    sleep 2
+    call SimulateKey "Return" true >/dev/null 2>&1 || true
+    call SimulateKey "Return" false >/dev/null 2>&1 || true
+    sleep 1.5
+    # classicui 本尊在 chromium 的落点：切 pinyin 组合 → 截图
+    gdbus call --session --dest org.fcitx.Fcitx5 --object-path /controller \
+        --method org.fcitx.Fcitx.Controller1.SetCurrentIM "pinyin" >/dev/null 2>&1 || true
+    sleep 0.5
+    for r26_k in N I H A O; do
+        call InjectKey "$r26_k" true >/dev/null 2>&1 || true
+        call InjectKey "$r26_k" false >/dev/null 2>&1 || true
+        sleep 0.25
+    done
+    sleep 1.2
+    WAYLAND_DISPLAY="$CAGE_SOCK" grim "$OUT_DIR/r26-classicui.png" 2>>"$LOG_DIR/grim-r26-s1.log" || true
+    call InjectKey "Escape" true >/dev/null 2>&1 || true
+    call InjectKey "Escape" false >/dev/null 2>&1 || true
+    gdbus call --session --dest org.fcitx.Fcitx5 --object-path /controller \
+        --method org.fcitx.Fcitx.Controller1.SetCurrentIM "keyboard-us" >/dev/null 2>&1 || true
+    pkill -f "chrome-r26" 2>/dev/null || true
+    sleep 1
+    r26_win="$(tail -n +$((r26_mark+1)) "$FCITX_LOG")"
+    r26_rebuild="$(printf '%s' "$r26_win" | grep -ac '重夺定位槽' || true)"
+    r26_detach="$(printf '%s' "$r26_win" | grep -ac 'unmap+销毁' || true)"
+    r26_shots=0
+    for f in r26-s1.png r26-s2.png r26-classicui.png; do
+        [ -s "$OUT_DIR/$f" ] && r26_shots=$((r26_shots+1))
+    done
+    if [ "$r26_rebuild" -ge 4 ] && [ "$r26_detach" -ge 2 ] && [ "$r26_shots" -eq 3 ]; then
+        record r26-chromium-rect-timing pass "两轮录音+拼音组合完成（重建 ×$r26_rebuild / unmap ×$r26_detach / 截图 ×$r26_shots）；位置跟随（s2 贴上屏文字、classicui 贴 preedit）由视觉复核"
+    else
+        record r26-chromium-rect-timing fail "rebuild=$r26_rebuild detach=$r26_detach shots=$r26_shots"
+    fi
+    gdbus call --session --dest org.fcitx.Fcitx5 --object-path /controller \
+        --method org.fcitx.Fcitx.Controller1.SetConfig \
+        "fcitx://config/addon/voiceinput" "<{'PositionMode': <'auto'>}>" >/dev/null 2>&1 || true
+else
+    record r26-chromium-rect-timing pass "（跳过：无 chromium/录屏）"
 fi
 
 # R18 字体跟随（W4：classicui Font → fontconfig → Dart 加载）
