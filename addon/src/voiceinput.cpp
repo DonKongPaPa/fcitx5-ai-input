@@ -1092,6 +1092,11 @@ void VoiceInputEngine::onAsrFinish(const std::string &text) {
     if (state_ != State::Recording) {
         return;
     }
+    if (popup_) {
+        // 结果/候选卡片必须显示：判定挂起不能再等矩形（矩形延迟实测
+        // 不稳定、固定窗口必误判——结算到 layer 底部）
+        popup_->resolvePendingToLayer();
+    }
     finalText_ = text;
     if (config_.llmEnabled.value()) {
         // Dummy 阶段：候选 = [润色版, 原始版]（润色=保尾标点，真实 LLM 后替换）

@@ -510,16 +510,50 @@ void VoicePopup::updatePreeditText(const std::string &text) {
     }
 }
 
+// 判定挂起结算 → layer 底部（持锁，两个触发点共用：8s 保险丝、录音
+// 结束——结果/候选卡片必须显示，不能再等矩形）
+void VoicePopup::resolvePendingToLayerLocked() {
+    if (auto *ic = icRef_.get()) {
+        // probeDeferralUsed_ 已置位 → ensurePopup 不再暂缓，知识仍缺 →
+        // 真实回退 layer
+        ensurePopup(ic, /*atShow=*/true);
+        // 新 surface 在创建时带空输入区（防遮挡），而 show() 的"恢复
+        // 全量"早已跑过——不补的话 fallback 卡片鼠标点不进
+        if (surface_) {
+            wl_surface_set_input_region(surface_, nullptr);
+            FCITX_INFO() << "VoicePopup: 输入区恢复全量（结算后的 surface）";
+        }
+        if (modeSwitchHandler_) {
+            modeSwitchHandler_(); // 引擎重推 UI（新 surface）
+        }
+    }
+}
+
+void VoicePopup::resolvePendingToLayer() {
+    std::lock_guard<std::mutex> lock(mutex_);
+    if (!decisionPending_) {
+        return;
+    }
+    decisionPending_ = false;
+    probeTimer_.reset();
+    if (!visible_ || topMode_ || sawRealRect_ || committedInThisIC_ ||
+        !surface_) {
+        return;
+    }
+    FCITX_INFO() << "VoicePopup: 判定挂起结算（录音结束仍无矩形）→ "
+                    "layer 底部";
+    resolvePendingToLayerLocked();
+}
+
 void VoicePopup::armProbeFallbackTimer() {
     const uint64_t deadlineUs =
         std::chrono::duration_cast<std::chrono::microseconds>(
             std::chrono::steady_clock::now().time_since_epoch())
             .count() +
-        // 1500ms：冷 IC 的矩形路径波动大（宿主机实测：重启后首个应用
-        // <500ms 到、第二个应用起可超 500ms——旧窗口一响就拆 popup，
-        // 矩形迟到无人接收 → 误判回退。classicui 无截止时限故从不出
-        // 错；1.5s 覆盖波动，真死字段才等满）
-        1'500'000ull;
+        // 保险丝 8s：固定窗口已被实测否定（矩形延迟不稳定、首应用也
+        // 可超 1.5s，任何定值都误判）。真正结算点=录音结束（结果/候选
+        // 卡片必须显示）resolvePendingToLayer；定时器只兜异常路径
+        8'000'000ull;
     probeTimer_ = instance_->eventLoop().addTimeEvent(
         CLOCK_MONOTONIC, deadlineUs, 0, [this](EventSourceTime *, uint64_t) {
             std::lock_guard<std::mutex> lock(mutex_);
@@ -527,24 +561,9 @@ void VoicePopup::armProbeFallbackTimer() {
             decisionPending_ = false;
             if (visible_ && !topMode_ && !sawRealRect_ &&
                 !committedInThisIC_ && surface_) {
-                FCITX_INFO() << "VoicePopup: 二次探测 500ms 无矩形 → 切 "
+                FCITX_INFO() << "VoicePopup: 判定挂起结算（保险丝）→ "
                                 "layer 底部";
-                if (auto *ic = icRef_.get()) {
-                    // probeDeferralUsed_ 已置位 → 不再暂缓，知识仍缺 →
-                    // 真实回退 layer
-                    ensurePopup(ic, /*atShow=*/true);
-                    // 新 surface 在创建时带空输入区（防遮挡），而 show() 的
-                    // "恢复全量"早已跑过——这里不补的话 fallback 卡片鼠标
-                    // 永远点不进（宿主机实测：每应用首用必现）
-                    if (surface_) {
-                        wl_surface_set_input_region(surface_, nullptr);
-                        FCITX_INFO() << "VoicePopup: 输入区恢复全量"
-                                        "（回退切换后的 surface）";
-                    }
-                    if (modeSwitchHandler_) {
-                        modeSwitchHandler_(); // 引擎重推 UI（新 surface）
-                    }
-                }
+                resolvePendingToLayerLocked();
             }
             return true;
         });
@@ -850,7 +869,7 @@ void VoicePopup::show(InputContext *ic) {
             decisionPending_ = true;
             armProbeFallbackTimer();
             FCITX_INFO() << "VoicePopup: 判定挂起——首帧延迟至矩形到达"
-                            "或 1500ms 回退";
+                            "或录音结束/8s 保险丝回退";
         }
     }
     if (patternMode_ && (!topMode_ || layerConfigured_)) {

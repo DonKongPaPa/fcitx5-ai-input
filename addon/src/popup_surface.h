@@ -96,6 +96,8 @@ public:
     //（实验 007/r26）：上屏即意味着 smithay handle 里有新鲜矩形可供
     // show 重建的 popup 继承 → auto 模式下轮改回跟随
     void notifyCommit();
+    // 录音结束仍无矩形：判定挂起结算到 layer（结果/候选卡片必须显示）
+    void resolvePendingToLayer();
     // 预输入探针：录音开始时设一个零宽空格 client preedit（视觉不可
     // 见），应用因组合文本重排而重报光标矩形 → 正被追踪的我们被合成器
     // 实时挪到当前光标（classicui 拼音候选窗同款机制，r26 定案；治换行
@@ -249,6 +251,7 @@ private:
     bool decisionPending_ = false; // 判定挂起：帧不上屏直到跟随/底部定局
     std::function<void()> modeSwitchHandler_;
     void armProbeFallbackTimer();
+    void resolvePendingToLayerLocked(); // 持锁版（保险丝/结算共用）
     std::unique_ptr<EventSourceTime> probeTimer_;
 
 
