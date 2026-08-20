@@ -3,6 +3,10 @@
 
 #include "asr_engine.h"
 
+#include <chrono>
+#include <string>
+#include <vector>
+
 namespace fcitx {
 
 // 模型目录解析（voiceinput.cpp 健康检查共用）
