@@ -515,7 +515,11 @@ void VoicePopup::armProbeFallbackTimer() {
         std::chrono::duration_cast<std::chrono::microseconds>(
             std::chrono::steady_clock::now().time_since_epoch())
             .count() +
-        500'000ull;
+        // 1500ms：冷 IC 的矩形路径波动大（宿主机实测：重启后首个应用
+        // <500ms 到、第二个应用起可超 500ms——旧窗口一响就拆 popup，
+        // 矩形迟到无人接收 → 误判回退。classicui 无截止时限故从不出
+        // 错；1.5s 覆盖波动，真死字段才等满）
+        1'500'000ull;
     probeTimer_ = instance_->eventLoop().addTimeEvent(
         CLOCK_MONOTONIC, deadlineUs, 0, [this](EventSourceTime *, uint64_t) {
             std::lock_guard<std::mutex> lock(mutex_);
@@ -846,7 +850,7 @@ void VoicePopup::show(InputContext *ic) {
             decisionPending_ = true;
             armProbeFallbackTimer();
             FCITX_INFO() << "VoicePopup: 判定挂起——首帧延迟至矩形到达"
-                            "或 500ms 回退";
+                            "或 1500ms 回退";
         }
     }
     if (patternMode_ && (!topMode_ || layerConfigured_)) {
