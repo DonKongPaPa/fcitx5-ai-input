@@ -35,6 +35,11 @@ jobs:
           cp "$SDK/bin/cache/artifacts/engine/linux-x64/icudtl.dat" ../flutter-out/
           cd .. && bash scripts/fetch-flutter-embedder.sh
           cp .cache/flutter-embedder/libflutter_engine.so flutter-out/
+          # sherpa-onnx 运行时随工件下发：打包容器（debian/fedora）没有
+          # curl 且包管理器各异，统一在 ubuntu job 下载（sha256 钉死）
+          bash scripts/fetch-sherpa-runtime.sh
+          cp .cache/sherpa-onnx/libsherpa-onnx-c-api.so \
+             .cache/sherpa-onnx/libonnxruntime.so flutter-out/
       - uses: actions/upload-artifact@v4
         with:
           name: flutter-bundle
@@ -72,6 +77,10 @@ jobs:
         run: |
           # GITHUB_ENV 下一步才生效：本步内直接 export
           export VERSION="${VERSION#v}"
+          # sherpa 运行时从 flutter-bundle 工件种到 .cache（CMake 默认路径）
+          mkdir -p .cache/sherpa-onnx
+          cp flutter-bundle-dl/libsherpa-onnx-c-api.so \
+             flutter-bundle-dl/libonnxruntime.so .cache/sherpa-onnx/
           export SRC="$PWD" \
                  FLUTTER_ASSETS="$PWD/flutter-bundle-dl" \
                  FLUTTER_ENGINE_LIBRARY="$PWD/flutter-bundle-dl/libflutter_engine.so"
@@ -105,9 +114,11 @@ jobs:
             ## fcitx5-voice-input ${{ github.ref_name }}
 
             语音输入：任何输入法激活时长按右 Ctrl 即用（无需切换，与
-            rime/pinyin 共存）。FunASR 流式（31 语种）/ GGUF 本地双引擎 +
-            Flutter MD3 光标悬浮窗（引擎进程内嵌入，无独立窗口/进程）+
-            LLM 润色候选（数字/方向键/鼠标选择）+ configtool 热改设置。
+            rime/pinyin 共存）。内置 sherpa-onnx CPU 流式引擎（零显存，
+            模型脚本下载）+ SenseVoice 松手重识别；可选 FunASR 服务档
+            （31 语种）/ GGUF 本地档。Flutter MD3 光标跟随卡片（引擎进程
+            内嵌入，无独立窗口/进程）+ 候选选择（数字/方向键/鼠标）+
+            configtool 热改设置。
 
             ### 安装
             - **Arch**: `pacman -U fcitx5-voice-input-*.pkg.tar.zst`
