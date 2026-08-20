@@ -31,9 +31,12 @@ cmake --build /tmp/build-pkg -j"$(nproc)"
 DESTDIR="$STAGE" cmake --install /tmp/build-pkg
 
 # 2. funasr 服务脚本 → libdir/fcitx5-voiceinput/（跟随发行版 libdir：
-#    Debian lib/x86_64-linux-gnu、Fedora lib64、Arch lib——与引擎 .so 同目录）
-LIBDIR="$(find "$STAGE/usr" -maxdepth 3 -type d -name fcitx5-voiceinput | head -1 | sed "s|^$STAGE/usr||")"
-[ -n "$LIBDIR" ] || { echo "!! 找不到 libdir/fcitx5-voiceinput"; exit 1; }
+#    Debian lib/x86_64-linux-gnu、Fedora lib64、Arch lib——与引擎 .so 同目录）。
+#    libdir 从 libflutter_engine.so 的落点推导（唯一且确定；按目录名 find
+#    会在 lib/ 与 share/ 同名目录间取 readdir 序，不稳定）
+LIBDIR="$(dirname "$(find "$STAGE/usr" -type f -name libflutter_engine.so -print -quit)")"
+LIBDIR="${LIBDIR#"$STAGE/usr"}"
+[ -n "$LIBDIR" ] || { echo "!! 找不到 libflutter_engine.so（libdir 推导失败）"; exit 1; }
 mkdir -p "$STAGE/usr$LIBDIR/funasr-server"
 cp "$SRC/scripts/funasr-server/server.py" "$STAGE/usr$LIBDIR/funasr-server/"
 cp "$SRC/scripts/funasr-serve.sh" "$STAGE/usr$LIBDIR/funasr-server/"

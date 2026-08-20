@@ -9,7 +9,7 @@ SRC="${SRC:-/work}"
 VERSION="${VERSION:-0.1.0}"
 export SRC VERSION
 
-pacman -Syu --noconfirm --needed cmake gcc wayland fcitx5 libpulse dbus zstd \
+pacman -Syu --noconfirm --needed cmake gcc wayland fontconfig fcitx5 libpulse dbus zstd \
     >/dev/null 2>&1 || { echo "!! 依赖安装失败"; exit 1; }
 pacman -Scc --noconfirm >/dev/null 2>&1 || true
 
@@ -23,7 +23,7 @@ cd "$STAGE"
 {
     echo "pkgname = fcitx5-voice-input"
     echo "pkgver = $VERSION-1"
-    echo "pkgdesc = Fcitx5 voice input: ASR (FunASR streaming/local) + LLM-polished candidates with Flutter MD3 overlay"
+    echo "pkgdesc = Fcitx5 voice input: sherpa-onnx streaming ASR (FunASR/GGUF tiers) + Flutter MD3 cursor-following card"
     echo "url = https://github.com/DonKongPaPa/fcitx5-voice-input"
     echo "builddate = $(date +%s)"
     echo "packager = CI <ci@invalid>"

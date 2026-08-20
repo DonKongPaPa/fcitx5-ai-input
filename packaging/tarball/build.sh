@@ -11,7 +11,7 @@ export SRC VERSION
 if command -v apt-get >/dev/null 2>&1; then
     export DEBIAN_FRONTEND=noninteractive
     apt-get update -qq >/dev/null 2>&1
-    apt-get install -y -qq --no-install-recommends         build-essential cmake pkg-config gettext git dbus         libfcitx5core-dev libfcitx5utils-dev libfcitx5config-dev         fcitx5-modules-dev fcitx5 libwayland-dev libwayland-bin         pulseaudio-utils libglib2.0-bin >/dev/null 2>&1 || true
+    apt-get install -y -qq --no-install-recommends         build-essential cmake pkg-config gettext git dbus         libfcitx5core-dev libfcitx5utils-dev libfcitx5config-dev         fcitx5-modules-dev fcitx5 libwayland-dev libwayland-bin         libfontconfig1-dev pulseaudio-utils libglib2.0-bin >/dev/null 2>&1 || true
 fi
 
 NAME="fcitx5-voice-input-$VERSION"
@@ -29,16 +29,21 @@ fi
 rm -rf "$STAGE/artifacts" "$STAGE/.git" "$STAGE/build" \
        "$STAGE/experiments" "$STAGE/语音测试集" "$STAGE/.zcode" "$STAGE/.funasr-env"
 
-# Flutter JIT 资产 + raw embedder 引擎 .so（tarball 自带，免安装期下载）
+# Flutter JIT 资产 + raw embedder 引擎 .so + sherpa-onnx 运行时（自带，
+# 免安装期下载）
 FLUTTER_DIR="${FLUTTER_ASSETS:-$SRC/artifacts/dist/share/fcitx5-voiceinput/flutter}"
 ENGINE="${FLUTTER_ENGINE_LIBRARY:-$SRC/.cache/flutter-embedder/libflutter_engine.so}"
+SHERPA_CAPI="${SHERPA_ONNX_LIBRARY:-$SRC/.cache/sherpa-onnx/libsherpa-onnx-c-api.so}"
 [ -d "$FLUTTER_DIR/flutter_assets" ] || { echo "!! flutter_assets 缺失: $FLUTTER_DIR"; exit 1; }
 [ -f "$FLUTTER_DIR/icudtl.dat" ] || { echo "!! icudtl.dat 缺失"; exit 1; }
 [ -f "$ENGINE" ] || { echo "!! libflutter_engine.so 缺失（跑 scripts/fetch-flutter-embedder.sh）"; exit 1; }
+[ -f "$SHERPA_CAPI" ] || { echo "!! libsherpa-onnx-c-api.so 缺失（跑 scripts/fetch-sherpa-runtime.sh）"; exit 1; }
 mkdir -p "$STAGE/flutter-ui" "$STAGE/engine"
 cp -a "$FLUTTER_DIR/flutter_assets" "$STAGE/flutter-ui/"
 cp "$FLUTTER_DIR/icudtl.dat" "$STAGE/flutter-ui/"
 cp "$ENGINE" "$STAGE/engine/"
+cp "$SHERPA_CAPI" "$STAGE/engine/"
+cp "$(dirname "$SHERPA_CAPI")/libonnxruntime.so" "$STAGE/engine/"
 
 cp "$SRC/packaging/tarball/install.sh" "$STAGE/install.sh"
 chmod +x "$STAGE/install.sh"

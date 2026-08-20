@@ -7,8 +7,8 @@ pkgdesc="Fcitx5 voice input: ASR (FunASR streaming/local) + LLM-polished candida
 arch=('x86_64')
 url="https://github.com/DonKongPaPa/fcitx5-voice-input"
 license=('MIT')
-depends=('fcitx5' 'libpulse')
-makedepends=('cmake' 'gcc' 'wayland')
+depends=('fcitx5' 'libpulse' 'fontconfig')
+makedepends=('cmake' 'gcc' 'wayland' 'fontconfig')
 source=()
 noextract=()
 

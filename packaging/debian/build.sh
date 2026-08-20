@@ -12,7 +12,7 @@ apt-get install -y -qq --no-install-recommends \
     build-essential cmake pkg-config gettext dbus \
     libfcitx5core-dev libfcitx5utils-dev libfcitx5config-dev \
     fcitx5-modules-dev fcitx5 libwayland-dev libwayland-bin \
-    pulseaudio-utils libglib2.0-bin \
+    libfontconfig1-dev pulseaudio-utils libglib2.0-bin \
     >/dev/null 2>&1 || { echo "!! 依赖安装失败"; apt-cache search fcitx5 | head -10; exit 1; }
 
 bash "$SRC/packaging/common/stage.sh"
@@ -29,7 +29,7 @@ Version: $VERSION
 Section: utils
 Priority: optional
 Architecture: amd64
-Depends: fcitx5, pulseaudio-utils
+Depends: fcitx5, pulseaudio-utils, libfontconfig1
 Maintainer: DonKongPaPa <raykent92@gmail.com>
 Description: Fcitx5 voice input: ASR + LLM-polished candidates
  Voice input for fcitx5: FunASR streaming (31 languages) or local

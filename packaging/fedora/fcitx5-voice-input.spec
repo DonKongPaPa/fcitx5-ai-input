@@ -8,6 +8,7 @@ URL:            https://github.com/DonKongPaPa/fcitx5-voice-input
 BuildArch:      x86_64
 Requires:       fcitx5
 Requires:       pulseaudio-utils
+Requires:       fontconfig
 # 包内自带 libonnxruntime.so；非 devel 包不自动 provides 版本化符号，
 # 手动补上避免 dnf 解析失败
 Provides:       libonnxruntime.so(VERS_1.27.1)(64bit)

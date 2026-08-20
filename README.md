@@ -38,7 +38,7 @@ pacman -U fcitx5-voice-input-*.pkg.tar.zst
 apt install ./fcitx5-voice-input_*.deb
 # Fedora
 dnf install fcitx5-voice-input-*.rpm
-# 其他（需 gcc/cmake/fcitx5-dev/wayland-dev）
+# 其他（需 gcc/cmake/fcitx5-dev/wayland-dev/fontconfig-dev）
 tar xf fcitx5-voice-input-*.tar.* && cd fcitx5-voice-input-* && sudo bash install.sh
 ```
 

@@ -1,15 +1,17 @@
 #!/usr/bin/env bash
 # fcitx5-voice-input 通用安装脚本（tarball）
-# 自带 Flutter JIT 资产 + raw embedder 引擎 .so；addon 本体在本机用
-# cmake 构建（需要构建依赖：gcc/cmake/fcitx5 开发头/wayland-scanner）
+# 自带 Flutter JIT 资产 + raw embedder 引擎 .so + sherpa-onnx 运行时；
+# addon 本体在本机用 cmake 构建（需要构建依赖：gcc/cmake/fcitx5 开发头/
+# wayland-scanner/fontconfig 开发包）
 set -euo pipefail
 HERE="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 PREFIX="${PREFIX:-/usr}"
 
-echo ">> 构建 addon（需要 gcc cmake fcitx5-dev wayland-dev gettext）"
+echo ">> 构建 addon（需要 gcc cmake fcitx5-dev wayland-dev fontconfig-dev gettext）"
 cmake -S "$HERE/addon" -B /tmp/voiceinput-build -DCMAKE_BUILD_TYPE=Release \
       -DCMAKE_INSTALL_PREFIX="$PREFIX" \
       -DFLUTTER_ENGINE_LIBRARY="$HERE/engine/libflutter_engine.so" \
+      -DSHERPA_ONNX_LIBRARY="$HERE/engine/libsherpa-onnx-c-api.so" \
       -DVOICEINPUT_FLUTTER_ASSETS_DIR="$HERE/flutter-ui"
 cmake --build /tmp/voiceinput-build -j"$(nproc)"
 DESTDIR="" cmake --install /tmp/voiceinput-build
