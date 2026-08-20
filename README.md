@@ -36,6 +36,8 @@
 - `addon/third_party/` + `scripts/fetch-flutter-embedder.sh`：Flutter embedder C API 头文件（vendor）与 libflutter_engine.so（按引擎 hash 锁定下载；官方工件仅 JIT 变体，配 `flutter build bundle` 的 kernel_blob）
 - `scripts/funasr-server/`：宿主 WS 识别服务（uv venv python3.12 + funasr/torch-CUDA，`scripts/funasr-serve.sh start` 管理）
 - 定位不由我们计算：popup 挂在 waylandim 的 `zwp_input_method_v2` 上，合成器按 text-input 光标矩形放置（协议规定一个 seat 仅一个 IM，必须复用 waylandim 的连接，不能自 bind）
+- **popup 生命周期照抄 classicui（实验 007）**：smithay 对每条 IM 连接只追踪最后一个 input popup（单槽 last-create-wins），光标矩形/重定位只发给槽内者——show 每次销毁重建 popup（重夺槽 + 最新矩形），hide 先 attach(null) unmap 再销毁；长期持有隐藏 popup 会在被 classicui 抢槽后停在旧光标处
+- **定位模式（PositionMode）**：`auto`（默认）= 能跟随光标则跟随（按 IC 是否上报过真实矩形动态判断），不能则 layer-shell **底部居中**；`caret`=强制跟随（chromium 系会落窗口左上角）；`bottom`/`top`=全部底部/顶部居中；chromium 系恒 0,0 0x0 矩形（实验 006，r24 两轮复核），名单 PositionFallbackApps 直走 layer 快路径
 
 ## 测试环境（一个桌面 = 一个独立容器）
 
@@ -168,7 +170,7 @@ scripts/run-f7.sh               # 部署矩阵×configtool 深测（GPU/CPU 双�
 
 ### 已知限制（如实记录）
 
-- niri 不 clamp popup 在光标上方时的顶部越界（光标贴屏幕顶会裁掉上部）；popup 定位在焦点切换后不更新（niri#4063 类）
+- niri 不 clamp popup 在光标上方时的顶部越界（光标贴屏幕顶会裁掉上部）；"焦点切换后定位不更新"实为 classicui 抢占 smithay 单槽所致（实验 007，已由 show 重建生命周期修复，r25 固化）
 - niri 对 IM popup 的 map/重绘由输出 damage 驱动：静止应用周期可长达 ~3.4s（map、hide 清除都滞后）；真实打字场景应用持续 damage，不受影响——testapp 用标题变化模拟
 - 满栈负载下事件循环定时器节奏劣化 ~2.5x（120ms 配置实测 ~300ms/字，Dummy 流式变慢但不影响功能）
 

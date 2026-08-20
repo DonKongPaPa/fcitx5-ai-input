@@ -7,6 +7,7 @@ USER root
 
 RUN pacman -Syu --noconfirm --needed \
         niri fcitx5-configtool grim \
+        chromium fcitx5-chinese-addons \
         && pacman -Scc --noconfirm
 
 # niri 最小配置：

@@ -147,10 +147,10 @@ public:
 private:
     void onConnectionCreated(const std::string &name, wl_display *display);
     void setupDisplay(wl_display *display);
-    bool ensurePopup(InputContext *ic); // IC 变化时重建 surface+popup
+    bool ensurePopup(InputContext *ic, bool atShow = false); // IC 变化时重建 surface+popup
     void destroyPopupSurface();
     void teardown();
-    bool wantTopMode(InputContext *ic); // 定位模式决策（policy × 应用名单）
+    bool wantTopMode(InputContext *ic, bool atShow = false); // 定位模式决策（policy × 名单 × 矩形上报能力）
     std::string toLower(std::string s);
 
     Instance *instance_;
@@ -179,7 +179,8 @@ private:
     zwp_input_popup_surface_v2 *popup_ = nullptr;
     wl_surface *surface_ = nullptr;
 
-    // layer-shell 顶部居中回退（chromium 系）
+    // layer-shell 回退（chromium 系；anchorBottom_ 底部居中为默认，兼容
+    // 旧值 "top" 顶部居中）
     zwlr_layer_shell_v1 *layerShell_ = nullptr;
     zwlr_layer_surface_v1 *layerSurface_ = nullptr;
     bool layerConfigured_ = false; // 首个 configure 到达前不得 commit buffer
@@ -189,6 +190,12 @@ private:
     void *surfaceCompat_ = nullptr; // WlSurface wrapper 布局占位（见 cpp）
     wl_region *emptyRegion_ = nullptr; // 隐藏/透明态的空输入区域
     TrackableObjectReference<InputContext> icRef_; // popup 所属 IC
+    // 本 IC 自激活以来是否收到过"真实"（非 0x0）光标矩形。chromium 系
+    // 恒 0,0 0x0 → auto 模式据此回退 layer-shell；GTK/Qt 焦点后很快上报
+    bool sawRealRect_ = false;
+    bool anchorBottom_ = true; // layer 模式锚点：false=顶部居中（仅旧值
+                               // "top"），true=底部居中（默认，用户偏好）
+    int popupAttachCount_ = 0; // popup 模式 attach 计数（>1 即重建）
 
     // 指针路由状态
     bool hasCursorRect_ = false; // text_input_rectangle 是否已送达（决策门）

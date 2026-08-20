@@ -638,6 +638,131 @@ else
     record r23-top-card-interact pass "（跳过：无 virtpoint 环境）"
 fi
 
+# R24 chromium 动态定位回退（底部居中）：最小 chromium 应用 + auto 模式。
+# --class=webapp-e2e 使 app-id 不在回退名单 → 走动态判断：prepare 建
+# popup 探测 → show 时仍无真实矩形（chromium 恒 0,0 0x0，实验 006）→
+# "未见真实光标矩形" 回退日志 + layer 底部居中。两轮：带/不带
+# --enable-wayland-ime（后者走 ibus 前端也必须回退而非无卡片）
+if [ -n "${CAGE_SOCK:-}" ] && command -v chromium >/dev/null 2>&1; then
+    gdbus call --session --dest org.fcitx.Fcitx5 --object-path /controller \
+        --method org.fcitx.Fcitx.Controller1.SetConfig \
+        "fcitx://config/addon/voiceinput" "<{'PositionMode': <'auto'>}>" >/dev/null 2>&1 || true
+    sleep 0.5
+    CHROME_PAGE='data:text/html,<body style="background:%23fff;margin:0"><div style="position:absolute;top:40%%;left:50%%;transform:translate(-50%%,-50%%)"><input id="q" autofocus style="width:420px;height:56px;font-size:28px;padding:8px" placeholder="type here"></div></body>'
+    for r24_variant in ime noime; do
+        r24_extra=()
+        if [ "$r24_variant" = ime ]; then
+            r24_extra=(--enable-wayland-ime)
+        fi
+        r24_mark=$(wc -l < "$FCITX_LOG")
+        chromium --ozone-platform=wayland --class=webapp-e2e "${r24_extra[@]}" \
+            --no-first-run --disable-gpu --no-sandbox --disable-dev-shm-usage \
+            --user-data-dir="/tmp/chrome-r24-$r24_variant" "$CHROME_PAGE" \
+            >"$LOG_DIR/chromium-r24-$r24_variant.log" 2>&1 &
+        R24_CHROME=$!
+        sleep 10
+        # 点击输入框聚焦（gaps=200 → 内容区 ≈[200,1080]x[200,520]，输入框中部）
+        "$DIST_BIN/virtpoint" move 640 320 1280 720 2>/dev/null || true
+        "$DIST_BIN/virtpoint" click left 2>/dev/null || true
+        sleep 1
+        call SimulateKey "Control+Control_R" true >/dev/null 2>&1 || true
+        sleep 1.5
+        WAYLAND_DISPLAY="$CAGE_SOCK" grim "$OUT_DIR/r24-chromium-$r24_variant.png" 2>"$LOG_DIR/grim-r24-$r24_variant.log" || true
+        call SimulateKey "Control+Control_R" false >/dev/null 2>&1 || true
+        sleep 2
+        # 收尾：候选残留会吞下一轮触发（r15 教训），点候选行区域清掉
+        "$DIST_BIN/virtpoint" move 640 600 1280 720 2>/dev/null || true
+        "$DIST_BIN/virtpoint" click left 2>/dev/null || true
+        sleep 1.5
+        kill "$R24_CHROME" 2>/dev/null || true
+        sleep 1
+        r24_win="$(tail -n +$((r24_mark+1)) "$FCITX_LOG")"
+        r24_nofallback="$(printf '%s' "$r24_win" | grep -ac '未见真实光标矩形' || true)"
+        r24_layer="$(printf '%s' "$r24_win" | grep -ac 'layer surface created（底部居中模式）' || true)"
+        r24_conf="$(printf '%s' "$r24_win" | grep -ac 'layer surface configured（底部' || true)"
+        # chromium 上报能力佐证：窗口内不该出现"真实"矩形日志
+        r24_realrect="$(printf '%s' "$r24_win" | grep -ac '收到真实光标矩形' || true)"
+        if [ "$r24_nofallback" -ge 1 ] && [ "$r24_layer" -ge 1 ] && \
+           [ "$r24_conf" -ge 1 ] && [ "$r24_realrect" -eq 0 ]; then
+            record "r24-chromium-$r24_variant" pass "chromium（$r24_variant）：动态回退底部居中（无真实矩形 ✓ layer ✓ configure ✓）"
+        else
+            record "r24-chromium-$r24_variant" fail "回退=$r24_nofallback layer=$r24_layer conf=$r24_conf realrect=$r24_realrect"
+        fi
+    done
+else
+    record r24-chromium-ime pass "（跳过：无 chromium/录屏）"
+    record r24-chromium-noime pass "（跳过：无 chromium/录屏）"
+fi
+
+# R25 输入后位置更新（classicui 抢占定位槽复现）：GTK 应用两次录音，
+# 中间用 pinyin 打字让 classicui 建自己的 popup（smithay 单槽
+# last-create-wins → 旧实现卡片停在旧光标）。修复后 show 每次重建
+# popup（重夺槽 + 取最新矩形）。断言：hide 销毁 + show 重建日志
+if [ -n "${CAGE_SOCK:-}" ] && [ -x "$DIST_BIN/$TESTAPP" ] && [ -x "$DIST_BIN/virtpoint" ]; then
+    gdbus call --session --dest org.fcitx.Fcitx5 --object-path /controller \
+        --method org.fcitx.Fcitx.Controller1.SetConfig \
+        "fcitx://config/addon/voiceinput" "<{'PositionMode': <'auto'>}>" >/dev/null 2>&1 || true
+    sleep 0.5
+    r25_mark=$(wc -l < "$FCITX_LOG")
+    "$DIST_BIN/$TESTAPP" >"$LOG_DIR/testapp-r25.log" 2>&1 &
+    R25_PID=$!
+    sleep 2
+    # 光标放 A 点（输入框左侧）→ 录音 1
+    "$DIST_BIN/virtpoint" move 540 80 1280 720 2>/dev/null || true
+    "$DIST_BIN/virtpoint" click left 2>/dev/null || true
+    sleep 0.8
+    call SimulateKey "Control+Control_R" true >/dev/null 2>&1 || true
+    sleep 1.2
+    WAYLAND_DISPLAY="$CAGE_SOCK" grim "$OUT_DIR/r25-s1.png" 2>"$LOG_DIR/grim-r25-s1.log" || true
+    call SimulateKey "Control+Control_R" false >/dev/null 2>&1 || true
+    sleep 2
+    call SimulateKey "Return" true >/dev/null 2>&1 || true   # Enter 上屏收尾
+    call SimulateKey "Return" false >/dev/null 2>&1 || true
+    sleep 1.5
+    # classicui 抢槽：切 pinyin 打字 → classicui 候选窗弹出（建 popup）。
+    # 字母必须走 InjectKey（真实事件管线）——SimulateKey 只直喂我们的
+    # 状态机，拼音引擎根本看不见
+    gdbus call --session --dest org.fcitx.Fcitx5 --object-path /controller \
+        --method org.fcitx.Fcitx.Controller1.SetCurrentIM "pinyin" >/dev/null 2>&1 || true
+    sleep 0.5
+    for r25_k in N N H H; do
+        call InjectKey "$r25_k" true >/dev/null 2>&1 || true
+        call InjectKey "$r25_k" false >/dev/null 2>&1 || true
+        sleep 0.25
+    done
+    sleep 1
+    WAYLAND_DISPLAY="$CAGE_SOCK" grim "$OUT_DIR/r25-steal.png" 2>>"$LOG_DIR/grim-r25-s1.log" || true
+    call InjectKey "Escape" true >/dev/null 2>&1 || true
+    call InjectKey "Escape" false >/dev/null 2>&1 || true
+    gdbus call --session --dest org.fcitx.Fcitx5 --object-path /controller \
+        --method org.fcitx.Fcitx.Controller1.SetCurrentIM "keyboard-us" >/dev/null 2>&1 || true
+    sleep 0.8
+    # 光标移 B 点（输入框右侧）→ 录音 2（修复后：重建 popup 贴新光标）
+    "$DIST_BIN/virtpoint" move 700 80 1280 720 2>/dev/null || true
+    "$DIST_BIN/virtpoint" click left 2>/dev/null || true
+    sleep 0.8
+    call SimulateKey "Control+Control_R" true >/dev/null 2>&1 || true
+    sleep 1.2
+    WAYLAND_DISPLAY="$CAGE_SOCK" grim "$OUT_DIR/r25-s2.png" 2>>"$LOG_DIR/grim-r25-s2.log" || true
+    call SimulateKey "Control+Control_R" false >/dev/null 2>&1 || true
+    sleep 2
+    call SimulateKey "Return" true >/dev/null 2>&1 || true
+    call SimulateKey "Return" false >/dev/null 2>&1 || true
+    sleep 1.5
+    kill "$R25_PID" 2>/dev/null || true
+    r25_win="$(tail -n +$((r25_mark+1)) "$FCITX_LOG")"
+    r25_detach="$(printf '%s' "$r25_win" | grep -ac 'popup 已 unmap+销毁' || true)"
+    r25_rebuild="$(printf '%s' "$r25_win" | grep -ac '重建：重夺定位槽' || true)"
+    r25_real="$(printf '%s' "$r25_win" | grep -ac '收到真实光标矩形' || true)"
+    if [ "$r25_detach" -ge 2 ] && [ "$r25_rebuild" -ge 1 ] && [ "$r25_real" -ge 1 ]; then
+        record r25-caret-refollow pass "GTK 两轮录音：hide 释放槽 ×$r25_detach + show 重建 ×$r25_rebuild + 真实矩形收到（截图 s1/s2 待视觉比对位置跟随）"
+    else
+        record r25-caret-refollow fail "detach=$r25_detach rebuild=$r25_rebuild realrect=$r25_real"
+    fi
+else
+    record r25-caret-refollow pass "（跳过：无录屏/测试应用）"
+fi
+
 # R18 字体跟随（W4：classicui Font → fontconfig → Dart 加载）
 printf 'Font="Noto Sans CJK SC 12"\n' >> /home/testuser/.config/fcitx5/conf/classicui.conf 2>/dev/null || true
 gdbus call --session --dest org.fcitx.Fcitx5 --object-path /controller \

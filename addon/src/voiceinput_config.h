@@ -73,17 +73,17 @@ FCITX_CONFIGURATION(
         ""};
 
     // —— 卡片定位 ——
-    // chromium 系应用的 wayland text-input 不上报光标矩形，合成器会把
-    // input popup 放到窗口左上角。auto：对 PositionFallbackApps 匹配的
-    // 应用改用 layer-shell 顶部居中（dictation 风格）；caret：始终跟随
-    // 光标（旧行为）；top：全部顶部居中
+    // chromium 系应用的 wayland text-input 恒报 0,0 0x0 光标矩形，合成器
+    // 会把 input popup 放到窗口左上角。auto：名单命中或实测无真实矩形的
+    // 应用改用 layer-shell 底部居中，其余跟随光标；caret：始终跟随光标
+    //（chromium 系会落在窗口左上角）；top/bottom：全部顶部/底部居中
     Option<std::string> positionMode{
         this, "PositionMode",
-        "卡片定位模式（auto=chromium 系应用顶部居中其余跟随光标 / caret=全部跟随光标 / top=全部顶部居中）",
+        "卡片定位模式（auto=能跟随光标则跟随，不能则底部居中 / caret=强制跟随光标 / bottom=全部底部居中 / top=全部顶部居中）",
         "auto"};
     Option<std::string> positionFallbackApps{
         this, "PositionFallbackApps",
-        "auto 模式下改用顶部居中的应用列表（逗号分隔，匹配程序名/app-id 子串）",
+        "auto 模式下直接改用底部居中的应用列表（逗号分隔，匹配程序名/app-id 子串；名单外应用按是否上报光标矩形自动判断）",
         "chromium,chrome,brave,msedge,vivaldi,opera,electron,vscode,code,"
         "slack,discord,teams,qq,telegram"};
 

@@ -51,9 +51,10 @@ podman run --rm \
         set -e
         cp -r /opt/dist/* /usr/
         # 共存场景：普通输入法（keyboard-us）为默认 IM，voiceinput 是
-        # Module（全局热键），全程不切换输入法
+        # Module（全局热键），全程不切换输入法；pinyin 挂在组内供 r25
+        # 切换（classicui 候选窗与我们的 popup 抢 smithay 定位槽的复现）
         mkdir -p /home/testuser/.config/fcitx5
-        printf "[Groups/0]\nName=Default\nDefault Layout=us\nDefaultIM=keyboard-us\n\n[Groups/0/Items/0]\nName=keyboard-us\n\n[Group Order]\n0=Default\n" \
+        printf "[Groups/0]\nName=Default\nDefault Layout=us\nDefaultIM=keyboard-us\n\n[Groups/0/Items/0]\nName=keyboard-us\n\n[Groups/0/Items/1]\nName=pinyin\n\n[Group Order]\n0=Default\n" \
             > /home/testuser/.config/fcitx5/profile
         chown -R testuser:testuser /home/testuser/.config
         chown testuser:testuser /out /out/logs 2>/dev/null || true

@@ -73,7 +73,8 @@ void VoicePopup::layerConfigure(void *data, zwlr_layer_surface_v1 *ls,
     zwlr_layer_surface_v1_ack_configure(ls, serial);
     if (!s->layerConfigured_) {
         s->layerConfigured_ = true;
-        FCITX_INFO() << "VoicePopup: layer surface configured（顶部居中就绪）";
+        FCITX_INFO() << "VoicePopup: layer surface configured（"
+                     << (s->anchorBottom_ ? "底部" : "顶部") << "居中就绪）";
     }
 }
 
@@ -103,6 +104,13 @@ void VoicePopup::popupRectangle(void *data, zwp_input_popup_surface_v2 *,
     s->cursorW_ = w;
     s->cursorH_ = h;
     s->hasCursorRect_ = true;
+    // chromium 系恒 0,0 0x0；GTK/Qt 上报真实值。auto 模式的回退判据
+    if (x != 0 || y != 0 || w != 0 || h != 0) {
+        if (!s->sawRealRect_) {
+            FCITX_INFO() << "VoicePopup: 收到真实光标矩形（本 IC 支持跟随）";
+        }
+        s->sawRealRect_ = true;
+    }
     FCITX_INFO() << "VoicePopup: text_input_rectangle " << x << "," << y << " "
                  << w << "x" << h << "（窗口局部）";
 }
@@ -407,38 +415,60 @@ void VoicePopup::setPositionPolicy(const std::string &mode,
     }
 }
 
-// 定位模式决策：policy × 应用名单。chromium 系的 wayland text-input
-// 不上报光标矩形 → 合成器把 input popup 放到窗口左上角（用户实测）；
-// 此类应用改用 layer-shell 顶部居中（layer 角色的合成器定位在我们手里）
-bool VoicePopup::wantTopMode(InputContext *ic) {
+// 定位模式决策：policy × 应用名单 × 矩形上报能力。
+// - chromium 系的 wayland text-input 恒报 0,0 0x0 → 合成器把 input popup
+//   放到窗口左上角；此类应用改用 layer-shell（anchor 由 policy 决定，
+//   默认底部居中——layer 角色的合成器定位在我们手里）
+// - auto 对名单外应用动态判断：prepare 阶段（atShow=false）先建 popup
+//   探测矩形；show 阶段（atShow=true）仍未见真实矩形 → 回退 layer。
+//   （在 prepare 就判 !sawRealRect_ 会自锁：popup 都没建过，矩形永远
+//   收不到）
+bool VoicePopup::wantTopMode(InputContext *ic, bool atShow) {
+    anchorBottom_ = true; // "top" 之外全部底部居中
     if (positionMode_ == "top") {
+        anchorBottom_ = false;
+        return true;
+    }
+    if (positionMode_ == "bottom") {
         return true;
     }
     if (positionMode_ != "auto") {
         return false; // caret
     }
     const std::string prog = toLower(ic->program());
-    if (prog.empty()) {
-        return false;
-    }
     for (const auto &frag : fallbackApps_) {
-        if (prog.find(frag) != std::string::npos) {
+        if (!prog.empty() && prog.find(frag) != std::string::npos) {
             FCITX_INFO() << "VoicePopup: 应用「" << prog
                          << "」命中定位回退名单（" << frag
-                         << "）→ 顶部居中";
+                         << "）→ layer 模式";
             return true;
         }
+    }
+    if (atShow && !sawRealRect_) {
+        FCITX_INFO() << "VoicePopup: auto：本 IC 未见真实光标矩形"
+                     << "（chromium 系特征）→ layer 模式回退";
+        return true;
     }
     return false;
 }
 
-bool VoicePopup::ensurePopup(InputContext *ic) {
+bool VoicePopup::ensurePopup(InputContext *ic, bool atShow) {
     if (!pool_ || !compositor_) {
         return false;
     }
-    const bool top = wantTopMode(ic);
-    if (surface_ && icRef_.get() == ic && topMode_ == top) {
-        return true; // 同一 IC 且同一模式：复用
+    const bool icChanged = icRef_.get() != ic;
+    if (icChanged) {
+        sawRealRect_ = false; // 矩形上报能力按 IC 记账
+    }
+    const bool top = wantTopMode(ic, atShow);
+    // layer 模式同 IC 复用（layer 定位权在我们手里，不涉及槽位竞争）；
+    // popup 模式每次都重建：smithay 的 input popup 追踪槽是单槽、
+    // last-create-wins（classicui 每次显示都重建 popup 重夺槽位）——我们
+    // 若长期持有旧 popup，classicui 一旦创建过自己的 popup，合成器就不再
+    // 给我们重定位，卡片永远停在旧光标处（宿主机 gnome-text-editor 实测）
+    const bool reuse = surface_ && !icChanged && topMode_ && topMode_ == top;
+    if (reuse) {
+        return true;
     }
     destroyPopupSurface();
     topMode_ = top;
@@ -490,8 +520,9 @@ bool VoicePopup::ensurePopup(InputContext *ic) {
         wp_fractional_scale_v1_add_listener(fscale_, &kFscaleListener, this);
     }
     if (topMode_) {
-        // layer-shell 顶部居中：不依赖应用上报光标矩形，合成器按我们
-        // 的 anchor/margin/size 摆放。configure 到达前不提交 buffer。
+        // layer-shell：不依赖应用上报光标矩形，合成器按我们的
+        // anchor/margin/size 摆放（默认底部居中；"top" 兼容旧值顶部居中）。
+        // configure 到达前不提交 buffer。
         // registry global 是异步到达的——IC 早激活时（容器快速触发场景
         // 实测）可能尚未 bind，roundtrip 等一轮再判
         if (!layerShell_ && display_) {
@@ -510,9 +541,13 @@ bool VoicePopup::ensurePopup(InputContext *ic) {
         zwlr_layer_surface_v1_add_listener(layerSurface_, &kLayerListener,
                                            this);
         zwlr_layer_surface_v1_set_anchor(
-            layerSurface_, ZWLR_LAYER_SURFACE_V1_ANCHOR_TOP);
+            layerSurface_, anchorBottom_
+                               ? ZWLR_LAYER_SURFACE_V1_ANCHOR_BOTTOM
+                               : ZWLR_LAYER_SURFACE_V1_ANCHOR_TOP);
         zwlr_layer_surface_v1_set_exclusive_zone(layerSurface_, -1);
-        zwlr_layer_surface_v1_set_margin(layerSurface_, 16, 0, 0, 0);
+        zwlr_layer_surface_v1_set_margin(
+            layerSurface_, anchorBottom_ ? 0 : 16, 0, anchorBottom_ ? 16 : 0,
+            0);
         zwlr_layer_surface_v1_set_keyboard_interactivity(
             layerSurface_,
             ZWLR_LAYER_SURFACE_V1_KEYBOARD_INTERACTIVITY_NONE);
@@ -521,12 +556,18 @@ bool VoicePopup::ensurePopup(InputContext *ic) {
             logicalH_ > 0 ? logicalH_ : height_);
         wl_surface_commit(surface_); // 空 commit：请求首个 configure
         icRef_ = ic->watch();
-        FCITX_INFO() << "VoicePopup: layer surface created（顶部居中模式）";
+        FCITX_INFO() << "VoicePopup: layer surface created（"
+                     << (anchorBottom_ ? "底部" : "顶部") << "居中模式）";
     } else {
         popup_ = zwp_input_method_v2_get_input_popup_surface(im_, surface_);
         zwp_input_popup_surface_v2_add_listener(popup_, &kPopupListener, this);
         icRef_ = ic->watch();
-        FCITX_INFO() << "VoicePopup: popup surface attached to waylandim IM";
+        // 首次之外的每次 attach 都是重建（hide 已销毁 / classicui 抢过槽）
+        popupAttachCount_++;
+        FCITX_INFO() << "VoicePopup: popup surface attached to waylandim IM"
+                     << (popupAttachCount_ > 1
+                             ? "（重建：重夺定位槽，取最新光标矩形）"
+                             : "");
     }
     wl_display_flush(display_);
     return true;
@@ -597,7 +638,7 @@ void VoicePopup::prepare(InputContext *ic) {
     FCITX_INFO() << "VoicePopup: ic cursorRect " << cr.left() << ","
                  << cr.top() << " " << cr.width() << "x" << cr.height()
                  << "（前端=" << ic->frontendName() << "）";
-    if (!ensurePopup(ic)) {
+    if (!ensurePopup(ic, /*atShow=*/false)) {
         return;
     }
     // 全透明首帧：触发 map 流水线（内容仍不可见）。
@@ -618,13 +659,13 @@ void VoicePopup::prepare(InputContext *ic) {
 
 void VoicePopup::show(InputContext *ic) {
     std::lock_guard<std::mutex> lock(mutex_);
-    // show 时刻的光标矩形（判别 chromium：应用从未上报 → 合成器把
-    // input popup 放在窗口左上角；GTK 此时已由 waylandim 填好）
+    // show 时刻的定位决策（auto 动态回退判据见 wantTopMode）
     const auto &scr = ic->cursorRect();
     FCITX_INFO() << "VoicePopup: show 时 ic cursorRect " << scr.left()
                  << "," << scr.top() << " " << scr.width() << "x"
-                 << scr.height() << " hasCursorRect_=" << hasCursorRect_;
-    if (!ensurePopup(ic)) {
+                 << scr.height() << " hasCursorRect_=" << hasCursorRect_
+                 << " sawRealRect_=" << sawRealRect_;
+    if (!ensurePopup(ic, /*atShow=*/true)) {
         FCITX_WARN() << "VoicePopup::show but popup not ready";
         return;
     }
@@ -653,18 +694,39 @@ void VoicePopup::show(InputContext *ic) {
 
 void VoicePopup::hide() {
     std::lock_guard<std::mutex> lock(mutex_);
-    // 不销毁 surface：销毁不产生 damage，niri 会残留旧画面数秒；
-    // 提交全透明帧用自己的 damage 立即清掉内容，popup 保留复用（已预热）
-    if (surface_ && buffers_[0] && (!topMode_ || layerConfigured_)) {
-        size_t bufSize = static_cast<size_t>(width_) * height_ * 4;
-        memset(pixels_ + cur_ * bufSize, 0, bufSize);
-        if (emptyRegion_) { // 隐藏即退出命中测试：不留不可见遮挡
+    if (!surface_) {
+        visible_ = false;
+        return;
+    }
+    if (topMode_) {
+        // layer 模式：不销毁 surface（下轮同 IC 直接复用，configure 已就
+        // 绪）。销毁不产生 damage，niri 会残留旧画面数秒；提交全透明帧
+        // 用自己的 damage 立即清掉内容
+        if (buffers_[0] && layerConfigured_) {
+            size_t bufSize = static_cast<size_t>(width_) * height_ * 4;
+            memset(pixels_ + cur_ * bufSize, 0, bufSize);
+            if (emptyRegion_) { // 隐藏即退出命中测试：不留不可见遮挡
+                wl_surface_set_input_region(surface_, emptyRegion_);
+            }
+            wl_surface_attach(surface_, buffers_[cur_], 0, 0);
+            damageSurface(surface_, compositorVersion_, width_, height_);
+            wl_surface_commit(surface_);
+            cur_ = 1 - cur_;
+        }
+    } else {
+        // popup 模式：classicui 同款收尾——先 attach(null)+commit 正式
+        // unmap（产生 damage 清画面），再销毁。销毁是关键：smithay 的
+        // input popup 追踪槽是单槽 last-create-wins，长期持有隐藏 popup
+        // 会占着槽，classicui 的候选窗与我们的重定位互抢；释放后下一轮
+        // show 重建即拿到最新光标矩形（宿主机实测：不销毁 → 卡片停在
+        // 旧光标处）
+        if (emptyRegion_) {
             wl_surface_set_input_region(surface_, emptyRegion_);
         }
-        wl_surface_attach(surface_, buffers_[cur_], 0, 0);
-        damageSurface(surface_, compositorVersion_, width_, height_);
+        wl_surface_attach(surface_, nullptr, 0, 0);
         wl_surface_commit(surface_);
-        cur_ = 1 - cur_;
+        destroyPopupSurface();
+        FCITX_INFO() << "VoicePopup: popup 已 unmap+销毁（释放定位槽）";
     }
     visible_ = false;
     if (display_) {
