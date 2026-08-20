@@ -1040,6 +1040,9 @@ void VoiceInputEngine::finishRecording() {
 }
 
 void VoiceInputEngine::onAsrPartial(const std::string &text) {
+    if (popup_ && state_ == State::Recording) {
+        popup_->updatePreeditText(text); // 组合文本增长 → 矩形实时走
+    }
     if (state_ != State::Recording) {
         return;
     }

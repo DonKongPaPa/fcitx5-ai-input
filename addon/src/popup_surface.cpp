@@ -118,7 +118,7 @@ void VoicePopup::popupRectangle(void *data, zwp_input_popup_surface_v2 *,
             s->followingApps_.insert(s->lastProgram_);
         }
         if (s->preeditProbeActive_) {
-            s->endPreeditProbe();
+            // 不撤：preedit 是录音指示器+跟随锚点（partial 会持续灌入）
             FCITX_INFO() << "VoicePopup: 探针奏效——矩形已按当前光标重报";
         }
     }
@@ -446,14 +446,18 @@ void VoicePopup::beginPreeditProbe(InputContext *ic) {
     if (!ic || preeditProbeActive_) {
         return;
     }
-    // 单个空格：必须有实际宽度才会引起应用重排→重报矩形（ZWSP 零宽
-    // 实测两家都无视，r29 首跑 rect=0）。preedit 永不入文：清除即从
-    // 显示中消失，矩形一到（~1-2 帧）即撤，用户几乎无感
-    Text preedit(" ");
+    // 可见组合文本（用户方案：雾凇拼音 F4 方案选单同款机制）。preedit
+    // 永不入文；录音中由 updatePreeditText 把流式 partial 灌进来——组
+    // 合文本增长=打拼音的等价物，应用随文字增长持续重报矩形，卡片
+    // 实时跟随。上屏时 commitString 按协议替换 preedit
+    Text preedit("\u8bed\u97f3\u8f93\u5165\u4e2d");
     ic->inputPanel().setClientPreedit(preedit);
-    ic->updateUserInterface(UserInterfaceComponent::InputPanel);
+    // updatePreedit 才会把 client preedit 推给应用（UpdatePreeditEvent →
+    // waylandim）；updateUserInterface 只刷新 UI 插件——此前探针"无效"
+    // 的真因（从未送达）
+    ic->updatePreedit();
     preeditProbeActive_ = true;
-    FCITX_INFO() << "VoicePopup: 预输入探针已置（单空格 preedit，逼应用重报光标矩形）";
+    FCITX_INFO() << "VoicePopup: 预输入探针已置（可见组合文本，逼应用重报光标矩形）";
 }
 
 void VoicePopup::endPreeditProbe() {
@@ -463,7 +467,7 @@ void VoicePopup::endPreeditProbe() {
     preeditProbeActive_ = false;
     if (auto *ic = icRef_.get()) {
         ic->inputPanel().setClientPreedit(Text());
-        ic->updateUserInterface(UserInterfaceComponent::InputPanel);
+        ic->updatePreedit();
     }
 }
 
@@ -479,6 +483,19 @@ void VoicePopup::primePreedit(InputContext *ic) {
         return; // policy/名单判成 layer：无需矩形
     }
     beginPreeditProbe(ic);
+}
+
+// 录音中把流式 partial 写入组合文本：文字增长 → 应用重报矩形 →
+// 合成器实时挪卡片（classicui 打拼音的等价机制）。仅在探针挂着时
+void VoicePopup::updatePreeditText(const std::string &text) {
+    std::lock_guard<std::mutex> lock(mutex_);
+    if (!preeditProbeActive_) {
+        return;
+    }
+    if (auto *ic = icRef_.get()) {
+        ic->inputPanel().setClientPreedit(Text(text));
+        ic->updatePreedit();
+    }
 }
 
 // 定位模式决策：policy × 应用名单 × 矩形上报能力。
