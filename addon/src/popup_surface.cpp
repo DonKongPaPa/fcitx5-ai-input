@@ -112,6 +112,11 @@ void VoicePopup::popupRectangle(void *data, zwp_input_popup_surface_v2 *,
             FCITX_INFO() << "VoicePopup: 收到真实光标矩形（本 IC 支持跟随）";
         }
         s->sawRealRect_ = true;
+        // 应用级知识：重聚焦若换新 IC（Electron 会话级 text-input），
+        // 凭程序名直接跟随，首下不再回退
+        if (!s->lastProgram_.empty()) {
+            s->followingApps_.insert(s->lastProgram_);
+        }
         if (s->preeditProbeActive_) {
             s->endPreeditProbe();
             FCITX_INFO() << "VoicePopup: 探针奏效——矩形已按当前光标重报";
@@ -429,6 +434,9 @@ void VoicePopup::notifyCommit() {
                         "可继承，auto 下轮跟随";
     }
     committedInThisIC_ = true;
+    if (!lastProgram_.empty()) {
+        followingApps_.insert(lastProgram_);
+    }
 }
 
 // —— 预输入探针（classicui 拼音候选窗实时跟随的同款机制）——
@@ -503,8 +511,12 @@ bool VoicePopup::wantTopMode(InputContext *ic, bool atShow) {
         }
     }
     if (atShow && !sawRealRect_ && !committedInThisIC_) {
+        if (!lastProgram_.empty() &&
+            followingApps_.count(toLower(ic->program())) > 0) {
+            return false; // 该应用跟随成功过：重聚焦新 IC 首下直接跟随
+        }
         FCITX_INFO() << "VoicePopup: auto：本 IC 未见真实光标矩形且无上屏"
-                        "历史（chromium 系处女字段特征）→ layer 模式回退";
+                        "历史（该应用首次会话）→ layer 模式回退";
         return true;
     }
     return false;
@@ -529,6 +541,7 @@ bool VoicePopup::ensurePopup(InputContext *ic, bool atShow) {
     if (reuse) {
         return true;
     }
+    lastProgram_ = toLower(ic->program());
     destroyPopupSurface();
     topMode_ = top;
 

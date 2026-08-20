@@ -711,7 +711,10 @@ if [ -n "${CAGE_SOCK:-}" ] && [ -x "$DIST_BIN/$TESTAPP" ] && [ -x "$DIST_BIN/vir
     # 光标放 A 点（输入框左侧）→ 录音 1
     "$DIST_BIN/virtpoint" move 540 80 1280 720 2>/dev/null || true
     "$DIST_BIN/virtpoint" click left 2>/dev/null || true
-    sleep 0.8
+    # 1.6s 稳定窗：GTK 焦点报文从容到达 → sawRealRect_ 置位 → 真文本探针
+    # 自跳过（探针只该跑在无知识 IC=chromium 系上；0.8s 时报文与按压赛
+    # 跑，探针在 GTK 上抢跑破坏编舞——三跑同败定位）
+    sleep 1.6
     call SimulateKey "Control+Control_R" true >/dev/null 2>&1 || true
     sleep 1.2
     WAYLAND_DISPLAY="$CAGE_SOCK" grim "$OUT_DIR/r25-s1.png" 2>"$LOG_DIR/grim-r25-s1.log" || true

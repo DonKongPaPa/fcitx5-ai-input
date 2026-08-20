@@ -8,6 +8,8 @@
 #include <functional>
 #include <memory>
 #include <mutex>
+#include <set>
+#include <string>
 #include <string>
 #include <vector>
 
@@ -105,6 +107,7 @@ public:
     // surface 时现建）。空格 preedit 零文本副作用；chromium 即刻重报
     // 矩形 → 450ms 阈值窗口内攒到知识 → 首下不回退
     void primePreedit(InputContext *ic);
+
 
 
     // W3 fractional scale：逻辑/物理尺寸分离。Dart（或调用方）上报**逻辑**
@@ -217,6 +220,12 @@ private:
                                // "top"），true=底部居中（默认，用户偏好）
     int popupAttachCount_ = 0; // popup 模式 attach 计数（>1 即重建）
     bool preeditProbeActive_ = false; // 预输入探针是否在挂
+    // 应用级跟随知识（进程生命周期）：矩形事件或上屏记账成功过的程序
+    // 名集合——重聚焦产生新 IC 时凭此首下即跟随（Electron 的 text-input
+    // 按会话重建 IC，IC 级标志每次清零）
+    std::string lastProgram_;
+    std::set<std::string> followingApps_;
+
 
     // 指针路由状态
     bool hasCursorRect_ = false; // text_input_rectangle 是否已送达（决策门）
