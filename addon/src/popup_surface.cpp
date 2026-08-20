@@ -529,6 +529,14 @@ void VoicePopup::armProbeFallbackTimer() {
                     // probeDeferralUsed_ 已置位 → 不再暂缓，知识仍缺 →
                     // 真实回退 layer
                     ensurePopup(ic, /*atShow=*/true);
+                    // 新 surface 在创建时带空输入区（防遮挡），而 show() 的
+                    // "恢复全量"早已跑过——这里不补的话 fallback 卡片鼠标
+                    // 永远点不进（宿主机实测：每应用首用必现）
+                    if (surface_) {
+                        wl_surface_set_input_region(surface_, nullptr);
+                        FCITX_INFO() << "VoicePopup: 输入区恢复全量"
+                                        "（回退切换后的 surface）";
+                    }
                     if (modeSwitchHandler_) {
                         modeSwitchHandler_(); // 引擎重推 UI（新 surface）
                     }
