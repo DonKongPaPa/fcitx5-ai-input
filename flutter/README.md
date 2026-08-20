@@ -1,17 +1,9 @@
 # voice_ui
 
-A new Flutter project.
+fcitx5-voice-input 的悬浮卡片 UI（Flutter / Material 3）。
 
-## Getting Started
+不以独立进程运行：Flutter 引擎经 raw embedder API **进程内嵌入 fcitx5 addon**（`kSoftware` 软渲染），整窗帧由 addon 直接写入 wayland `wl_shm` 缓冲。入口与协议见 `lib/main.dart` 头注释（channel `fcitx5/flutterui`）。
 
-This project is a starting point for a Flutter application.
-
-A few resources to get you started if this is your first Flutter project:
-
-- [Learn Flutter](https://docs.flutter.dev/get-started/learn-flutter)
-- [Write your first Flutter app](https://docs.flutter.dev/get-started/codelab)
-- [Flutter learning resources](https://docs.flutter.dev/reference/learning-resources)
-
-For help getting started with Flutter development, view the
-[online documentation](https://docs.flutter.dev/), which offers tutorials,
-samples, guidance on mobile development, and a full API reference.
+- 生产构建：仓库根 `make build`（JIT bundle，嵌入 addon 安装包）
+- 开发调试：`flutter run -d linux`（`linux/` GTK runner 仅为调试保留，不是产品形态）
+- C++ 侧宿主：`addon/src/flutter_engine.{h,cpp}`
