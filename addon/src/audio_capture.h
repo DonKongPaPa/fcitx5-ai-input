@@ -55,6 +55,9 @@ public:
             return false;
         }
         fd_ = fds[0];
+        // 扩管道到 1MB（≈30s 音频）：模型加载/主循环卡顿期间音频缓冲在
+        // 管道里不丢（默认 64KB 只够 ~2s，模型加载 ~1s 即可淹没）
+        fcntl(fd_, F_SETPIPE_SZ, 1 << 20);
         int flags = fcntl(fd_, F_GETFL);
         fcntl(fd_, F_SETFL, flags | O_NONBLOCK);
         ev_ = loop_->addIOEvent(
@@ -68,8 +71,17 @@ public:
 
     void stop() {
         ev_.reset();
+        // 尾音 drain：先把管道里未读走的音频全部读出（继续回调引擎，
+        // 否则松键瞬间的数百毫秒语音被直接丢弃——sherpa final 缺尾字
+        // 的根因），SIGTERM 后再读一轮子进程退出前的余量
+        if (fd_ >= 0) {
+            drainPipe();
+        }
         if (pid_ > 0) {
             kill(pid_, SIGTERM);
+            if (fd_ >= 0) {
+                drainPipe();
+            }
             waitpid(pid_, nullptr, WNOHANG);
             pid_ = -1;
         }
@@ -80,7 +92,7 @@ public:
     }
 
 private:
-    void onReadable() {
+    void drainPipe() {
         uint8_t buf[8192];
         for (;;) {
             ssize_t n = read(fd_, buf, sizeof(buf));
@@ -90,8 +102,12 @@ private:
                 }
                 continue;
             }
-            break; // EAGAIN / EOF（EOF 会在 stop 前反复触发，靠 pid 收尸）
+            break; // EAGAIN / EOF
         }
+    }
+
+    void onReadable() {
+        drainPipe(); // EOF 会在 stop 前反复触发，靠 pid 收尸
     }
 
     EventLoop *loop_ = nullptr;

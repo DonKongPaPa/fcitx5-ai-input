@@ -1,6 +1,6 @@
 [Addon]
 Name=Voice Input
-Category=InputMethod
+Category=Module
 Version=@PROJECT_VERSION@
 Type=SharedLibrary
 Library=voiceinput

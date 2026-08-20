@@ -173,7 +173,6 @@ private:
     size_t pos_ = 0;
     size_t counter_ = 0;
     bool finished_ = false;
-    bool streaming_ = true;
     std::unique_ptr<EventSourceTime> streamTimer_;
 };
 

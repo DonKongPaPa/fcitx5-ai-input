@@ -13,7 +13,7 @@
 namespace fcitx {
 
 /**
- * FunASR 流式引擎（WS 档）：宿主 funasr-serve（实验 001 的 MLT 模型 +
+ * FunASR 流式引擎（WS 档）：宿主 funasr-serve（MLT 模型 +
  * 累积窗口流式，31 语种，GPU/CPU）。
  *
  * 链路：parec 采集 → 手写 WS 客户端（HTTP Upgrade + 帧编解码，零外部

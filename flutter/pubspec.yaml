@@ -1,5 +1,5 @@
 name: voice_ui
-description: "A new Flutter project."
+description: "fcitx5 语音输入浮窗 UI（进程内嵌入 addon，软渲染）"
 # The following line prevents the package from being accidentally published to
 # pub.dev using `flutter pub publish`. This is preferred for private packages.
 publish_to: 'none' # Remove this line if you wish to publish to pub.dev
@@ -19,7 +19,7 @@ publish_to: 'none' # Remove this line if you wish to publish to pub.dev
 version: 1.0.0+1
 
 environment:
-  sdk: ^3.13.0
+  sdk: ">=3.12.0 <4.0.0"
 
 # Dependencies specify other packages that your package needs in order to work.
 # To automatically upgrade your package dependencies to the latest versions
@@ -34,6 +34,7 @@ dependencies:
   # The following adds the Cupertino Icons font to your application.
   # Use with the CupertinoIcons class for iOS style icons.
   cupertino_icons: ^1.0.8
+
 
 dev_dependencies:
   flutter_test:
@@ -56,6 +57,10 @@ flutter:
   # included with your application, so that you can use the icons in
   # the material Icons class.
   uses-material-design: true
+  # legacy `flutter build bundle` 不处理 fonts: 段——CJK 字体走 assets +
+  # main() 里 FontLoader 运行时注册（无 fontconfig fallback，缺此中文全 tofu）
+  assets:
+    - assets/fonts/
 
   # To add assets to your application, add an assets section, like this:
   # assets:
@@ -87,3 +92,12 @@ flutter:
   #
   # For details regarding fonts from package dependencies,
   # see https://flutter.dev/to/font-from-package
+
+# raw embedder 引擎不走 fontconfig（无系统字体 fallback），CJK 字体
+# 必须打进 assets，否则中文全部 tofu
+fonts:
+  - family: NotoSansSC
+    fonts:
+      - asset: assets/fonts/NotoSansSC-Regular.otf
+      - asset: assets/fonts/NotoSansSC-Medium.otf
+        weight: 500

@@ -18,15 +18,15 @@ FCITX_CONFIG_ENUM_I18N_ANNOTATION(TriggerMode, "HoldRelease", "Toggle");
 //           FunASR=流式 WS 档（宿主 funasr-serve，MLT 31 语种，GPU/CPU）；
 //           FunASRLocal=GGUF 本地档（llama-funasr-cli 子进程，zh/en/ja，
 //           非流式，CPU ~1.5GB 内存）
-FCITX_CONFIG_ENUM(AsrEngineKind, Dummy, FunASR, FunASRLocal);
+FCITX_CONFIG_ENUM(AsrEngineKind, Dummy, FunASR, FunASRLocal, Sherpa);
 FCITX_CONFIG_ENUM_I18N_ANNOTATION(AsrEngineKind, "Dummy", "FunASR",
-                                  "FunASRLocal");
+                                  "FunASRLocal", "Sherpa");
 
 // 模型部署设备档（自动拉起服务时的参数）
 FCITX_CONFIG_ENUM(FunASRDeviceKind, Auto, Gpu, Cpu);
 FCITX_CONFIG_ENUM_I18N_ANNOTATION(FunASRDeviceKind, "Auto", "Gpu", "Cpu");
 
-// 量化档（CPU 提速：实验 001 实测 RTF 0.43→0.185；GPU 无收益）
+// 量化档（CPU 提速；GPU 无收益）
 FCITX_CONFIG_ENUM(FunASRQuantKind, None, Int8);
 FCITX_CONFIG_ENUM_I18N_ANNOTATION(FunASRQuantKind, "None", "Int8");
 
@@ -48,6 +48,45 @@ FCITX_CONFIGURATION(
         300};
 
     // —— 组2 语音引擎 ——
+    // —— Sherpa CPU 流式引擎（RSS ~412MB/首字 ~0.07s/0 显存）——
+    Option<std::string> sherpaModelDir{
+        this, "SherpaModelDir",
+        "Sherpa 模型目录（含 encoder.int8.onnx/decoder.int8.onnx/tokens.txt；"
+        "留空 = ~/.local/share/fcitx5-voiceinput/models/sherpa-paraformer，"
+        "下载见 scripts/fetch-sherpa-models.sh）",
+        ""};
+    Option<int> sherpaNumThreads{
+        this, "SherpaNumThreads", "Sherpa 解码线程数", 4};
+    // 松手后用 SenseVoice 离线模型对整段重识别出 final（流式 partial 仍由
+    // 上面的流式模型驱动）。SenseVoice 对中英混说/标点/结尾完整度都显著
+    // 更好；留空 = 关闭，final 回落到流式结果
+    Option<std::string> senseVoiceDir{
+        this, "SenseVoiceDir",
+        "SenseVoice 离线模型目录（含 model.int8.onnx/tokens.txt，松手后整段"
+        "重识别提升中英混说与标点；留空 = 关闭；下载 scripts/fetch-sherpa-models.sh --model sensevoice）",
+        ""};
+
+    // —— UI 字体 ——
+    Option<std::string> uiFont{
+        this, "UIFont",
+        "悬浮卡片字体（Pango 格式如 \"MiSans VF 13\"；留空 = 跟随 classicui 的字体设置）",
+        ""};
+
+    // —— 卡片定位 ——
+    // chromium 系只在文本/光标变化时上报 text-input 光标矩形（焦点时不
+    // 报）。auto：收到过真实矩形（GTK/Qt）或本 IC 上屏过
+    // （上屏即有新鲜矩形可继承，chromium 也跟随）→ 跟随光标；否则（处女
+    // 字段）layer-shell 底部居中。caret：强制跟随。top/bottom：全部
+    // 顶部/底部居中
+    Option<std::string> positionMode{
+        this, "PositionMode",
+        "卡片定位模式（auto=可跟随则跟随（含 chromium 上屏后继承），否则底部居中 / caret=强制跟随光标 / bottom=全部底部居中 / top=全部顶部居中）",
+        "auto"};
+    Option<std::string> positionFallbackApps{
+        this, "PositionFallbackApps",
+        "强制底部居中的应用列表（逗号分隔，匹配程序名/app-id 子串；留空=自动判断——默认自动）",
+        ""};
+
     Option<AsrEngineKind, NoConstrain<AsrEngineKind>, DefaultMarshaller<AsrEngineKind>, AsrEngineKindI18NAnnotation> asrEngine{
         this, "AsrEngine", "ASR 引擎（Dummy=调试模拟，FunASR=流式识别，"
                            "FunASRLocal=本地轻量档 zh/en/ja 非流式）",
@@ -98,8 +137,6 @@ FCITX_CONFIGURATION(
     Option<std::string> dummyText{
         this, "DummyText", "Dummy 输出文本（分号分隔多条轮换）",
         "这是语音输入的模拟结果。今天天气怎么样；我们出去玩吧；明天记得开会"};
-    Option<int> dummyDelayMs{
-        this, "DummyDelayMs", "Dummy 非流式识别延迟（毫秒，0-5000）", 800};
     Option<bool> dummyStream{
         this, "DummyStream", "Dummy 模拟流式逐字上屏", true};
     Option<int> dummyStreamIntervalMs{

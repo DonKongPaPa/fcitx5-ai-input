@@ -1,36 +1,51 @@
 #define _GNU_SOURCE 1
 #include "popup_surface.h"
 
+#include "wlr-layer-shell-client-protocol.h"
+
+// wlr-layer-shell 的 get_popup 请求参数引用 xdg_popup_interface，生成的
+// private-code 会 extern 它；本模块从不调用 get_popup（layer 卡片无子
+// popup），零定义仅为满足链接
+extern "C" const wl_interface xdg_popup_interface = {};
+
 #include "fcitx-wayland/zwp_input_method_v2.h"
 
 #include <fcitx-utils/log.h>
 #include <fcitx/addonmanager.h>
 #include <fcitx/inputcontext.h>
+#include <fcitx/inputpanel.h>
+#include <fcitx-utils/event.h>
+#include <fcitx/text.h>
 #include <wayland_public.h>
 
 #include <fcntl.h>
 
+#include <cctype>
+#include <chrono>
 #include <cstring>
+#include <sstream>
 #include <sys/mman.h>
 #include <unistd.h>
 
 #include "wayland-input-method-unstable-v2-client-protocol.h"
+#include "viewporter-client-protocol.h"
+#include "fractional-scale-v1-client-protocol.h"
 
 namespace fcitx {
 
 static constexpr int kDefaultWidth = 360;
 static constexpr int kDefaultHeight = 200;
 
-// 候选行几何（须与 flutter _CandidatesBody 布局一致：头部 ~26px + 行0 64px
-//（含 subtitle）+ 后续行 52px）；kShadowPad 与 flutter kShadowPad 一致
-//（快照区比卡片大一圈阴影余量，指针坐标先扣掉才是卡片局部）
-static constexpr int kCandHeaderH = 28;
-static constexpr int kCandRowH = 54;
-static constexpr int kShadowPad = 12;
-
 static const wl_registry_listener kRegistryListener = {
     /* .global = */ &VoicePopup::registryGlobalImpl,
     /* .global_remove = */ &VoicePopup::registryGlobalRemoveImpl,
+};
+
+static const wl_output_listener kOutputListener = {
+    /* .geometry = */ &VoicePopup::outputGeometry,
+    /* .mode = */ &VoicePopup::outputMode,
+    /* .done = */ &VoicePopup::outputDone,
+    /* .scale = */ &VoicePopup::outputScale,
 };
 
 static const zwp_input_popup_surface_v2_listener kPopupListener = {
@@ -43,6 +58,29 @@ static const wl_seat_listener kSeatListener = {
     // 直接 abort（listener function for opcode 1 of wl_seat is NULL）
     [](void *, wl_seat *, const char *) {},
 };
+
+static const wp_fractional_scale_v1_listener kFscaleListener = {
+    /* .preferred_scale = */ &VoicePopup::preferredScale,
+};
+
+static const zwlr_layer_surface_v1_listener kLayerListener = {
+    /* .configure = */ &VoicePopup::layerConfigure,
+    /* .closed = */
+    [](void *, zwlr_layer_surface_v1 *) {},
+};
+
+// layer-shell 首个 configure 到达：ack 后才允许提交 buffer（协议要求）
+void VoicePopup::layerConfigure(void *data, zwlr_layer_surface_v1 *ls,
+                                uint32_t serial, uint32_t, uint32_t) {
+    auto *s = static_cast<VoicePopup *>(data);
+    std::lock_guard<std::mutex> lock(s->mutex_);
+    zwlr_layer_surface_v1_ack_configure(ls, serial);
+    if (!s->layerConfigured_) {
+        s->layerConfigured_ = true;
+        FCITX_INFO() << "VoicePopup: layer surface configured（"
+                     << (s->anchorBottom_ ? "底部" : "顶部") << "居中就绪）";
+    }
+}
 
 static const wl_pointer_listener kPointerListener = {
     /* .enter = */ &VoicePopup::pointerEnter,
@@ -70,12 +108,35 @@ void VoicePopup::popupRectangle(void *data, zwp_input_popup_surface_v2 *,
     s->cursorW_ = w;
     s->cursorH_ = h;
     s->hasCursorRect_ = true;
+    // chromium 系恒 0,0 0x0；GTK/Qt 上报真实值。auto 模式的回退判据
+    if (x != 0 || y != 0 || w != 0 || h != 0) {
+        if (!s->sawRealRect_) {
+            FCITX_INFO() << "VoicePopup: 收到真实光标矩形（本 IC 支持跟随）";
+        }
+        s->sawRealRect_ = true;
+        s->probeTimer_.reset(); // 矩形已到：跟随成立，无需切 layer
+        if (s->decisionPending_) {
+            s->decisionPending_ = false; // 解除挂起，帧放开
+            if (s->modeSwitchHandler_) {
+                s->modeSwitchHandler_(); // 引擎补推一帧
+            }
+        }
+        // 应用级知识：重聚焦若换新 IC（Electron 会话级 text-input），
+        // 凭程序名直接跟随，首下不再回退
+        if (!s->lastProgram_.empty()) {
+            s->followingApps_.insert(s->lastProgram_);
+        }
+        if (s->preeditProbeActive_) {
+            // 不撤：preedit 是录音指示器+跟随锚点（partial 会持续灌入）
+            FCITX_INFO() << "VoicePopup: 探针奏效——矩形已按当前光标重报";
+        }
+    }
     FCITX_INFO() << "VoicePopup: text_input_rectangle " << x << "," << y << " "
                  << w << "x" << h << "（窗口局部）";
 }
 
 // ---------------------------------------------------------------------------
-// P3 鼠标路由：seat 级 wl_pointer
+// 鼠标路由：seat 级 wl_pointer
 // niri 的 contents_under 只命中窗口/层 surface 树，IM popup 收不到指针
 // 事件——点击落到焦点窗口，我们在这里收窗口局部坐标做映射命中
 // ---------------------------------------------------------------------------
@@ -91,26 +152,76 @@ void VoicePopup::seatCapabilities(void *data, wl_seat *seat, uint32_t caps) {
     }
 }
 
+// 合成器告知真实缩放（1/120 单位；如 150=1.25）——重算物理池并通知上层
+void VoicePopup::preferredScale(void *data, wp_fractional_scale_v1 *,
+                                uint32_t scale) {
+    auto *s = static_cast<VoicePopup *>(data);
+    std::lock_guard<std::mutex> lock(s->mutex_);
+    s->gotFscale_ = true;
+    if (scale != 0) {
+        s->lastFscaleNum_ = scale; // 跨 surface 记忆（layer 无 fractional 时兜底）
+    }
+    if (scale == s->scaleNum_ || scale == 0) {
+        return;
+    }
+    s->scaleNum_ = scale;
+    FCITX_INFO() << "VoicePopup: fractional scale → " << (scale / 120.0);
+    if (s->logicalW_ > 0 && s->viewport_) {
+        // 物理池按新 scale 重建，viewport 保持逻辑尺寸
+        double sc = s->scale();
+        int pw = static_cast<int>(s->logicalW_ * sc + 0.5);
+        int ph = static_cast<int>(s->logicalH_ * sc + 0.5);
+        s->resizeLocked(pw, ph);
+        wp_viewport_set_destination(s->viewport_, s->logicalW_, s->logicalH_);
+    }
+    if (s->scaleHandler_) {
+        s->scaleHandler_(s->scaleNum_ / 120.0); // 出锁后调用更稳，这里同线程
+    }
+}
+
+void VoicePopup::outputGeometry(void *, wl_output *, int32_t, int32_t,
+                                int32_t, int32_t, int32_t, const char *,
+                                const char *, int32_t) {}
+void VoicePopup::outputMode(void *, wl_output *, uint32_t, int32_t, int32_t,
+                            int32_t) {}
+void VoicePopup::outputDone(void *, wl_output *) {}
+void VoicePopup::outputScale(void *data, wl_output *, int32_t factor) {
+    auto *s = static_cast<VoicePopup *>(data);
+    std::lock_guard<std::mutex> lock(s->mutex_);
+    if (factor != s->outputScale_ && !s->gotFscale_) {
+        s->outputScale_ = factor;
+        FCITX_INFO() << "VoicePopup: wl_output scale → " << factor;
+        if (s->logicalW_ > 0 && s->viewport_) {
+            int pw = s->logicalW_ * factor, ph = s->logicalH_ * factor;
+            s->resizeLocked(pw, ph);
+            wp_viewport_set_destination(s->viewport_, s->logicalW_,
+                                        s->logicalH_);
+        }
+        if (s->scaleHandler_) {
+            s->scaleHandler_(s->scale());
+        }
+    } else if (factor != s->outputScale_) {
+        s->outputScale_ = factor; // fractional 优先，仅记录
+    }
+}
+
 void VoicePopup::pointerEnter(void *data, wl_pointer *, uint32_t,
                               wl_surface *surface, wl_fixed_t sx,
                               wl_fixed_t sy) {
     auto *s = static_cast<VoicePopup *>(data);
     s->ptrX_ = wl_fixed_to_int(sx);
     s->ptrY_ = wl_fixed_to_int(sy);
+    FCITX_INFO() << "VoicePopup: pointer enter surface=" << surface
+                 << "（ours=" << s->surface_ << "）at "
+                 << s->ptrX_ << "," << s->ptrY_
+                 << (surface == s->surface_ ? " [命中]" : " [非本卡片]");
     if (surface == s->surface_) {
-        // niri 实测：IM popup 收得到 pointer enter（同 classicui 机制），
-        // 坐标即面板局部——命中走直路，矩形映射只做兜底。
-        // 绝对定位类移动（虚拟指针/部分合成器）只有 enter 没有后续
-        // motion，enter 即做 hover 判定
+        // niri：IM popup 收得到 pointer enter（同 classicui 机制），坐标即
+        // 面板局部（含阴影余量）——直接转发给 Flutter 引擎，hover/点击
+        // 命中由 Dart 处理
         s->pointerOnPopup_ = true;
-        FCITX_INFO() << "VoicePopup: pointer enter 直达 popup 表面 @"
-                     << s->ptrX_ << "," << s->ptrY_;
-        int row = s->pointerRow(s->ptrX_, s->ptrY_);
-        if (row != s->lastHoverRow_) {
-            s->lastHoverRow_ = row;
-            if (s->hoverHandler_) {
-                s->hoverHandler_(row);
-            }
+        if (s->pointerSink_) {
+            s->pointerSink_(PointerEvent::Enter, s->ptrX_, s->ptrY_);
         }
     } else {
         s->pointerOnPopup_ = false;
@@ -122,15 +233,12 @@ void VoicePopup::pointerLeave(void *data, wl_pointer *, uint32_t,
     auto *s = static_cast<VoicePopup *>(data);
     if (surface == s->surface_) {
         s->pointerOnPopup_ = false;
+        if (s->pointerSink_) {
+            s->pointerSink_(PointerEvent::Leave, s->ptrX_, s->ptrY_);
+        }
     }
     s->ptrX_ = -10000;
     s->ptrY_ = -10000;
-    if (s->lastHoverRow_ != -1) {
-        s->lastHoverRow_ = -1;
-        if (s->hoverHandler_) {
-            s->hoverHandler_(-1);
-        }
-    }
 }
 
 void VoicePopup::pointerMotion(void *data, wl_pointer *, uint32_t,
@@ -138,73 +246,23 @@ void VoicePopup::pointerMotion(void *data, wl_pointer *, uint32_t,
     auto *s = static_cast<VoicePopup *>(data);
     s->ptrX_ = wl_fixed_to_int(sx);
     s->ptrY_ = wl_fixed_to_int(sy);
-    int row = s->pointerRow(s->ptrX_, s->ptrY_);
-    if (row != s->lastHoverRow_) {
-        s->lastHoverRow_ = row;
-        if (s->hoverHandler_) {
-            s->hoverHandler_(row);
-        }
+    if (s->pointerOnPopup_ && s->pointerSink_) {
+        s->pointerSink_(PointerEvent::Motion, s->ptrX_, s->ptrY_);
     }
 }
 
 void VoicePopup::pointerButton(void *data, wl_pointer *, uint32_t,
                                uint32_t, uint32_t button, uint32_t state) {
     auto *s = static_cast<VoicePopup *>(data);
-    if (state != WL_POINTER_BUTTON_STATE_PRESSED || button != 0x110) {
-        return; // 只处理左键按下
+    if (button != 0x110 || !s->pointerOnPopup_) { // 只处理左键
+        return;
     }
-    int row = s->pointerRow(s->ptrX_, s->ptrY_);
-    FCITX_INFO() << "VoicePopup: pointer button @" << s->ptrX_ << ","
-                 << s->ptrY_ << " → row=" << row
-                 << (s->hasCursorRect_ ? "" : "（无光标矩形，未命中正常）");
-    if (row >= 0 && s->clickHandler_) {
-        s->clickHandler_(row);
+    if (s->pointerSink_) {
+        s->pointerSink_(
+            state == WL_POINTER_BUTTON_STATE_PRESSED ? PointerEvent::Press
+                                                     : PointerEvent::Release,
+            s->ptrX_, s->ptrY_);
     }
-}
-
-// 命中：优先直达局部坐标（pointerOnPopup_ 时即表面局部，含阴影余量）；
-// 否则用光标矩形 + 放置规则映射（兜底，合成器不给 enter 时）
-int VoicePopup::pointerRow(int winX, int winY) const {
-    if (pointerOnPopup_) {
-        winX -= kShadowPad; // 扣掉快照余量 → 卡片局部
-        winY -= kShadowPad;
-        // Flutter 候选布局：头部 26，行0（含 subtitle）64，后续行 52
-        if (winY < 26 || winX < 0 || winX > width_ - kShadowPad * 2) {
-            return -1;
-        }
-        int y = winY - 26;
-        if (y < 64) {
-            return 0;
-        }
-        int row = 1 + (y - 64) / 52;
-        return row <= 8 ? row : -1;
-    }
-    if (!hasCursorRect_ || width_ <= 0 || height_ <= 0) {
-        return -1;
-    }
-    int px = cursorX_;
-    int belowY = cursorY_ + cursorH_;
-    int aboveY = cursorY_ - height_;
-    bool xOk = winX >= px - 4 - kShadowPad &&
-               winX < px + width_ - kShadowPad * 2 + 4;
-    bool below = xOk && winY >= belowY - kShadowPad &&
-                 winY < belowY + height_;
-    bool above = xOk && winY >= aboveY && winY < cursorY_ + kShadowPad;
-    if (!below && !above) {
-        return -1;
-    }
-    int localY = (below ? (winY - belowY) : (winY - aboveY)) - kShadowPad;
-    if (localY < kCandHeaderH) {
-        return -1;
-    }
-    int row = (localY - kCandHeaderH) / kCandRowH;
-    int maxRow = (height_ - kShadowPad * 2 - kCandHeaderH + kCandRowH - 1) /
-                     kCandRowH -
-                 1;
-    if (row < 0 || row > maxRow || row > 8) {
-        return -1; // 点在头部或超出候选数
-    }
-    return row;
 }
 
 VoicePopup::VoicePopup(Instance *instance) : instance_(instance) {
@@ -218,8 +276,15 @@ VoicePopup::VoicePopup(Instance *instance) : instance_(instance) {
                 // 连接已死：只清指针，不 destroy（对象已随 display 失效）
                 std::lock_guard<std::mutex> lock(mutex_);
                 surface_ = nullptr;
+                surfaceCompat_ = nullptr;
+                viewport_ = nullptr;
+                fscale_ = nullptr;
                 popup_ = nullptr;
                 im_ = nullptr;
+                layerSurface_ = nullptr;
+                layerShell_ = nullptr;
+                layerConfigured_ = false;
+                emptyRegion_ = nullptr;
                 pool_ = nullptr;
                 for (auto &b : buffers_) {
                     b = nullptr;
@@ -229,6 +294,7 @@ VoicePopup::VoicePopup(Instance *instance) : instance_(instance) {
                 shm_ = nullptr;
                 seat_ = nullptr;
                 pointer_ = nullptr;
+                output_ = nullptr;
                 hasCursorRect_ = false;
                 display_ = nullptr;
             });
@@ -276,12 +342,36 @@ void VoicePopup::registryGlobalImpl(void *data, wl_registry *reg, uint32_t name,
         self->shm_ = static_cast<wl_shm *>(
             wl_registry_bind(reg, name, &wl_shm_interface, 1));
     } else if (strcmp(iface, "wl_seat") == 0 && !self->seat_) {
-        // P3 鼠标路由：seat 级 wl_pointer。绑 v3（capabilities 即止）——
+        // 鼠标路由：seat 级 wl_pointer。绑 v3（capabilities 即止）——
         // v5+ 的 frame 事件若 listener 槽缺失会 abort（已补 no-op 双保险）
         uint32_t sv = version < 3 ? version : 3;
         self->seat_ = static_cast<wl_seat *>(wl_registry_bind(
             reg, name, &wl_seat_interface, sv));
         wl_seat_add_listener(self->seat_, &kSeatListener, self);
+    } else if (strcmp(iface, "wl_output") == 0 && !self->output_) {
+        // wl_output 整数 scale 兜底（niri 不给 IM popup 发 fractional）
+        self->output_ = static_cast<wl_output *>(wl_registry_bind(
+            reg, name, &wl_output_interface, 2)); // v2 起 scale/done 事件
+        wl_output_add_listener(self->output_, &kOutputListener, self);
+        FCITX_INFO() << "VoicePopup: wl_output bound v2 name=" << name;
+    } else if (strcmp(iface, "wp_viewporter") == 0 && !self->viewporter_) {
+        FCITX_INFO() << "VoicePopup: global wp_viewporter v" << version;
+        self->viewporter_ = static_cast<wp_viewporter *>(wl_registry_bind(
+            reg, name, &wp_viewporter_interface, 1));
+    } else if (strcmp(iface, "wp_fractional_scale_manager_v1") == 0 &&
+               !self->fsManager_) {
+        FCITX_INFO() << "VoicePopup: global wp_fractional_scale_manager_v1 v"
+                     << version;
+        self->fsManager_ =
+            static_cast<wp_fractional_scale_manager_v1 *>(wl_registry_bind(
+                reg, name, &wp_fractional_scale_manager_v1_interface, 1));
+    } else if (strcmp(iface, "zwlr_layer_shell_v1") == 0 &&
+               !self->layerShell_) {
+        // chromium 系定位回退用；version ≤3（4 的 bottom/surface 扩展非必需）
+        uint32_t lv = version < 3 ? version : 3;
+        self->layerShell_ = static_cast<zwlr_layer_shell_v1 *>(
+            wl_registry_bind(reg, name, &zwlr_layer_shell_v1_interface, lv));
+        FCITX_INFO() << "VoicePopup: zwlr_layer_shell_v1 bound v" << lv;
     } else if (strcmp(iface, "zwp_input_method_manager_v2") == 0) {
         // 仅作为"这是 waylandim 的 IM 连接"的判据；不绑定第二个 IM
         // （协议规定一个 seat 只允许一个 input method，waylandim 已 bind）
@@ -316,55 +406,463 @@ void VoicePopup::registryGlobalImpl(void *data, wl_registry *reg, uint32_t name,
 }
 
 void VoicePopup::registryGlobalRemoveImpl(void *data, wl_registry *, uint32_t) {
-    // F3 简化：全局移除不处理（连接关闭走 teardown）
+    // 全局移除不处理（连接关闭走 teardown）
     (void)data;
 }
 
-bool VoicePopup::ensurePopup(InputContext *ic) {
+std::string VoicePopup::toLower(std::string s) {
+    for (auto &c : s) {
+        c = static_cast<char>(::tolower(static_cast<unsigned char>(c)));
+    }
+    return s;
+}
+
+void VoicePopup::setPositionPolicy(const std::string &mode,
+                                   const std::string &fallbackAppsCsv) {
+    std::lock_guard<std::mutex> lock(mutex_);
+    positionMode_ = mode.empty() ? "auto" : mode;
+    fallbackApps_.clear();
+    std::string cur;
+    std::stringstream ss(toLower(fallbackAppsCsv));
+    while (std::getline(ss, cur, ',')) {
+        // 去首尾空白
+        while (!cur.empty() && (cur.front() == ' ' || cur.front() == '\t')) {
+            cur.erase(cur.begin());
+        }
+        while (!cur.empty() && (cur.back() == ' ' || cur.back() == '\t')) {
+            cur.pop_back();
+        }
+        if (!cur.empty()) {
+            fallbackApps_.push_back(cur);
+        }
+    }
+}
+
+void VoicePopup::notifyCommit() {
+    std::lock_guard<std::mutex> lock(mutex_);
+    endPreeditProbe();
+    if (!committedInThisIC_) {
+        FCITX_INFO() << "VoicePopup: 本 IC 已上屏 → handle 有新鲜光标矩形"
+                        "可继承，auto 下轮跟随";
+    }
+    committedInThisIC_ = true;
+    if (!lastProgram_.empty()) {
+        followingApps_.insert(lastProgram_);
+    }
+}
+
+// —— 预输入探针（classicui 拼音候选窗实时跟随的同款机制）——
+// 组合文本变化逼应用按当前光标重报矩形 → 正被追踪（show 刚重建）的
+// 我们被合成器实时挪位
+void VoicePopup::beginPreeditProbe(InputContext *ic) {
+    if (!ic || preeditProbeActive_) {
+        return;
+    }
+    // 可见组合文本「语音输入中」逐字打出：每字一次组合变化=每字一次
+    // 报文机会（一次性整串 set 只有一次组合变化，报文可有可无）。
+    // preedit 永不入文；录音中由 updatePreeditText 把流式 partial 灌进
+    // 来——组合增长=打拼音的等价物，应用随文字增长持续重报矩形，卡片
+    // 实时跟随。上屏时 commitString 按协议替换 preedit（自清洁）
+    static const char *const kProbe = "\u8bed\u97f3\u8f93\u5165\u4e2d"; // 语音输入中
+    Text preedit(std::string(kProbe, 3)); // 首字「语」
+    ic->inputPanel().setClientPreedit(preedit);
+    // updatePreedit 才会把 client preedit 推给应用（UpdatePreeditEvent →
+    // waylandim）；updateUserInterface 只刷新 UI 插件、不送达应用
+    ic->updatePreedit();
+    preeditProbeActive_ = true;
+    probeTypingIdx_ = 1;
+    probeTypeTimer_.reset();
+    typeProbeNext(ic);
+    FCITX_INFO() << "VoicePopup: 预输入探针已置（可见组合文本，逼应用重报光标矩形）";
+}
+
+// 探针逐字未完时排队的 partial，打完放行（持锁）
+void VoicePopup::flushPendingPreeditLocked() {
+    if (!hasPendingPreedit_) {
+        return;
+    }
+    hasPendingPreedit_ = false;
+    if (auto *ic = icRef_.get()) {
+        ic->inputPanel().setClientPreedit(Text(pendingPreedit_));
+        ic->updatePreedit();
+    }
+}
+
+static uint64_t nowUsSafe() {
+    return std::chrono::duration_cast<std::chrono::microseconds>(
+               std::chrono::steady_clock::now().time_since_epoch())
+        .count();
+}
+
+void VoicePopup::typeProbeNext(InputContext *ic) {
+    static const char *const kProbe =
+        "\u8bed\u97f3\u8f93\u5165\u4e2d"; // 语音输入中（每字 3 字节）
+    if (!ic || !preeditProbeActive_ || probeTypingIdx_ >= 5) {
+        if (probeTypingIdx_ >= 5) {
+            flushPendingPreeditLocked(); // 打完：放行排队的 partial
+        }
+        probeTypeTimer_.reset();
+        return;
+    }
+    if (probeTypeTimer_) {
+        probeTypeTimer_.reset();
+    }
+    const int idx = probeTypingIdx_;
+    probeTypeTimer_ = instance_->eventLoop().addTimeEvent(
+        CLOCK_MONOTONIC, nowUsSafe() + 40'000ull, 0,
+        [this, idx](EventSourceTime *, uint64_t) {
+            std::lock_guard<std::mutex> lock(mutex_);
+            probeTypeTimer_.reset();
+            if (auto *ic2 = icRef_.get()) {
+                // 矩形到也不停链：探针五个字打完（视觉完整性），
+                // partial 在队列里等
+                if (preeditProbeActive_ && probeTypingIdx_ == idx && idx < 5) {
+                    probeTypingIdx_ = idx + 1;
+                    std::string txt(std::string(kProbe, (idx + 1) * 3));
+                    ic2->inputPanel().setClientPreedit(Text(txt));
+                    ic2->updatePreedit(); // 每字一次组合变化=报文机会
+                    typeProbeNext(ic2);
+                }
+            }
+            return true;
+        });
+}
+
+void VoicePopup::endPreeditProbe() {
+    probeTypeTimer_.reset();
+    if (!preeditProbeActive_) {
+        return;
+    }
+    preeditProbeActive_ = false;
+    probeTypingIdx_ = 5;
+    hasPendingPreedit_ = false;
+    if (auto *ic = icRef_.get()) {
+        ic->inputPanel().setClientPreedit(Text());
+        ic->updatePreedit();
+    }
+}
+
+void VoicePopup::primePreedit(InputContext *ic) {
+    std::lock_guard<std::mutex> lock(mutex_);
+    if (!ic || sawRealRect_ || committedInThisIC_ || topMode_) {
+        return;
+    }
+    if (!surface_ && !ensurePopup(ic, /*atShow=*/false)) {
+        return; // 非 wayland_v2 前端：无 popup 可探
+    }
+    if (topMode_) {
+        return; // policy/名单判成 layer：无需矩形
+    }
+    beginPreeditProbe(ic);
+}
+
+// 录音中把流式 partial 写入组合文本：文字增长 → 应用重报矩形 →
+// 合成器实时挪卡片（classicui 打拼音的等价机制）。仅在探针挂着时
+void VoicePopup::updatePreeditText(const std::string &text) {
+    std::lock_guard<std::mutex> lock(mutex_);
+    if (!preeditProbeActive_) {
+        return;
+    }
+    if (probeTypingIdx_ < 5) {
+        // 逐字未完：排队等打完（后到覆盖先到，永远显示最新）
+        pendingPreedit_ = text;
+        hasPendingPreedit_ = true;
+        return;
+    }
+    probeTypeTimer_.reset();
+    if (auto *ic = icRef_.get()) {
+        ic->inputPanel().setClientPreedit(Text(text));
+        ic->updatePreedit();
+    }
+}
+
+// 判定挂起结算 → layer 底部（持锁，两个触发点共用：8s 保险丝、录音
+// 结束——结果/候选卡片必须显示，不能再等矩形）
+void VoicePopup::resolvePendingToLayerLocked() {
+    if (auto *ic = icRef_.get()) {
+        // probeDeferralUsed_ 已置位 → ensurePopup 不再暂缓，知识仍缺 →
+        // 真实回退 layer
+        ensurePopup(ic, /*atShow=*/true);
+        // 新 surface 在创建时带空输入区（防遮挡），而 show() 的"恢复
+        // 全量"早已跑过——不补的话 fallback 卡片鼠标点不进
+        if (surface_) {
+            wl_surface_set_input_region(surface_, nullptr);
+            FCITX_INFO() << "VoicePopup: 输入区恢复全量（结算后的 surface）";
+        }
+        if (modeSwitchHandler_) {
+            modeSwitchHandler_(); // 引擎重推 UI（新 surface）
+        }
+    }
+}
+
+void VoicePopup::resolvePendingToLayer() {
+    std::lock_guard<std::mutex> lock(mutex_);
+    if (!decisionPending_) {
+        return;
+    }
+    decisionPending_ = false;
+    probeTimer_.reset();
+    if (!visible_ || topMode_ || sawRealRect_ || committedInThisIC_ ||
+        !surface_) {
+        return;
+    }
+    FCITX_INFO() << "VoicePopup: 判定挂起结算（录音结束仍无矩形）→ "
+                    "layer 底部";
+    resolvePendingToLayerLocked();
+}
+
+void VoicePopup::armProbeFallbackTimer() {
+    const uint64_t deadlineUs =
+        std::chrono::duration_cast<std::chrono::microseconds>(
+            std::chrono::steady_clock::now().time_since_epoch())
+            .count() +
+        // 保险丝 8s：矩形到达延迟无上界，任何固定判定窗口都会误判。
+        // 真正结算点=录音结束（结果/候选卡片必须显示）
+        // resolvePendingToLayer；定时器只兜异常路径（结算事件丢失）
+        8'000'000ull;
+    probeTimer_ = instance_->eventLoop().addTimeEvent(
+        CLOCK_MONOTONIC, deadlineUs, 0, [this](EventSourceTime *, uint64_t) {
+            std::lock_guard<std::mutex> lock(mutex_);
+            probeTimer_.reset();
+            decisionPending_ = false;
+            if (visible_ && !topMode_ && !sawRealRect_ &&
+                !committedInThisIC_ && surface_) {
+                FCITX_INFO() << "VoicePopup: 判定挂起结算（保险丝）→ "
+                                "layer 底部";
+                resolvePendingToLayerLocked();
+            }
+            return true;
+        });
+}
+
+// 定位模式决策：policy × 应用名单 × 矩形上报能力。
+// - chromium 系的 wayland text-input 恒报 0,0 0x0 → 合成器把 input popup
+//   放到窗口左上角；此类应用改用 layer-shell（anchor 由 policy 决定，
+//   默认底部居中——layer 角色的合成器定位在我们手里）
+// - auto 对名单外应用动态判断：prepare 阶段（atShow=false）先建 popup
+//   探测矩形；show 阶段（atShow=true）仍未见真实矩形 → 回退 layer。
+//   （在 prepare 就判 !sawRealRect_ 会自锁：popup 都没建过，矩形永远
+//   收不到）
+bool VoicePopup::wantTopMode(InputContext *ic, bool atShow) {
+    lastDecisionWasKnowledgeFallback_ = false;
+    anchorBottom_ = true; // "top" 之外全部底部居中
+    if (positionMode_ == "top") {
+        anchorBottom_ = false;
+        return true;
+    }
+    if (positionMode_ == "bottom") {
+        return true;
+    }
+    if (positionMode_ != "auto") {
+        return false; // caret
+    }
+    const std::string prog = toLower(ic->program());
+    for (const auto &frag : fallbackApps_) {
+        if (!prog.empty() && prog.find(frag) != std::string::npos) {
+            FCITX_INFO() << "VoicePopup: 应用「" << prog
+                         << "」命中定位回退名单（" << frag
+                         << "）→ layer 模式";
+            return true;
+        }
+    }
+    if (atShow && !sawRealRect_ && !committedInThisIC_) {
+        if (!lastProgram_.empty() &&
+            followingApps_.count(toLower(ic->program())) > 0) {
+            return false; // 该应用跟随成功过：重聚焦新 IC 首下直接跟随
+        }
+        lastDecisionWasKnowledgeFallback_ = true;
+        FCITX_INFO() << "VoicePopup: auto：本 IC 未见真实光标矩形且无上屏"
+                        "历史（该应用首次会话）";
+        return true;
+    }
+    return false;
+}
+
+bool VoicePopup::ensurePopup(InputContext *ic, bool atShow) {
     if (!pool_ || !compositor_) {
         return false;
     }
-    if (popup_ && surface_ && icRef_.get() == ic) {
-        return true; // 同一 IC 复用
+    const bool icChanged = icRef_.get() != ic;
+    if (icChanged) {
+        sawRealRect_ = false;      // 矩形上报能力按 IC 记账
+        committedInThisIC_ = false; // 上屏历史同样按 IC
+        probeDeferralUsed_ = false; // 新 IC 重新给一次二次探测
     }
+    const bool top = [&]() {
+        const bool want = wantTopMode(ic, atShow);
+        // 知识回退 + 非强制（policy/名单）+ IM proxy 可用：show 时刻先不
+        // 落 layer——保持 popup 让探针的后续组合变化有机会拿到矩形
+        //（首个组合常不出报文）；矩形到即跟随，录音结束仍无矩形由
+        // 结算路径切 layer
+        if (want && lastDecisionWasKnowledgeFallback_ && atShow &&
+            !topMode_ && !probeDeferralUsed_) {
+            probeDeferralUsed_ = true; // 本会话只暂缓一次（定时器重入不暂缓）
+            auto *waylandim = instance_->addonManager().addon("waylandim", true);
+            if (waylandim) {
+                auto *imWrapper =
+                    waylandim->call<IWaylandIMModule::getInputMethodV2>(ic);
+                if (wayland::rawPointer(imWrapper)) {
+                    FCITX_INFO() << "VoicePopup: 知识回退暂缓——popup 模式"
+                                    "二次探测（矩形到则跟随，否则录音结束"
+                                    "结算底部）";
+                    return false;
+                }
+            }
+        }
+        return want;
+    }();
+    // layer 模式同 IC 复用（layer 定位权在我们手里，不涉及槽位竞争）；
+    // popup 模式每次都重建：smithay 的 input popup 追踪槽是单槽、
+    // last-create-wins（classicui 每次显示都重建 popup 重夺槽位）——我们
+    // 若长期持有旧 popup，classicui 一旦创建过自己的 popup，合成器就不再
+    // 给我们重定位，卡片永远停在旧光标处
+    const bool reuse = surface_ && !icChanged && topMode_ && topMode_ == top;
+    if (reuse) {
+        return true;
+    }
+    lastProgram_ = toLower(ic->program());
     destroyPopupSurface();
+    topMode_ = top;
 
-    auto *waylandim = instance_->addonManager().addon("waylandim", true);
-    if (!waylandim) {
-        FCITX_WARN() << "VoicePopup: waylandim addon unavailable";
-        return false;
-    }
-    auto *imWrapper =
-        waylandim->call<IWaylandIMModule::getInputMethodV2>(ic);
-    im_ = wayland::rawPointer(imWrapper); // 借用，归 waylandim 所有
-    if (!im_) {
-        // frontendName() 是 5.1 API（bookworm 5.0.21 没有）：对非 wayland_v2
-        // 前端的 IC，getInputMethodV2 本身就返回 null，无需前端名判断
-        FCITX_INFO() << "VoicePopup: IC 无 waylandim IM proxy（非 wayland_v2 前端？）";
-        return false;
+    if (!top) {
+        auto *waylandim = instance_->addonManager().addon("waylandim", true);
+        if (!waylandim) {
+            FCITX_WARN() << "VoicePopup: waylandim addon unavailable";
+            return false;
+        }
+        auto *imWrapper =
+            waylandim->call<IWaylandIMModule::getInputMethodV2>(ic);
+        im_ = wayland::rawPointer(imWrapper); // 借用，归 waylandim 所有
+        if (!im_) {
+            // frontendName() 是 5.1 API（bookworm 5.0.21 没有）：对非 wayland_v2
+            // 前端的 IC，getInputMethodV2 本身就返回 null，无需前端名判断
+            FCITX_INFO() << "VoicePopup: IC 无 waylandim IM proxy（非 wayland_v2 前端？）";
+            return false;
+        }
     }
 
     surface_ = wl_compositor_create_surface(compositor_);
-    popup_ = zwp_input_method_v2_get_input_popup_surface(im_, surface_);
-    zwp_input_popup_surface_v2_add_listener(popup_, &kPopupListener, this);
-    icRef_ = ic->watch();
-    FCITX_INFO() << "VoicePopup: popup surface attached to waylandim IM";
+    // 透明/隐藏态的空输入区域：layer surface 的输入区与像素透明度无关，
+    // 不显式清空会把"出现过的区域"变成不可见遮挡（挡住下方按钮）；
+    // 可见时再恢复全量输入区（nullptr = 默认全量）
+    if (!emptyRegion_ && compositor_) {
+        emptyRegion_ = wl_compositor_create_region(compositor_);
+    }
+    if (emptyRegion_) {
+        wl_surface_set_input_region(surface_, emptyRegion_);
+    }
+    // fcitx wayland C++ wrapper 兼容层：classicui 等组件的 wl_pointer
+    // enter thunk 会把 wl_surface 的 user_data 直接 reinterpret 成
+    // fcitx::wayland::WlSurface* 再读 userData_（+0x48）。裸 C API 创建
+    // 的 proxy user_data=NULL → 经典 UI 解引用 NULL 即 SIGSEGV。挂一块
+    // 与 WlSurface 布局等大的零填充占位：userData_ 偏移处为 0 → 对方的
+    // if(!window) return 路径安全返回。字段只读这一个偏移，其余不参与
+    // 跨组件调用。
+    surfaceCompat_ = calloc(1, 0x58);
+    wl_proxy_set_user_data(reinterpret_cast<wl_proxy *>(surface_),
+                            surfaceCompat_);
+    // viewport（物理 buffer → 逻辑显示）+ fractional scale（真实缩放值）
+    if (viewporter_) {
+        viewport_ = wp_viewporter_get_viewport(viewporter_, surface_);
+        // 每个新 surface 的 viewport 必须立即设 destination：它只在 Dart
+        // resize 消息里设（尺寸不变就不再发），切应用重建 surface 后
+        // destination 缺失 → 物理缓冲按原尺寸显示（放大 scale 倍）+
+        // 指针坐标落在物理空间全越界 → 候选框鼠标失灵
+        if (logicalW_ > 0 && logicalH_ > 0) {
+            wp_viewport_set_destination(viewport_, logicalW_, logicalH_);
+        }
+    }
+    if (fsManager_) {
+        fscale_ = wp_fractional_scale_manager_v1_get_fractional_scale(
+            fsManager_, surface_);
+        wp_fractional_scale_v1_add_listener(fscale_, &kFscaleListener, this);
+    }
+    if (topMode_) {
+        // layer-shell：不依赖应用上报光标矩形，合成器按我们的
+        // anchor/margin/size 摆放（默认底部居中；"top" 兼容旧值顶部居中）。
+        // configure 到达前不提交 buffer。
+        // registry global 是异步到达的——IC 早激活时可能尚未 bind，
+        // roundtrip 等一轮再判
+        if (!layerShell_ && display_) {
+            wl_display_roundtrip(display_);
+        }
+        if (!layerShell_) {
+            FCITX_WARN() << "VoicePopup: 合成器无 zwlr_layer_shell_v1，"
+                            "回退光标跟随";
+            topMode_ = false;
+            return ensurePopup(ic);
+        }
+        layerConfigured_ = false;
+        layerSurface_ = zwlr_layer_shell_v1_get_layer_surface(
+            layerShell_, surface_, nullptr, ZWLR_LAYER_SHELL_V1_LAYER_TOP,
+            "input-method");
+        zwlr_layer_surface_v1_add_listener(layerSurface_, &kLayerListener,
+                                           this);
+        zwlr_layer_surface_v1_set_anchor(
+            layerSurface_, anchorBottom_
+                               ? ZWLR_LAYER_SURFACE_V1_ANCHOR_BOTTOM
+                               : ZWLR_LAYER_SURFACE_V1_ANCHOR_TOP);
+        zwlr_layer_surface_v1_set_exclusive_zone(layerSurface_, -1);
+        zwlr_layer_surface_v1_set_margin(
+            layerSurface_, anchorBottom_ ? 0 : 16, 0, anchorBottom_ ? 16 : 0,
+            0);
+        zwlr_layer_surface_v1_set_keyboard_interactivity(
+            layerSurface_,
+            ZWLR_LAYER_SURFACE_V1_KEYBOARD_INTERACTIVITY_NONE);
+        zwlr_layer_surface_v1_set_size(
+            layerSurface_, logicalW_ > 0 ? logicalW_ : width_,
+            logicalH_ > 0 ? logicalH_ : height_);
+        wl_surface_commit(surface_); // 空 commit：请求首个 configure
+        icRef_ = ic->watch();
+        FCITX_INFO() << "VoicePopup: layer surface created（"
+                     << (anchorBottom_ ? "底部" : "顶部") << "居中模式）";
+    } else {
+        popup_ = zwp_input_method_v2_get_input_popup_surface(im_, surface_);
+        zwp_input_popup_surface_v2_add_listener(popup_, &kPopupListener, this);
+        icRef_ = ic->watch();
+        // 首次之外的每次 attach 都是重建（hide 已销毁 / classicui 抢过槽）
+        popupAttachCount_++;
+        FCITX_INFO() << "VoicePopup: popup surface attached to waylandim IM"
+                     << (popupAttachCount_ > 1
+                             ? "（重建：重夺定位槽，取最新光标矩形）"
+                             : "");
+    }
     wl_display_flush(display_);
     return true;
 }
 
 void VoicePopup::destroyPopupSurface() {
+    if (layerSurface_) {
+        zwlr_layer_surface_v1_destroy(layerSurface_);
+        layerSurface_ = nullptr;
+        layerConfigured_ = false;
+    }
     if (popup_) {
         zwp_input_popup_surface_v2_destroy(popup_);
         popup_ = nullptr;
+    }
+    // 派生对象随 surface 销毁：fractional scale 有 destroy 请求；viewport
+    // 是 surface 生命周期绑定（无 destroy，置空即可）。悬空 proxy 会在
+    // shutdown flush 时触发 SIGSEGV
+    if (fscale_) {
+        wp_fractional_scale_v1_destroy(fscale_);
+        fscale_ = nullptr;
+    }
+    if (viewport_) {
+        wp_viewport_destroy(viewport_);
+        viewport_ = nullptr;
     }
     if (surface_) {
         wl_surface_destroy(surface_);
         surface_ = nullptr;
     }
+    if (surfaceCompat_) {
+        free(surfaceCompat_);
+        surfaceCompat_ = nullptr;
+    }
 }
 
-// —— 帧绘制（F3：色块；F4 由 pushFrame 替代）——
+// —— 帧绘制（色块测试帧；Flutter 帧走 pushFrameBGRA）——
 // damage_buffer 需 wl_surface ≥4，旧合成器回退 wl_damage
 static void damageSurface(wl_surface *s, uint32_t ver, int w, int h) {
     if (ver >= 4) {
@@ -393,10 +891,20 @@ static void paintTestPattern(uint8_t *argb, int w, int h) {
 
 void VoicePopup::prepare(InputContext *ic) {
     std::lock_guard<std::mutex> lock(mutex_);
-    if (!ensurePopup(ic)) {
+    // 光标矩形诊断：fcitx 核心从前端（wayland text-input / XIM spot）汇总
+    const auto &cr = ic->cursorRect();
+    FCITX_INFO() << "VoicePopup: ic cursorRect " << cr.left() << ","
+                 << cr.top() << " " << cr.width() << "x" << cr.height()
+                 << "（前端=" << ic->frontendName() << "）";
+    if (!ensurePopup(ic, /*atShow=*/false)) {
         return;
     }
-    // 全透明首帧：触发 map 流水线（内容仍不可见）
+    // 全透明首帧：触发 map 流水线（内容仍不可见）。
+    // layer 模式首个 configure 未到前不提交 buffer（协议要求）
+    if (topMode_ && !layerConfigured_) {
+        wl_display_flush(display_);
+        return;
+    }
     size_t bufSize = static_cast<size_t>(width_) * height_ * 4;
     uint8_t *dst = pixels_ + cur_ * bufSize;
     memset(dst, 0, bufSize);
@@ -409,11 +917,29 @@ void VoicePopup::prepare(InputContext *ic) {
 
 void VoicePopup::show(InputContext *ic) {
     std::lock_guard<std::mutex> lock(mutex_);
-    if (!ensurePopup(ic)) {
+    // show 时刻的定位决策（auto 动态回退判据见 wantTopMode）
+    const auto &scr = ic->cursorRect();
+    FCITX_INFO() << "VoicePopup: show 时 ic cursorRect " << scr.left()
+                 << "," << scr.top() << " " << scr.width() << "x"
+                 << scr.height() << " hasCursorRect_=" << hasCursorRect_
+                 << " sawRealRect_=" << sawRealRect_;
+    if (!ensurePopup(ic, /*atShow=*/true)) {
         FCITX_WARN() << "VoicePopup::show but popup not ready";
         return;
     }
-    if (patternMode_) {
+    if (!topMode_) {
+        beginPreeditProbe(ic); // 换行/重聚焦/Electron 首句实时跟随
+        if (lastDecisionWasKnowledgeFallback_ && probeDeferralUsed_) {
+            // 判定挂起：矩形到（跟随）或录音结束/保险丝（底部结算）前
+            // 不 map 任何帧。不"先 popup 后切 layer"——中途换 surface 在
+            // scale 发现期（首聚恰是）会放大/消失/位移
+            decisionPending_ = true;
+            armProbeFallbackTimer();
+            FCITX_INFO() << "VoicePopup: 判定挂起——首帧延迟至矩形到达"
+                            "或录音结束/8s 保险丝回退";
+        }
+    }
+    if (patternMode_ && (!topMode_ || layerConfigured_)) {
         size_t bufSize = width_ * height_ * 4;
         uint8_t *dst = pixels_ + cur_ * bufSize;
         paintTestPattern(dst, width_, height_);
@@ -423,21 +949,57 @@ void VoicePopup::show(InputContext *ic) {
         cur_ = 1 - cur_;
         wl_display_flush(display_);
     }
+    // 恢复输入区：创建/隐藏时设为空 region（不可见不挡交互），show 时
+    // 恢复全量。surface state 随下一次 commit 生效（flutter 模式=首帧，
+    // 色块模式=下方立即 commit）。注意不能放在 pushFrameBGRA 的
+    // !visible_ 分支——那里是早退路径，show 已置 true，永远走不到
+    if (emptyRegion_) {
+        wl_surface_set_input_region(surface_, nullptr);
+        FCITX_INFO() << "VoicePopup: 输入区恢复全量（show，"
+                     << (topMode_ ? "layer" : "popup") << " 模式）";
+    }
     // flutter 模式：不主动 commit，等 UiBridge 首帧（无 buffer 不 map）
     visible_ = true;
 }
 
 void VoicePopup::hide() {
     std::lock_guard<std::mutex> lock(mutex_);
-    // 不销毁 surface：销毁不产生 damage，niri 会残留旧画面数秒；
-    // 提交全透明帧用自己的 damage 立即清掉内容，popup 保留复用（已预热）
-    if (surface_ && buffers_[0]) {
-        size_t bufSize = static_cast<size_t>(width_) * height_ * 4;
-        memset(pixels_ + cur_ * bufSize, 0, bufSize);
-        wl_surface_attach(surface_, buffers_[cur_], 0, 0);
-        damageSurface(surface_, compositorVersion_, width_, height_);
+    probeTimer_.reset();        // 会话结束，切换定时器作废
+    probeDeferralUsed_ = false; // 下一会话可再用二次探测
+    decisionPending_ = false;
+    endPreeditProbe(); // 防御：无矩形到达的字段不留悬挂组合
+    if (!surface_) {
+        visible_ = false;
+        return;
+    }
+    if (topMode_) {
+        // layer 模式：不销毁 surface（下轮同 IC 直接复用，configure 已就
+        // 绪）。销毁不产生 damage，niri 会残留旧画面数秒；提交全透明帧
+        // 用自己的 damage 立即清掉内容
+        if (buffers_[0] && layerConfigured_) {
+            size_t bufSize = static_cast<size_t>(width_) * height_ * 4;
+            memset(pixels_ + cur_ * bufSize, 0, bufSize);
+            if (emptyRegion_) { // 隐藏即退出命中测试：不留不可见遮挡
+                wl_surface_set_input_region(surface_, emptyRegion_);
+            }
+            wl_surface_attach(surface_, buffers_[cur_], 0, 0);
+            damageSurface(surface_, compositorVersion_, width_, height_);
+            wl_surface_commit(surface_);
+            cur_ = 1 - cur_;
+        }
+    } else {
+        // popup 模式：classicui 同款收尾——先 attach(null)+commit 正式
+        // unmap（产生 damage 清画面），再销毁。销毁是关键：smithay 的
+        // input popup 追踪槽是单槽 last-create-wins，长期持有隐藏 popup
+        // 会占着槽，classicui 的候选窗与我们的重定位互抢；释放后下一轮
+        // show 重建即拿到最新光标矩形
+        if (emptyRegion_) {
+            wl_surface_set_input_region(surface_, emptyRegion_);
+        }
+        wl_surface_attach(surface_, nullptr, 0, 0);
         wl_surface_commit(surface_);
-        cur_ = 1 - cur_;
+        destroyPopupSurface();
+        FCITX_INFO() << "VoicePopup: popup 已 unmap+销毁（释放定位槽）";
     }
     visible_ = false;
     if (display_) {
@@ -445,9 +1007,15 @@ void VoicePopup::hide() {
     }
 }
 
-// 重建 shm 池（帧尺寸变化时）；surface/popup 不动
+// 重建 shm 池（帧尺寸变化时）；surface/popup 不动。
+// 注意：preferredScale/outputScale/setLogicalSize 已持锁，须调
+// resizeLocked——std::mutex 不可重入，持锁再调本函数=自死锁
 void VoicePopup::resize(int w, int h) {
     std::lock_guard<std::mutex> lock(mutex_);
+    resizeLocked(w, h);
+}
+
+void VoicePopup::resizeLocked(int w, int h) {
     if (!pool_ || (w == width_ && h == height_)) {
         return;
     }
@@ -476,44 +1044,53 @@ void VoicePopup::resize(int w, int h) {
             pool_, i * bufSize, w, h, stride, WL_SHM_FORMAT_ARGB8888);
     }
     cur_ = 0;
+    if (topMode_ && layerSurface_) {
+        // 物理池是逻辑×scale；layer surface 用逻辑尺寸
+        double sc = scale();
+        zwlr_layer_surface_v1_set_size(
+            layerSurface_, static_cast<int32_t>(w / sc + 0.5),
+            static_cast<int32_t>(h / sc + 0.5));
+    }
     FCITX_INFO() << "VoicePopup: shm pool resized to " << w << "x" << h;
 }
 
-void VoicePopup::pushFrame(const uint8_t *rgba, int w, int h) {
+// 调用方（Dart resize 消息）上报逻辑尺寸；帧本身是物理尺寸
+//（引擎按 metrics physical=逻辑×ratio 渲染），池随物理建，viewport 收逻辑
+void VoicePopup::setLogicalSize(int w, int h) {
+    std::lock_guard<std::mutex> lock(mutex_);
+    logicalW_ = w;
+    logicalH_ = h;
+    if (viewport_) {
+        wp_viewport_set_destination(viewport_, w, h);
+    }
+    double sc = scale();
+    int pw = static_cast<int>(w * sc + 0.5);
+    int ph = static_cast<int>(h * sc + 0.5);
+    if (pw != width_ || ph != height_) {
+        // 物理池与当前不符时先按目标逻辑比例预留（首帧到达会再校准）
+        if (width_ <= 0) {
+            resizeLocked(pw, ph);
+        }
+    }
+}
+
+void VoicePopup::pushFrameBGRA(const uint8_t *bgra, int w, int h) {
     if (w != width_ || h != height_) {
         resize(w, h);
     }
     std::lock_guard<std::mutex> lock(mutex_);
     // 隐藏后丢弃迟到帧（hide 已提交透明帧，idle 态的帧会把它覆盖回来）
-    if (!visible_ || !surface_ || !buffers_[0] || !popup_) {
+    // 判定挂起期同样丢帧：跟随/底部未定，不 map（杜绝中途换 surface）
+    if (!visible_ || decisionPending_ || !surface_ || !buffers_[0] ||
+        (topMode_ ? !layerSurface_ : !popup_)) {
         return;
     }
-    static int frameLogCount = 0; // 调试：前3帧记日志
-    if (frameLogCount < 3) {
-        ++frameLogCount;
-        size_t nz = 0, alpha0 = 0;
-        for (size_t i = 0; i < static_cast<size_t>(w) * h; ++i) {
-            if (rgba[i * 4] | rgba[i * 4 + 1] | rgba[i * 4 + 2]) {
-                ++nz;
-            }
-            if (rgba[i * 4 + 3] == 0) {
-                ++alpha0;
-            }
-        }
-        FCITX_INFO() << "VoicePopup: frame #" << frameLogCount << " " << w
-                     << "x" << h << " 非零像素=" << nz << " 全透明=" << alpha0
-                     << " surface=" << (surface_ ? 1 : 0)
-                     << " popup=" << (popup_ ? 1 : 0);
+    if (topMode_ && !layerConfigured_) {
+        return; // 首个 configure 未到，提交 buffer 是协议错误；丢帧等下一张
     }
     size_t bufSize = static_cast<size_t>(width_) * height_ * 4;
-    uint8_t *dst = pixels_ + cur_ * bufSize;
-    // RGBA→BGRA（WL_SHM_FORMAT_ARGB8888 小端即 BGRA 字节序）
-    for (int i = 0; i < w * h; ++i) {
-        dst[i * 4 + 0] = rgba[i * 4 + 2];
-        dst[i * 4 + 1] = rgba[i * 4 + 1];
-        dst[i * 4 + 2] = rgba[i * 4 + 0];
-        dst[i * 4 + 3] = rgba[i * 4 + 3];
-    }
+    // 引擎软渲输出即 wl_shm ARGB8888 小端字节序（BGRA），直接 memcpy
+    memcpy(pixels_ + cur_ * bufSize, bgra, bufSize);
     wl_surface_attach(surface_, buffers_[cur_], 0, 0);
     damageSurface(surface_, compositorVersion_, width_, height_);
     wl_surface_commit(surface_);

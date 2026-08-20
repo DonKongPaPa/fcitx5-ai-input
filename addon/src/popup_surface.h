@@ -2,24 +2,35 @@
 #define _FCITX5_VOICEINPUT_POPUP_SURFACE_H_
 
 #include <fcitx/instance.h>
+#include <fcitx-utils/event.h>
 #include <fcitx-utils/trackableobject.h>
 #include <wayland_public.h>
 
 #include <functional>
 #include <memory>
 #include <mutex>
+#include <set>
+#include <string>
+#include <vector>
 
 struct wl_display;
 struct wl_registry;
 struct wl_compositor;
 struct wl_shm;
 struct wl_seat;
+struct wl_output;
 struct wl_pointer;
 struct wl_surface;
 struct wl_shm_pool;
 struct wl_buffer;
+struct wp_viewporter;
+struct wp_viewport;
+struct wp_fractional_scale_manager_v1;
+struct wp_fractional_scale_v1;
 struct zwp_input_method_v2;
 struct zwp_input_popup_surface_v2;
+struct zwlr_layer_shell_v1;
+struct zwlr_layer_surface_v1;
 
 namespace fcitx {
 class InputContext;
@@ -48,8 +59,8 @@ namespace fcitx {
  * 光标矩形附近（text_input_rectangle 事件）。
  *
  * 生命周期照抄 classicui（waylandinputwindow.cpp）：hide 即销毁 popup+surface
- * （pool/buffers 复用）；show(ic) 时若有 IC 切换则重建；缓冲不透明由
- * F3 色块 / F4 Flutter 帧写入。
+ * （pool/buffers 复用）；show(ic) 时若有 IC 切换则重建；缓冲内容由
+ * Flutter 帧写入（桥不可用时回退色块测试帧）。
  *
  * 线程：wayland 事件在 fcitx 主循环（wayland 模块把 fd 挂进 instance）；
  * show/hide 由状态机主线程调用，wl_proxy_marshal/flush 线程安全。
@@ -68,22 +79,75 @@ public:
     // 时的回退）立即绘制测试帧
     void show(InputContext *ic);
     void hide();
-    // F4 帧桥入口：写入一帧 RGBA（w×h），尺寸变化时自动重建 shm 池
-    void pushFrame(const uint8_t *rgba, int w, int h);
-    void resize(int w, int h); // 重建 shm 池（帧尺寸变化）
-    void setPatternMode(bool p) { patternMode_ = p; } // 桥不可用回退色块
+    // Flutter 帧入口。写入一帧 BGRA（wl_shm ARGB8888 小端字节序，
+    // 引擎软渲输出可直接 memcpy），尺寸变化时自动重建 shm 池
+    void pushFrameBGRA(const uint8_t *bgra, int w, int h);
+    void resize(int w, int h); // 重建 shm 池（帧尺寸变化；内部加锁）
+    void resizeLocked(int w, int h); // 已持锁版本（wayland 回调用）
+    void setPatternMode(bool p) { patternMode_ = p; } // 引擎不可用时回退色块
 
-    // P3 鼠标路由：niri 的 IM popup 不收指针事件（命中测试只走窗口/层
-    // surface 树），点击会落到下层窗口——seat 级 wl_pointer 能收到该窗口
-    // 局部坐标，配合 text_input_rectangle（同为窗口局部）+ 放置规则做命中
-    void setClickHandler(std::function<void(int row)> h) {
-        clickHandler_ = std::move(h);
+    // —— 卡片定位模式（chromium 系不报光标矩形 → input popup 被合成器
+    // 放到窗口左上角；此类应用改用 layer-shell 自定位）——
+    void setPositionPolicy(const std::string &mode,
+                           const std::string &fallbackAppsCsv);
+    // 本 IC 我们上屏过文本。chromium 系只在**文本变化时**报光标矩形：
+    // 上屏即意味着合成器 handle 里有新鲜矩形可供 show 重建的 popup
+    // 继承 → auto 模式下轮改回跟随
+    void notifyCommit();
+    // 录音结束仍无矩形：判定挂起结算到 layer（结果/候选卡片必须显示）
+    void resolvePendingToLayer();
+    // 预输入探针：把可见组合文本「语音输入中」逐字打进 client preedit
+    //（classicui 拼音候选窗实时跟随的同款机制）——组合变化逼应用重报
+    // 光标矩形，卡片被合成器实时挪到当前光标。preedit 永不入文，上屏
+    // 时 commitString 按协议替换（自清洁）。只在 caret 模式用（layer
+    // 自定位无意义）。调用方持锁或主循环单线程
+    void beginPreeditProbe(InputContext *ic);
+    void endPreeditProbe();
+    // 探针逐字打出：一次性整串 set 只有一次组合变化、报文可有可无；
+    // 逐字 = 每字一次组合变化 = 每字一次报文机会
+    void typeProbeNext(InputContext *ic);
+    void flushPendingPreeditLocked(); // 逐字打完后放行排队的 partial
+    // 录音中把流式 partial 写进组合文本（探针挂着时）——组合增长逼
+    // 应用持续重报矩形，卡片实时跟随文字
+    void updatePreeditText(const std::string &text);
+    // surface 切换（结算回退 layer）或判定挂起解除（矩形到达放开首帧）
+    // 时回调：引擎需要向新 surface 重推一帧 UI
+    void setModeSwitchHandler(std::function<void()> h) {
+        modeSwitchHandler_ = std::move(h);
     }
-    void setHoverHandler(std::function<void(int row)> h) {
-        hoverHandler_ = std::move(h);
+    // 触发键按下时（阈值判定窗口内）对未知能力的 IC 提前挂探针：
+    // 矩形在窗口内即到，show 决策已有知识 → 首下跟随而非回退
+    void primePreedit(InputContext *ic);
+
+    // fractional scale：逻辑/物理尺寸分离。Dart（或调用方）上报**逻辑**
+    // 尺寸；池按 物理=ceil(逻辑×scale/120) 建，viewport 缩回逻辑显示。
+    // scale 经 preferred_scale 事件异步到达后自动重算并回调（metrics 需更新）
+    void setLogicalSize(int w, int h);
+    // 生效 scale：fractional 事件（精确，1/120）优先；未到则用上次
+    // fractional 记忆，最后退 wl_output 整数 scale
+    double scale() const {
+        if (gotFscale_) {
+            return scaleNum_ / 120.0;
+        }
+        // 新 surface 的 fractional 未到：上次 fractional > 整数兜底
+        //（wl_output 整数是取整值，混 scale 双屏上差 33-60%）
+        return lastFscaleNum_ > 0 ? lastFscaleNum_ / 120.0 : outputScale_;
     }
-    // 当前 popup 在焦点窗口坐标系里的候选行命中（-1=不在面板上）
-    int pointerRow(int winX, int winY) const;
+    int logicalWidth() const { return logicalW_; }
+    int logicalHeight() const { return logicalH_; }
+    // scale 变化回调（voiceinput 据此更新引擎 metrics 重渲物理帧）
+    void setScaleHandler(std::function<void(double)> h) {
+        scaleHandler_ = std::move(h);
+    }
+
+    // 指针事件原始转发（不做 C++ 侧命中测试——Flutter 引擎直接收
+    // FlutterPointerEvent，hover/点击由 Dart 命中）。niri 的 IM popup 不
+    // 在窗口/层 surface 树里，seat 级 wl_pointer 才能收到表面局部坐标
+    enum class PointerEvent { Enter, Leave, Motion, Press, Release };
+    void setPointerSink(
+        std::function<void(PointerEvent kind, int x, int y)> sink) {
+        pointerSink_ = std::move(sink);
+    }
 
     // wayland C 回调（public：listener 结构需要函数指针）
     static void registryGlobalImpl(void *data, wl_registry *reg, uint32_t name,
@@ -94,6 +158,13 @@ public:
                                int32_t x, int32_t y, int32_t w, int32_t h);
     // seat 级指针路由（niri 上 IM popup 不收指针事件，见 setClickHandler）
     static void seatCapabilities(void *data, wl_seat *seat, uint32_t caps);
+    static void outputGeometry(void *data, wl_output *o, int32_t, int32_t,
+                               int32_t, int32_t, int32_t, const char *,
+                               const char *, int32_t);
+    static void outputMode(void *data, wl_output *o, uint32_t, int32_t,
+                           int32_t, int32_t);
+    static void outputScale(void *data, wl_output *o, int32_t factor);
+    static void outputDone(void *data, wl_output *o);
     static void pointerEnter(void *data, wl_pointer *p, uint32_t serial,
                              wl_surface *surface, wl_fixed_t sx, wl_fixed_t sy);
     static void pointerLeave(void *data, wl_pointer *p, uint32_t serial,
@@ -102,13 +173,19 @@ public:
                               wl_fixed_t sx, wl_fixed_t sy);
     static void pointerButton(void *data, wl_pointer *p, uint32_t serial,
                               uint32_t time, uint32_t button, uint32_t state);
+    static void preferredScale(void *data, wp_fractional_scale_v1 *fs,
+                               uint32_t scale);
+    static void layerConfigure(void *data, zwlr_layer_surface_v1 *ls,
+                               uint32_t serial, uint32_t w, uint32_t h);
 
 private:
     void onConnectionCreated(const std::string &name, wl_display *display);
     void setupDisplay(wl_display *display);
-    bool ensurePopup(InputContext *ic); // IC 变化时重建 surface+popup
+    bool ensurePopup(InputContext *ic, bool atShow = false); // IC 变化时重建 surface+popup
     void destroyPopupSurface();
     void teardown();
+    bool wantTopMode(InputContext *ic, bool atShow = false); // 定位模式决策（policy × 名单 × 矩形上报能力）
+    std::string toLower(std::string s);
 
     Instance *instance_;
     std::mutex mutex_;
@@ -121,18 +198,70 @@ private:
     wl_shm *shm_ = nullptr;
     wl_seat *seat_ = nullptr;
     wl_pointer *pointer_ = nullptr;
+    wp_viewporter *viewporter_ = nullptr;
+    wp_viewport *viewport_ = nullptr;
+    wp_fractional_scale_manager_v1 *fsManager_ = nullptr;
+    wp_fractional_scale_v1 *fscale_ = nullptr;
+    uint32_t scaleNum_ = 120; // 1/120 单位（协议约定 120=1.0）
+    bool gotFscale_ = false;  // fractional 事件是否到达过
+    // 最后一次 fractional 值（跨 surface 记忆）：layer surface 可能收不到
+    // fractional 事件，此时整数兜底 wl_output scale 是向上取整值（混
+    // scale 双屏上会放大 33-60%）→ 用上次 fractional 兜底永远更准
+    uint32_t lastFscaleNum_ = 0;
+    int outputScale_ = 1;     // wl_output 整数 scale 兜底
+    wl_output *output_ = nullptr;
+    int logicalW_ = 0, logicalH_ = 0;
+    std::function<void(double)> scaleHandler_;
+
     zwp_input_method_v2 *im_ = nullptr; // 借用：waylandim 所有
     zwp_input_popup_surface_v2 *popup_ = nullptr;
     wl_surface *surface_ = nullptr;
+
+    // layer-shell 回退（chromium 系；anchorBottom_ 底部居中为默认，兼容
+    // 旧值 "top" 顶部居中）
+    zwlr_layer_shell_v1 *layerShell_ = nullptr;
+    zwlr_layer_surface_v1 *layerSurface_ = nullptr;
+    bool layerConfigured_ = false; // 首个 configure 到达前不得 commit buffer
+    bool topMode_ = false;         // 当前 surface 用的是 layer 角色
+    std::string positionMode_ = "auto";
+    std::vector<std::string> fallbackApps_;
+    void *surfaceCompat_ = nullptr; // WlSurface wrapper 布局占位（见 cpp）
+    wl_region *emptyRegion_ = nullptr; // 隐藏/透明态的空输入区域
     TrackableObjectReference<InputContext> icRef_; // popup 所属 IC
+    // 本 IC 自激活以来是否收到过"真实"（非 0x0）光标矩形。chromium 系
+    // 恒 0,0 0x0 → auto 模式据此回退 layer-shell；GTK/Qt 焦点后很快上报
+    bool sawRealRect_ = false;
+    // 本 IC 是否上屏过文本（我们自己 commitString）——chromium 的矩形
+    // 只在文本变化时上报，上屏 = handle 里必有新鲜矩形可继承
+    bool committedInThisIC_ = false;
+    bool anchorBottom_ = true; // layer 模式锚点：false=顶部居中（仅显式
+                               // "top"），true=底部居中（默认）
+    int popupAttachCount_ = 0; // popup 模式 attach 计数（>1 即重建）
+    bool preeditProbeActive_ = false; // 预输入探针是否在挂
+    int probeTypingIdx_ = 0; // 探针逐字进度（5=打完）
+    std::unique_ptr<EventSourceTime> probeTypeTimer_;
+    // 逐字未完时 partial 先排队：让探针五个字打完再出识别字（流式出字
+    // 不过早打断探针）；打完即放行，后到覆盖先到
+    std::string pendingPreedit_;
+    bool hasPendingPreedit_ = false;
+    // 应用级跟随知识（进程生命周期）：矩形事件或上屏记账成功过的程序
+    // 名集合——重聚焦产生新 IC 时凭此首下即跟随（Electron 的 text-input
+    // 按会话重建 IC，IC 级标志每次清零）
+    std::string lastProgram_;
+    std::set<std::string> followingApps_;
+    bool lastDecisionWasKnowledgeFallback_ = false; // wantTopMode 的回退分支
+    bool probeDeferralUsed_ = false; // 本会话已用过二次探测暂缓（防递归）
+    bool decisionPending_ = false; // 判定挂起：帧不上屏直到跟随/底部定局
+    std::function<void()> modeSwitchHandler_;
+    void armProbeFallbackTimer();
+    void resolvePendingToLayerLocked(); // 持锁版（保险丝/结算共用）
+    std::unique_ptr<EventSourceTime> probeTimer_;
 
     // 指针路由状态
     bool hasCursorRect_ = false; // text_input_rectangle 是否已送达（决策门）
     bool pointerOnPopup_ = false; // 指针焦点在我们 popup 表面（直达模式）
-    std::function<void(int row)> clickHandler_;
-    std::function<void(int row)> hoverHandler_;
-    int lastHoverRow_ = -1;
-    int ptrX_ = -10000, ptrY_ = -10000; // 最近指针位置（焦点窗口局部）
+    std::function<void(PointerEvent, int, int)> pointerSink_;
+    int ptrX_ = -10000, ptrY_ = -10000; // 最近指针位置（表面局部）
 
     // shm 双缓冲
     wl_shm_pool *pool_ = nullptr;
@@ -143,7 +272,7 @@ private:
     int width_ = 0, height_ = 0;
 
     bool visible_ = false;
-    bool patternMode_ = false; // 桥不可用时回退 F3 色块
+    bool patternMode_ = false; // 桥不可用时回退色块测试帧
     bool isImConnection_ = false; // registry 见到 IM manager 即 waylandim 连接
     int cursorX_ = 0, cursorY_ = 0, cursorW_ = 0, cursorH_ = 0; // 光标矩形
 

@@ -29,13 +29,16 @@ fi
 rm -rf "$STAGE/artifacts" "$STAGE/.git" "$STAGE/build" \
        "$STAGE/experiments" "$STAGE/语音测试集" "$STAGE/.zcode" "$STAGE/.funasr-env"
 
-# 预编译 flutter bundle
-BUNDLE="${FLUTTER_BUNDLE:-$SRC/artifacts/dist/lib/fcitx5-voiceinput/ui/bundle}"
-# download-artifact 解压丢 exec 位：-f 检查 + 落盘后 chmod（与 stage.sh 一致）
-[ -f "$BUNDLE/voice_ui" ] || { echo "!! flutter bundle 缺失"; exit 1; }
-mkdir -p "$STAGE/flutter-bundle"
-cp -a "$BUNDLE/." "$STAGE/flutter-bundle/"
-chmod +x "$STAGE/flutter-bundle/voice_ui"
+# Flutter JIT 资产 + raw embedder 引擎 .so（tarball 自带，免安装期下载）
+FLUTTER_DIR="${FLUTTER_ASSETS:-$SRC/artifacts/dist/share/fcitx5-voiceinput/flutter}"
+ENGINE="${FLUTTER_ENGINE_LIBRARY:-$SRC/.cache/flutter-embedder/libflutter_engine.so}"
+[ -d "$FLUTTER_DIR/flutter_assets" ] || { echo "!! flutter_assets 缺失: $FLUTTER_DIR"; exit 1; }
+[ -f "$FLUTTER_DIR/icudtl.dat" ] || { echo "!! icudtl.dat 缺失"; exit 1; }
+[ -f "$ENGINE" ] || { echo "!! libflutter_engine.so 缺失（跑 scripts/fetch-flutter-embedder.sh）"; exit 1; }
+mkdir -p "$STAGE/flutter-ui" "$STAGE/engine"
+cp -a "$FLUTTER_DIR/flutter_assets" "$STAGE/flutter-ui/"
+cp "$FLUTTER_DIR/icudtl.dat" "$STAGE/flutter-ui/"
+cp "$ENGINE" "$STAGE/engine/"
 
 cp "$SRC/packaging/tarball/install.sh" "$STAGE/install.sh"
 chmod +x "$STAGE/install.sh"

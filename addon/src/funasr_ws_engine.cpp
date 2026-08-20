@@ -18,7 +18,7 @@
 
 namespace fcitx {
 
-static constexpr int kFinalTimeoutSec = 30; // 容器 GPU 首推理 JIT 慢（实测 final 14s）
+static constexpr int kFinalTimeoutSec = 30; // GPU 首推理 JIT 慢（final 可达 14s）
 
 static uint64_t nowUs() {
     struct timespec ts;
@@ -127,7 +127,7 @@ void FunAsrWsEngine::onConnected() {
     int port = 0;
     parseUrl(config_->funasrUrl.value(), &host, &port);
     // 握手完成后转非阻塞：服务端推理忙时接收缓冲满，阻塞 write 会冻住
-    // fcitx5 主循环（实测冻结 31s）——音频块宁可丢弃（final 兜底），
+    // fcitx5 主循环（可冻结数十秒）——音频块宁可丢弃（final 兜底），
     // 控制帧走定时重试
     {
         int nb = fcntl(sockFd_, F_GETFL);
