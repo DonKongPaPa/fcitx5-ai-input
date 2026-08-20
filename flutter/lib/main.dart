@@ -170,7 +170,7 @@ Size panelSizeFor(ThemeData theme, SessionData d, double fontScale) {
         final labelStyle = theme.textTheme.labelSmall!;
         final headerW = 14 + 4 +
             measureWidth('LLM 优化', labelStyle) +
-            measureWidth('数字/方向键选择 · Enter=上屏 · Esc=取消', labelStyle) +
+            measureWidth('Enter=上屏 · Esc=取消', labelStyle) +
             24 + 24;
         var w = (textW + 22 + 16 + 24 + 8).clamp(minW, maxW);
         if (w < headerW) {
@@ -609,18 +609,17 @@ class _CandidatesBody extends StatelessWidget {
                 ],
               ),
               Flexible(
-                child: FittedBox(
-                  // 可变字体（MiSans VF 等）TextPainter 实测与渲染存在
-                  // ~5% 宽度偏差，ellipsis 会在测量略小时截尾（用户实测
-                  // 短文字时贴边）。scaleDown：放得下原尺寸，放不下整体
-                  // 等比缩小——对测量误差结构免疫
-                  fit: BoxFit.scaleDown,
-                  child: Text(
-                    '数字/方向键选择 · Enter=上屏 · Esc=取消',
-                    maxLines: 1,
-                    style: theme.textTheme.labelSmall?.copyWith(
-                        color: cs.onSurfaceVariant),
-                  ),
+                child: Text(
+                  // 提示内容刻意精简：完整版（数字/方向键选择…）在可变
+                  // 字体（MiSans VF 实测 ~15px 测量偏差）+ 短候选的窄卡
+                  // 下会触发行溢出（RenderFlex overflowed——FittedBox 的
+                  // 最小固有宽=文本原宽，scaleDown 救不了 flex 分配）。
+                  // 短版在最小卡宽内留足双倍余量，机制上不可能再挤
+                  'Enter=上屏 · Esc=取消',
+                  maxLines: 1,
+                  overflow: TextOverflow.ellipsis,
+                  style: theme.textTheme.labelSmall?.copyWith(
+                      color: cs.onSurfaceVariant),
                 ),
               ),
             ],
