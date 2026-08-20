@@ -4,7 +4,7 @@
 // kSoftware 软渲染），无 GTK 窗口/无独立进程——引擎把整窗帧直接交给
 // addon 写入 zwp_input_popup_surface_v2 的 shm buffer。
 //
-// 尺寸策略（vision 反馈：与文本框等宽显"抢眼"，故收窄）：
+// 尺寸策略（收窄卡片：与文本框等宽过于抢眼）：
 //   宽度 clamp(TextPainter 实测内容宽, 280, 420)；录音态固定 280；
 //   高度按状态：录音 104 / 结果按行数 / 候选按条数。
 //   流式 partial 尾部优先（放不下截头加省略号，最新内容始终可见）。
@@ -132,8 +132,8 @@ class VoiceUiApp extends StatelessWidget {
 
 /// 面板尺寸决策：宽度 TextPainter 实测（280–420，随 fontScale 缩放），
 /// 高度按状态。theme 必须与渲染主题同源（同字体族+字号缩放）——
-/// 测量用默认字体而渲染用 SysFont 时宽度必然失准（用户实测候选头部
-/// 提示溢出即此因）
+/// 测量用默认字体而渲染用 SysFont 时宽度必然失准（候选头部提示
+/// 溢出即此因）
 Size panelSizeFor(ThemeData theme, SessionData d, double fontScale) {
   final minW = kMinW * fontScale, maxW = kMaxW * fontScale;
   switch (d.state) {
@@ -154,7 +154,7 @@ Size panelSizeFor(ThemeData theme, SessionData d, double fontScale) {
       }
     case UiState.candidates:
       {
-        // 最长候选一行实测（润色版另留 subtitle 余量；徽标 22 + 间距 16 + padding 24）
+        // 按最长候选一行测宽（润色版另留 subtitle 余量；徽标 22 + 间距 16 + padding 24）
         final items = d.candidates.take(2).toList();
         double textW = 0;
         for (var i = 0; i < items.length; i++) {
@@ -165,9 +165,9 @@ Size panelSizeFor(ThemeData theme, SessionData d, double fontScale) {
           if (need > textW) textW = need;
         }
         // 宽度下限 360（随 fontScale）：头部提示行在 MiSans VF 12 下
-        // 实测需 ~250px 且可变字体测量有 ±5% 偏差——280 最小宽时仅剩
-        // 4px 余量（用户实测贴边"超出"）。360 下限让头部在任何字体下
-        // 都有一倍余量，不再依赖测量精度（用户：卡片理论上要变长）
+        // 需 ~250px 且可变字体测量有 ±5% 偏差——280 最小宽时仅剩 4px
+        // 余量会贴边"超出"。360 下限让头部在任何字体下都有一倍余量，
+        // 不再依赖测量精度
         final w = (textW + 22 + 16 + 24 + 8).clamp(360.0 * fontScale, maxW);
         return Size(w, (44 + items.length * 52 + 8 /* 首条 subtitle */) * fontScale);
       }
@@ -587,8 +587,8 @@ class _CandidatesBody extends StatelessWidget {
         Padding(
           padding: const EdgeInsets.fromLTRB(12, 8, 12, 2),
           // 注意不能用 Spacer：Spacer(Expanded flex:1) 会与 Flexible(hint)
-          // 平分剩余空间，提示恒被压到半宽再省略截断（用户实测溢出的
-          // 真凶）。spaceBetween 让 hint 独占全部剩余宽度
+          // 平分剩余空间，提示恒被压到半宽再省略截断（溢出真凶）。
+          // spaceBetween 让 hint 独占全部剩余宽度
           child: Row(
             mainAxisAlignment: MainAxisAlignment.spaceBetween,
             children: [
@@ -603,7 +603,7 @@ class _CandidatesBody extends StatelessWidget {
               Flexible(
                 child: Text(
                   // 提示内容刻意精简：完整版（数字/方向键选择…）在可变
-                  // 字体（MiSans VF 实测 ~15px 测量偏差）+ 短候选的窄卡
+                  // 字体（MiSans VF 有 ~15px 测量偏差）+ 短候选的窄卡
                   // 下会触发行溢出（RenderFlex overflowed——FittedBox 的
                   // 最小固有宽=文本原宽，scaleDown 救不了 flex 分配）。
                   // 短版在最小卡宽内留足双倍余量，机制上不可能再挤

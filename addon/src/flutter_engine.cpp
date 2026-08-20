@@ -1,9 +1,9 @@
-// Flutter 引擎进程内嵌入实现（结构对应 v1 实现报告 §6）。
+// Flutter 引擎进程内嵌入实现。
 //
-// 关键坑位（报告 §13 逐条对应）：
-//  6. FlutterEngineRun 配自定义 runner 死锁 → Initialize + RunInitialized
-//  2. 帧交接单锁快照（尺寸+像素一把锁），否则 resize 动画撕裂
-//  5. JSONMethodCodec 成功回执是 "[null]"
+// 关键坑位：
+//  - FlutterEngineRun 配自定义 runner 死锁 → Initialize + RunInitialized
+//  - 帧交接单锁快照（尺寸+像素一把锁），否则 resize 动画撕裂
+//  - JSONMethodCodec 成功回执是 "[null]"
 //  本文件额外约束：所有 FlutterEngine* 调用只在 fcitx5 主线程；present
 //  （raster 线程）/ vsync / post_task 回调内绝不调引擎 API，只入队唤醒。
 #define _GNU_SOURCE 1

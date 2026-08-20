@@ -1,5 +1,5 @@
 name: voice_ui
-description: "A new Flutter project."
+description: "fcitx5 语音输入浮窗 UI（进程内嵌入 addon，软渲染）"
 # The following line prevents the package from being accidentally published to
 # pub.dev using `flutter pub publish`. This is preferred for private packages.
 publish_to: 'none' # Remove this line if you wish to publish to pub.dev

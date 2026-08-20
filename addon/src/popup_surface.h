@@ -11,7 +11,6 @@
 #include <mutex>
 #include <set>
 #include <string>
-#include <string>
 #include <vector>
 
 struct wl_display;
@@ -60,8 +59,8 @@ namespace fcitx {
  * 光标矩形附近（text_input_rectangle 事件）。
  *
  * 生命周期照抄 classicui（waylandinputwindow.cpp）：hide 即销毁 popup+surface
- * （pool/buffers 复用）；show(ic) 时若有 IC 切换则重建；缓冲不透明由
- * F3 色块 / F4 Flutter 帧写入。
+ * （pool/buffers 复用）；show(ic) 时若有 IC 切换则重建；缓冲内容由
+ * Flutter 帧写入（桥不可用时回退色块测试帧）。
  *
  * 线程：wayland 事件在 fcitx 主循环（wayland 模块把 fd 挂进 instance）；
  * show/hide 由状态机主线程调用，wl_proxy_marshal/flush 线程安全。
@@ -80,9 +79,8 @@ public:
     // 时的回退）立即绘制测试帧
     void show(InputContext *ic);
     void hide();
-    // F4→重构：Flutter 引擎进程内嵌入后的帧入口。写入一帧 BGRA
-    //（wl_shm ARGB8888 小端字节序，引擎软渲输出可直接 memcpy），
-    // 尺寸变化时自动重建 shm 池
+    // Flutter 帧入口。写入一帧 BGRA（wl_shm ARGB8888 小端字节序，
+    // 引擎软渲输出可直接 memcpy），尺寸变化时自动重建 shm 池
     void pushFrameBGRA(const uint8_t *bgra, int w, int h);
     void resize(int w, int h); // 重建 shm 池（帧尺寸变化；内部加锁）
     void resizeLocked(int w, int h); // 已持锁版本（wayland 回调用）
@@ -92,47 +90,41 @@ public:
     // 放到窗口左上角；此类应用改用 layer-shell 自定位）——
     void setPositionPolicy(const std::string &mode,
                            const std::string &fallbackAppsCsv);
-    // 本 IC 我们上屏过文本。chromium 系只在**文本变化时**报光标矩形
-    //（实验 007/r26）：上屏即意味着 smithay handle 里有新鲜矩形可供
-    // show 重建的 popup 继承 → auto 模式下轮改回跟随
+    // 本 IC 我们上屏过文本。chromium 系只在**文本变化时**报光标矩形：
+    // 上屏即意味着合成器 handle 里有新鲜矩形可供 show 重建的 popup
+    // 继承 → auto 模式下轮改回跟随
     void notifyCommit();
     // 录音结束仍无矩形：判定挂起结算到 layer（结果/候选卡片必须显示）
     void resolvePendingToLayer();
-    // 预输入探针：录音开始时设一个零宽空格 client preedit（视觉不可
-    // 见），应用因组合文本重排而重报光标矩形 → 正被追踪的我们被合成器
-    // 实时挪到当前光标（classicui 拼音候选窗同款机制，r26 定案；治换行
-    // 首句/重聚焦首句/Electron 不实时）。矩形一到即撤，commitString 按
-    // 协议替换 preedit（上屏自清洁）。只在 caret 模式用（layer 自定位
-    // 无意义）。调用方持锁或主循环单线程
+    // 预输入探针：把可见组合文本「语音输入中」逐字打进 client preedit
+    //（classicui 拼音候选窗实时跟随的同款机制）——组合变化逼应用重报
+    // 光标矩形，卡片被合成器实时挪到当前光标。preedit 永不入文，上屏
+    // 时 commitString 按协议替换（自清洁）。只在 caret 模式用（layer
+    // 自定位无意义）。调用方持锁或主循环单线程
     void beginPreeditProbe(InputContext *ic);
     void endPreeditProbe();
-    // 探针逐字打出（用户方案）：一次性整串 set 不稳定（组合只变一次，
-    // 报文可有可无）；逐字 = 每字一次组合变化 = 每字一次报文机会——
-    // 流式 partial 逐字必到已双向验证，同机制
+    // 探针逐字打出：一次性整串 set 只有一次组合变化、报文可有可无；
+    // 逐字 = 每字一次组合变化 = 每字一次报文机会
     void typeProbeNext(InputContext *ic);
     void flushPendingPreeditLocked(); // 逐字打完后放行排队的 partial
     // 录音中把流式 partial 写进组合文本（探针挂着时）——组合增长逼
     // 应用持续重报矩形，卡片实时跟随文字
     void updatePreeditText(const std::string &text);
-    // 跨应用首聚修复：无知识时首个组合不出报文（宿主机实测），第二个
-    // 组合 16ms 即出——show 时留在 popup 模式做第二次探测，500ms 内
-    // 矩形到 → 跟随；没到 → 定时器切 layer 底部并通知引擎重绘
+    // surface 切换（结算回退 layer）或判定挂起解除（矩形到达放开首帧）
+    // 时回调：引擎需要向新 surface 重推一帧 UI
     void setModeSwitchHandler(std::function<void()> h) {
         modeSwitchHandler_ = std::move(h);
     }
-    // 触发键按下时对未知能力的 IC 挂 preedit 探针（仅当尚无 popup-mode
-    // surface 时现建）。空格 preedit 零文本副作用；chromium 即刻重报
-    // 矩形 → 450ms 阈值窗口内攒到知识 → 首下不回退
+    // 触发键按下时（阈值判定窗口内）对未知能力的 IC 提前挂探针：
+    // 矩形在窗口内即到，show 决策已有知识 → 首下跟随而非回退
     void primePreedit(InputContext *ic);
 
-
-
-    // W3 fractional scale：逻辑/物理尺寸分离。Dart（或调用方）上报**逻辑**
+    // fractional scale：逻辑/物理尺寸分离。Dart（或调用方）上报**逻辑**
     // 尺寸；池按 物理=ceil(逻辑×scale/120) 建，viewport 缩回逻辑显示。
     // scale 经 preferred_scale 事件异步到达后自动重算并回调（metrics 需更新）
     void setLogicalSize(int w, int h);
-    // 生效 scale：fractional 事件（精确，1/120）优先；未到则用 wl_output
-    // 整数 scale（niri 不给 IM popup 发 fractional preferred_scale，实测）
+    // 生效 scale：fractional 事件（精确，1/120）优先；未到则用上次
+    // fractional 记忆，最后退 wl_output 整数 scale
     double scale() const {
         if (gotFscale_) {
             return scaleNum_ / 120.0;
@@ -148,8 +140,8 @@ public:
         scaleHandler_ = std::move(h);
     }
 
-    // P3→重构：指针事件原始转发（不再 C++ 侧命中测试——Flutter 引擎直接
-    // 收 FlutterPointerEvent，hover/点击由 Dart 命中）。niri 的 IM popup 不
+    // 指针事件原始转发（不做 C++ 侧命中测试——Flutter 引擎直接收
+    // FlutterPointerEvent，hover/点击由 Dart 命中）。niri 的 IM popup 不
     // 在窗口/层 surface 树里，seat 级 wl_pointer 才能收到表面局部坐标
     enum class PointerEvent { Enter, Leave, Motion, Press, Release };
     void setPointerSink(
@@ -213,8 +205,8 @@ private:
     uint32_t scaleNum_ = 120; // 1/120 单位（协议约定 120=1.0）
     bool gotFscale_ = false;  // fractional 事件是否到达过
     // 最后一次 fractional 值（跨 surface 记忆）：layer surface 可能收不到
-    // fractional 事件，此时整数兜底 wl_output scale 是向上取整的 2
-    //（宿主机双屏 1.25/1.5 实测）→ 放大；用上次 fractional 兜底永远更准
+    // fractional 事件，此时整数兜底 wl_output scale 是向上取整值（混
+    // scale 双屏上会放大 33-60%）→ 用上次 fractional 兜底永远更准
     uint32_t lastFscaleNum_ = 0;
     int outputScale_ = 1;     // wl_output 整数 scale 兜底
     wl_output *output_ = nullptr;
@@ -242,14 +234,14 @@ private:
     // 本 IC 是否上屏过文本（我们自己 commitString）——chromium 的矩形
     // 只在文本变化时上报，上屏 = handle 里必有新鲜矩形可继承
     bool committedInThisIC_ = false;
-    bool anchorBottom_ = true; // layer 模式锚点：false=顶部居中（仅旧值
-                               // "top"），true=底部居中（默认，用户偏好）
+    bool anchorBottom_ = true; // layer 模式锚点：false=顶部居中（仅显式
+                               // "top"），true=底部居中（默认）
     int popupAttachCount_ = 0; // popup 模式 attach 计数（>1 即重建）
     bool preeditProbeActive_ = false; // 预输入探针是否在挂
     int probeTypingIdx_ = 0; // 探针逐字进度（5=打完）
     std::unique_ptr<EventSourceTime> probeTypeTimer_;
-    // 逐字未完时 partial 先排队（用户需求：让「语音输入中」打完再出
-    // 识别字，避免流式出字过早打断探针）；打完即放行，后到覆盖先到
+    // 逐字未完时 partial 先排队：让探针五个字打完再出识别字（流式出字
+    // 不过早打断探针）；打完即放行，后到覆盖先到
     std::string pendingPreedit_;
     bool hasPendingPreedit_ = false;
     // 应用级跟随知识（进程生命周期）：矩形事件或上屏记账成功过的程序
@@ -264,7 +256,6 @@ private:
     void armProbeFallbackTimer();
     void resolvePendingToLayerLocked(); // 持锁版（保险丝/结算共用）
     std::unique_ptr<EventSourceTime> probeTimer_;
-
 
     // 指针路由状态
     bool hasCursorRect_ = false; // text_input_rectangle 是否已送达（决策门）
@@ -281,7 +272,7 @@ private:
     int width_ = 0, height_ = 0;
 
     bool visible_ = false;
-    bool patternMode_ = false; // 桥不可用时回退 F3 色块
+    bool patternMode_ = false; // 桥不可用时回退色块测试帧
     bool isImConnection_ = false; // registry 见到 IM manager 即 waylandim 连接
     int cursorX_ = 0, cursorY_ = 0, cursorW_ = 0, cursorH_ = 0; // 光标矩形
 

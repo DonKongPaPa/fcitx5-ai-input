@@ -17,13 +17,13 @@
 namespace fcitx {
 
 /**
- * Flutter 引擎进程内嵌入（v1 实现报告 §6 路线）。
+ * Flutter 引擎进程内嵌入。
  *
  * raw embedder API + kSoftware 软渲染：引擎把整窗 RGBA 帧经
  * surface_present_callback 交出（raster 线程）→ 单锁快照 → async 唤醒主
  * 线程 → 写入 VoicePopup 的 wl_shm。不需要 GTK 窗口 / weston / 独立进程。
  *
- * 线程模型（报告 §6.2/§13）：
+ * 线程模型：
  *  - platform 任务由自定义 task runner 投回 fcitx5 主循环执行（Dart 的
  *    MethodChannel 消息才能在主线程到达）；配自定义 runner 时必须
  *    Initialize + RunInitialized（FlutterEngineRun 死锁）
@@ -117,8 +117,8 @@ private:
     std::mutex vsyncMutex_;
     std::vector<intptr_t> batons_;
 
-    // 帧交接：raster 线程写 scratch，主线程单锁快照（报告 §6.3：两把锁分
-    // 别取尺寸/像素会撕裂）
+    // 帧交接：raster 线程写 scratch，主线程单锁快照（尺寸/像素分两把锁
+    // 取会撕裂）
     std::mutex frameMutex_;
     std::vector<uint8_t> frameScratch_;
     int frameW_ = 0, frameH_ = 0;

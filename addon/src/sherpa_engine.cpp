@@ -1,4 +1,4 @@
-// sherpa-onnx CPU 流式引擎实现（实验 004 结论产品化，详见 sherpa_engine.h）
+// sherpa-onnx CPU 流式引擎实现（详见 sherpa_engine.h）
 #include "sherpa_engine.h"
 
 #include "audio_capture.h"
@@ -126,17 +126,17 @@ void SherpaOnnxEngine::start(EventLoop *loop, const VoiceInputConfig *config,
 
     const std::string dir = resolveSherpaModelDir(config);
     const std::string tokens = dir + "/tokens.txt";
-    // 双架构探测（与下方加载严格同源，勿各自为政——宿主机曾因检查只认
-    // paraformer 固定文件名而误报 zipformer「模型缺失」）：
+    // 双架构探测（与下方加载严格同源，勿各自为政——检查与加载各写
+    // 一套会误报模型缺失）：
     //   zipformer：joiner*/encoder*/decoder*.onnx（epoch 命名，通配匹配）
     //   paraformer：encoder.int8.onnx + decoder.int8.onnx（固定命名）
     std::string joiner = findModelFile(dir, "joiner", false); // fp32 优先
     std::string zfEnc = findModelFile(dir, "encoder", false); // fp32 优先
     std::string zfDec = findModelFile(dir, "decoder", false); // fp32 优先
     // zipformer 的 decoder/joiner 必须 fp32：int8 量化的 joiner 在 greedy/
-    // beam 下都会 token 复读（宿主机实测「未未」「行行行行行」，吞掉真实
-    // 尾词——与结尾漏字同源）；fp32 decoder/joiner 仅比 int8 大 ~10MB，
-    // encoder 量化与否不影响。旧目录只有 int8 时 findModelFile 兜底可用
+    // beam 下都会 token 复读（吞掉真实尾词）；fp32 decoder/joiner 仅比
+    // int8 大 ~10MB，encoder 量化与否不影响。旧目录只有 int8 时
+    // findModelFile 兜底可用
     const std::string encoder = dir + "/encoder.int8.onnx";
     const std::string decoder = dir + "/decoder.int8.onnx";
     const bool isZipformer =
@@ -153,10 +153,9 @@ void SherpaOnnxEngine::start(EventLoop *loop, const VoiceInputConfig *config,
 
     // —— 采集先于一切模型加载启动 ——
     // 模型加载（流式首载 ~1.3s / SenseVoice ~0.9s）会阻塞主循环，若排在
-    // 采集前，parec 晚起 + 管道溢出 = 整段开头丢失（r21 容器实测：首块
-    // begin 后 2920ms 才到）。采集先起，加载期间音频缓冲在管道（已扩
-    // 1MB≈30s）；onChunk 回调在主循环上，start() 返回前不可能触发，
-    // stream_ 届时已就绪
+    // 采集前，parec 晚起 + 管道溢出 = 整段开头丢失。采集先起，加载期间
+    // 音频缓冲在管道（已扩 1MB≈30s）；onChunk 回调在主循环上，start()
+    // 返回前不可能触发，stream_ 届时已就绪
     firstChunk_ = true;
     startedAt_ = std::chrono::steady_clock::now();
     sessionAudio_.clear();
@@ -174,8 +173,8 @@ void SherpaOnnxEngine::start(EventLoop *loop, const VoiceInputConfig *config,
                              << "ms；含模型加载阻塞，期间音频缓冲于管道"
                                "不丢失——数值大但识别完整即正常）";
             }
-            // s16le → float，攒 ~100ms（1600 样本）喂一窗（比实验的 0.6s
-            // 窗更细——partial 出字更快，解码开销同量级）
+            // s16le → float，攒 ~100ms（1600 样本）喂一窗（partial 出字
+            // 快，解码开销同量级）
             const auto *s16 = reinterpret_cast<const int16_t *>(d);
             const size_t samples = n / 2;
             for (size_t i = 0; i < samples; ++i) {
@@ -214,7 +213,7 @@ void SherpaOnnxEngine::start(EventLoop *loop, const VoiceInputConfig *config,
     }
 
     // —— 流式 recognizer（音频已在管道里缓冲）——
-    // —— 配置（对齐实验 004 的 python 参数：16k/80 维/4 线程/cpu）——
+    // —— 配置：16k / 80 维 / cpu ——
     SherpaOnnxOnlineRecognizerConfig c = {};
     c.feat_config.sample_rate = 16000;
     c.feat_config.feature_dim = 80;
@@ -231,19 +230,17 @@ void SherpaOnnxEngine::start(EventLoop *loop, const VoiceInputConfig *config,
     c.model_config.num_threads = config->sherpaNumThreads.value();
     c.model_config.provider = "cpu";
     c.model_config.debug = 0;
-    // 解码 greedy：复读的根因是 int8 decoder/joiner（fp32 化已根除，实验
-    // 005 矩阵），beam4 曾想锦上添花但容器实测流式全程哑火（harness 正常，
-    // addon 内不查了——greedy+fp32 已无复读且最快）
+    // 解码 greedy：复读根因是 int8 decoder/joiner（fp32 化已根除）；
+    // beam 在 addon 内流式哑火（勿换），greedy+fp32 已无复读且最快
     c.decoding_method = "greedy_search";
     c.enable_endpoint = 0; // 按键控录音：不需要 VAD 断句
 
     const auto t0 = std::chrono::steady_clock::now();
     // recognizer 常驻缓存：模型加载 ~0.9s，若每会话新建会在按键瞬间
-    // 阻塞主循环（grab 下全部键盘输入冻结——宿主机实测"打不了字"）。
-    // 进程级单例，stream 才是会话级。缓存键含模型目录与线程数：
-    // configtool 换目录（zipformer↔paraformer 对比）需重建，否则旧架构
-    // recognizer 被静默复用；换键时销毁旧实例并同步更新 static 指针
-    // （会话 teardown 不销毁、指针悬垂的旧坑不复现）
+    // 阻塞主循环（grab 下全部键盘输入冻结）。进程级单例，stream 才是
+    // 会话级。缓存键含模型目录与线程数：configtool 换目录
+    //（zipformer↔paraformer 对比）需重建，否则旧架构 recognizer 被
+    // 静默复用；换键时销毁旧实例并同步更新 static 指针
     static SherpaOnnxOnlineRecognizer *cachedRec = nullptr;
     static std::string cachedDir;
     static int cachedThreads = 0;
@@ -316,7 +313,7 @@ void SherpaOnnxEngine::stop() {
     }
     teardownAll();
     // SenseVoice 整段重识别（配置了目录才启用）：混说/标点/尾音完整度
-    // 显著优于流式 final（实验 005），失败/空结果回落流式文本
+    // 显著优于流式 final，失败/空结果回落流式文本
     if (offlineRec_ && sessionAudio_.size() >= 1600) {
         const auto t1 = std::chrono::steady_clock::now();
         auto *ost = SherpaOnnxCreateOfflineStream(
@@ -380,7 +377,7 @@ void SherpaOnnxEngine::teardownAll() {
     }
     // 缓存的 recognizer 永不随会话销毁：跨会话复用是它的使命；进程退出
     // 由 OS 统一回收（会话 teardown 销毁会让 static 指针悬垂——第二段
-    // 语音 CreateOnlineStream 直接 SEGV，宿主机实测 235M core）
+    // 语音 CreateOnlineStream 直接 SEGV）
     recognizer_ = nullptr;
     pending_.clear();
     lastPartial_.clear();

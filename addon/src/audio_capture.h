@@ -56,8 +56,7 @@ public:
         }
         fd_ = fds[0];
         // 扩管道到 1MB（≈30s 音频）：模型加载/主循环卡顿期间音频缓冲在
-        // 管道里不丢（默认 64KB 只够 ~2s——r21 容器实测 916ms 的离线模型
-        // 加载排在采集启动前，直接丢了整段开头）
+        // 管道里不丢（默认 64KB 只够 ~2s，模型加载 ~1s 即可淹没）
         fcntl(fd_, F_SETPIPE_SZ, 1 << 20);
         int flags = fcntl(fd_, F_GETFL);
         fcntl(fd_, F_SETFL, flags | O_NONBLOCK);

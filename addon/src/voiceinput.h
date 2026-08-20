@@ -24,7 +24,7 @@ class VoiceInputEngine;
 
 /**
  * 测试钩子（管线用，免容器键盘合成）：
- *  - Trigger(text)：直接提交文本（M1 起保留，兼容既有用例）
+ *  - Trigger(text)：直接提交文本（兼容既有用例）
  *  - SimulateKey(key, pressed)：模拟触发键按下/松开（走真实状态机路径）
  *  - InjectKey(key, pressed)：postEvent 真实事件管线（验证 PreInputMethod
  *    拦截与透传语义，SimulateKey 绕过了 watcher）
@@ -170,8 +170,7 @@ private:
 
     State state_ = State::Idle;
     // 会话 IC 用 watch() 跟踪：裸指针会在 hold 的 300ms 窗口内因焦点
-    // 切换/IC 销毁变成悬垂指针（宿主机实测 beginRecording→getInputMethodV2
-    // →frontendName SEGV）
+    // 切换/IC 销毁变成悬垂指针
     TrackableObjectReference<InputContext> sessionIcRef_;
     bool toggleReleased_ = false; // Toggle 模式：起始按的键已松开
     std::unique_ptr<EventSourceTime> thresholdTimer_;

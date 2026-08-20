@@ -10,7 +10,7 @@ std::string resolveSherpaModelDir(const VoiceInputConfig *config);
 std::string findModelFile(const std::string &dir, const char *prefix, bool preferInt8);
 
 /**
- * sherpa-onnx CPU 流式引擎（实验 004 结论产品化）。
+ * sherpa-onnx CPU 流式引擎。
  *
  * 进程内直链 libsherpa-onnx-c-api.so（v1.13.6），双语流式 paraformer
  * int8 模型：RSS 412MB / 首字 0.069s / RTF 0.04 / 0 显存常驻。
@@ -50,7 +50,7 @@ private:
     bool firstChunk_ = true; // 首块延迟诊断（漏字定位）
     std::chrono::steady_clock::time_point startedAt_;
 
-    // —— SenseVoice 松手重识别（实验 005）——
+    // —— SenseVoice 松手重识别 ——
     // 流式 partial 的最终质量受流式模型上限约束（混说/标点/尾音），
     // stop() 时对整段会话缓冲离线重识别出 final。
     void *offlineRec_ = nullptr; // 进程级缓存（同 recognizer_ 纪律）

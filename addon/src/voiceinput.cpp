@@ -37,7 +37,7 @@ static uint64_t nowUs() {
 }
 
 // ---------------------------------------------------------------------------
-// 部署健康检查 + 引擎切换联动（W1/W5）
+// 部署健康检查 + 引擎切换联动
 // ---------------------------------------------------------------------------
 // 扫 /proc 找 funasr 服务进程（匹配 funasr-server/server.py + 端口）
 static pid_t findFunasrPid(int port, long *rssKb) {
@@ -315,8 +315,8 @@ void VoiceInputEngine::runServerScript(const std::string &cmd,
 
 // Flutter 资产发现：env 覆盖 → 系统包安装路径 → 用户级（~/.local/share）。
 // 系统包必须优先：~/.local 排前面时，早期手动部署的残留副本会永久遮蔽
-// 包管理器的新安装（宿主机实测：连装三轮"没效果"，进程 maps 显示加载
-// 的是 8 月旧副本）。~/.local 保留给 tarball/手动安装（无系统包时兜底）
+// 包管理器的新安装（加载了旧副本却无从察觉）。~/.local 保留给
+// tarball/手动安装（无系统包时兜底）
 static bool findFlutterAssets(std::string *assetsDir, std::string *icuPath) {
     if (const char *env = getenv("VOICEINPUT_FLUTTER_DIR"); env && *env) {
         *assetsDir = std::string(env) + "/flutter_assets";
@@ -352,7 +352,8 @@ VoiceInputEngine::VoiceInputEngine(Instance *instance)
 
     popup_ = std::make_unique<VoicePopup>(instance_);
     popup_->setModeSwitchHandler([this]() {
-        // 二次探测超时切 layer：新 surface 需要重推一帧
+        // surface 切换（结算回退）或挂起解除（矩形到达）：新 surface
+        // 需要重推一帧
         pushUiState();
     });
 
@@ -377,7 +378,7 @@ VoiceInputEngine::VoiceInputEngine(Instance *instance)
                                 static_cast<double>(x), static_cast<double>(y));
         }
     });
-    // W3 尺寸/scale 统筹：Dart 逻辑尺寸 → popup 物理池+viewport +
+    // 尺寸/scale 统筹：Dart 逻辑尺寸 → popup 物理池+viewport +
     // 引擎 metrics（pixelRatio=真实 scale → 渲染物理帧，无拉伸模糊）
     flutter_->setResizeHandler([this](int w, int h) {
         if (popup_) {
@@ -385,7 +386,7 @@ VoiceInputEngine::VoiceInputEngine(Instance *instance)
         }
         // metrics 更新 defer 到事件循环下一轮：resize 消息来自引擎平台
         // 回调、scale 来自 wayland dispatch——在这些上下文里同步调
-        // SendWindowMetricsEvent 会与引擎内部锁重入死锁（宿主机实测卡死）
+        // SendWindowMetricsEvent 会与引擎内部锁重入死锁
         deferredMetrics(w, h);
     });
     // 合成器 scale 变化（跨屏移动/用户改缩放）→ 用当前逻辑尺寸重设 metrics
@@ -487,7 +488,7 @@ VoiceInputEngine::VoiceInputEngine(Instance *instance)
 VoiceInputEngine::~VoiceInputEngine() {
     // 故意泄漏 VoicePopup：addon unload 后 wayland display 仍会 dispatch
     // 若干轮（fractional scale/output 事件），销毁对象会让回调打进已释放
-    // 内存（SIGTERM 退出 SEGV，宿主机实测）。进程退出统一回收
+    // 内存（SIGTERM 退出即 SEGV）。进程退出统一回收
     (void)popup_.release();
 }
 
@@ -587,7 +588,7 @@ void VoiceInputEngine::pushUiState() {
     if (!flutter_ || !flutter_->running()) {
         return;
     }
-    // 内联预编辑同步（用户需求）：录音=partial，结果=final，候选=当前
+    // 内联预编辑同步：录音=partial，结果=final，候选=当前
     // 选中行（方向键/hover 变化经 pushUiState 一并同步）——组合文本与
     // 卡片选中项恒一致，上屏时 commitString 原地替换，视觉无缝
     if (popup_) {
@@ -653,7 +654,7 @@ void VoiceInputEngine::pushUiState() {
     }
 }
 
-// —— UI 字体解析（W4）：UIFont 配置 > classicui 的 Font > 内置 NotoSansSC ——
+// —— UI 字体解析：UIFont 配置 > classicui 的 Font > 内置 NotoSansSC ——
 // 返回 {"path","family","size"}；path 空 = 用内置兜底
 std::string VoiceInputEngine::resolveUiFont() {
     std::string pango = config_.uiFont.value();
@@ -727,10 +728,10 @@ std::string VoiceInputEngine::resolveUiFont() {
     return j.str();
 }
 
-// W4：字体跟随下发（classicui Font → fontconfig 文件 → Dart FontLoader）。
+// 字体跟随下发（classicui Font → fontconfig 文件 → Dart FontLoader）。
 // 解析必须放后台线程：fontconfig 全局锁与 classicui/pango 的字体线程
-// 互等——主循环同步调 FcInitLoadConfigAndFonts 会死锁（宿主机实测主线程
-// 与 [pango] fontcon 双双 futex 等待，键盘输入全冻结）
+// 互等——主循环同步调 FcInitLoadConfigAndFonts 会死锁（主线程与 pango
+// 字体线程双挂，键盘输入全冻结）
 void VoiceInputEngine::sendFontToUi() {
     if (!flutter_ || !flutter_->running() || fontResolving_) {
         return;
@@ -742,7 +743,7 @@ void VoiceInputEngine::sendFontToUi() {
         return;
     }
     // 读端非阻塞：IO 回调里的排空循环靠 EAGAIN 返回，否则第二次 read
-    // 会把主循环卡死在管道上（容器实测 State 全超时）
+    // 会把主循环卡死在管道上
     int fl = fcntl(fontPipe_[0], F_GETFL);
     fcntl(fontPipe_[0], F_SETFL, fl | O_NONBLOCK);
     fontIo_ = instance_->eventLoop().addIOEvent(
@@ -833,9 +834,9 @@ bool VoiceInputEngine::isTriggerKey(const Key &key) const {
         return true;
     }
     // 纯修饰键特例：真实键盘事件自带自身修饰 state 且带 keycode
-    //（Key::check 的 keycode 分支要求全等，裸 Key("Control_R") 永远不匹配
-    //——宿主机实测按住 10s 无反应的根因；容器测试用 SimulateKey 构造的
-    //干净键从未暴露）。fcitx 惯例配置写 Control+Control_R，但裸写也要认
+    //（Key::check 的 keycode 分支要求全等，裸 Key("Control_R") 永远不
+    //匹配；SimulateKey 合成的干净键不暴露此差异，须真实键盘验证）。
+    // fcitx 惯例配置写 Control+Control_R，但裸写也要认
     if (key.isModifier()) {
         for (const auto &k : list) {
             if (k.sym() == key.sym()) {
@@ -897,11 +898,10 @@ bool VoiceInputEngine::handleKey(const Key &key, bool pressed,
             }
             sessionIcRef_ = ic->watch();
             state_ = State::Pressing;
-            // 阈值窗口（默认 450ms）内先挂空格 preedit 探针：chromium 系
-            // 会立刻按当前光标重报矩形（r27 实测 0ms），show 决策时已有
-            // 知识 → 首下跟随。不碰文本（空格上屏+回删方案实测会扰动
-            // 状态机编舞，r25 两跑同败）；GTK 探针惰性但重聚焦有 enable
-            // 报文兜底
+            // 阈值窗口（默认 450ms）内先挂 preedit 探针：chromium 系会
+            // 立刻按当前光标重报矩形，show 决策时已有知识 → 首下跟随。
+            // 不动文本（上屏+回删方案会扰动状态机，勿复活）；GTK 探针
+            // 惰性但重聚焦有 enable 报文兜底
             if (popup_) {
                 popup_->primePreedit(ic);
             }
@@ -1093,8 +1093,8 @@ void VoiceInputEngine::onAsrFinish(const std::string &text) {
         return;
     }
     if (popup_) {
-        // 结果/候选卡片必须显示：判定挂起不能再等矩形（矩形延迟实测
-        // 不稳定、固定窗口必误判——结算到 layer 底部）
+        // 结果/候选卡片必须显示：判定挂起不能再等矩形（矩形到达延迟
+        // 无上界）——结算到 layer 底部
         popup_->resolvePendingToLayer();
     }
     finalText_ = text;
@@ -1289,8 +1289,8 @@ std::string TestService::HealthCheck(std::string mode) {
     return engine_->healthCheckJson(mode == "deep");
 }
 
-// 编译期版本回读：容器/宿主断言加载的二进制与包一致（防"陈旧 dist/
-// ~/.local 不生效"类问题——宿主机实测踩过）
+// 编译期版本回读：容器/宿主断言加载的二进制与包一致（防陈旧 dist/
+// ~/.local 残留遮蔽新安装）
 std::string TestService::Version() { return VOICEINPUT_VERSION_STRING; }
 
 std::vector<std::string> TestService::Candidates() {
