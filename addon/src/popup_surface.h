@@ -237,6 +237,7 @@ private:
     std::set<std::string> followingApps_;
     bool lastDecisionWasKnowledgeFallback_ = false; // wantTopMode 的回退分支
     bool probeDeferralUsed_ = false; // 本会话已用过二次探测暂缓（防递归）
+    bool decisionPending_ = false; // 判定挂起：帧不上屏直到跟随/底部定局
     std::function<void()> modeSwitchHandler_;
     void armProbeFallbackTimer();
     std::unique_ptr<EventSourceTime> probeTimer_;

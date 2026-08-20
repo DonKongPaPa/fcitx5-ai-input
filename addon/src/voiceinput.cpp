@@ -587,6 +587,36 @@ void VoiceInputEngine::pushUiState() {
     if (!flutter_ || !flutter_->running()) {
         return;
     }
+    // 内联预编辑同步（用户需求）：录音=partial，结果=final，候选=当前
+    // 选中行（方向键/hover 变化经 pushUiState 一并同步）——组合文本与
+    // 卡片选中项恒一致，上屏时 commitString 原地替换，视觉无缝
+    if (popup_) {
+        std::string inline_;
+        switch (state_) {
+        case State::Recording:
+            inline_ = partial_;
+            break;
+        case State::Result:
+            inline_ = finalText_;
+            break;
+        case State::Candidates:
+            if (!candidates_.empty()) {
+                const int row = uiHoverRow_ >= 0
+                                    ? std::min(uiHoverRow_,
+                                               static_cast<int>(
+                                                   candidates_.size()) - 1)
+                                    : keyboardRow_;
+                inline_ = candidates_[row];
+            }
+            break;
+        case State::Idle:
+        case State::Pressing:
+            break;
+        }
+        if (!inline_.empty()) { // 空 = 不动（清除只走 endPreeditProbe）
+            popup_->updatePreeditText(inline_);
+        }
+    }
     switch (state_) {
     case State::Recording:
         flutter_->sendUpdate(
@@ -842,15 +872,16 @@ bool VoiceInputEngine::handleKey(const Key &key, bool pressed,
         }
         const size_t n = candidates_.size();
         if (n > 0) {
-            if (key.check(FcitxKey_Down) || key.check(FcitxKey_Right)) {
-                keyboardRow_ = static_cast<int>((keyboardRow_ + 1) % n);
-                pushUiState();
-                return true;
-            }
-            if (key.check(FcitxKey_Up) || key.check(FcitxKey_Left)) {
-                keyboardRow_ =
-                    static_cast<int>((keyboardRow_ + n - 1) % n);
-                pushUiState();
+            if (key.check(FcitxKey_Down) || key.check(FcitxKey_Right) ||
+                key.check(FcitxKey_Up) || key.check(FcitxKey_Left)) {
+                const int delta =
+                    (key.check(FcitxKey_Down) || key.check(FcitxKey_Right))
+                        ? 1
+                        : -1;
+                keyboardRow_ = static_cast<int>(
+                    (keyboardRow_ + n + delta) % n);
+                uiNotify("arrow-select", std::to_string(keyboardRow_));
+                pushUiState(); // 内联 preedit 同步到新选中行
                 return true;
             }
         }
@@ -1045,7 +1076,8 @@ void VoiceInputEngine::finishRecording() {
 }
 
 void VoiceInputEngine::onAsrPartial(const std::string &text) {
-    if (popup_ && state_ == State::Recording) {
+    if (popup_ && state_ == State::Recording && !text.empty()) {
+        // 空 partial 不清组合（停止瞬间的空回调控件曾让内联文本消失）
         popup_->updatePreeditText(text); // 组合文本增长 → 矩形实时走
     }
     if (state_ != State::Recording) {

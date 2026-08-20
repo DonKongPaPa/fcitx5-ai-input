@@ -115,6 +115,12 @@ void VoicePopup::popupRectangle(void *data, zwp_input_popup_surface_v2 *,
         }
         s->sawRealRect_ = true;
         s->probeTimer_.reset(); // 矩形已到：跟随成立，无需切 layer
+        if (s->decisionPending_) {
+            s->decisionPending_ = false; // 解除挂起，帧放开
+            if (s->modeSwitchHandler_) {
+                s->modeSwitchHandler_(); // 引擎补推一帧
+            }
+        }
         // 应用级知识：重聚焦若换新 IC（Electron 会话级 text-input），
         // 凭程序名直接跟随，首下不再回退
         if (!s->lastProgram_.empty()) {
@@ -511,6 +517,7 @@ void VoicePopup::armProbeFallbackTimer() {
         CLOCK_MONOTONIC, deadlineUs, 0, [this](EventSourceTime *, uint64_t) {
             std::lock_guard<std::mutex> lock(mutex_);
             probeTimer_.reset();
+            decisionPending_ = false;
             if (visible_ && !topMode_ && !sawRealRect_ &&
                 !committedInThisIC_ && surface_) {
                 FCITX_INFO() << "VoicePopup: 二次探测 500ms 无矩形 → 切 "
@@ -813,8 +820,14 @@ void VoicePopup::show(InputContext *ic) {
     }
     if (!topMode_) {
         beginPreeditProbe(ic); // 换行/重聚焦/Electron 首句实时跟随
-        if (lastDecisionWasKnowledgeFallback_) {
+        if (lastDecisionWasKnowledgeFallback_ && probeDeferralUsed_) {
+            // 判定挂起：矩形到（跟随）或 500ms（底部）前不 map 任何帧。
+            // 不再"先 popup 后切 layer"——中途换 surface 在 scale 发现期
+            // （首聚恰是）会放大/消失/位移（宿主机实测，scale=2）
+            decisionPending_ = true;
             armProbeFallbackTimer();
+            FCITX_INFO() << "VoicePopup: 判定挂起——首帧延迟至矩形到达"
+                            "或 500ms 回退";
         }
     }
     if (patternMode_ && (!topMode_ || layerConfigured_)) {
@@ -842,8 +855,9 @@ void VoicePopup::show(InputContext *ic) {
 
 void VoicePopup::hide() {
     std::lock_guard<std::mutex> lock(mutex_);
-    probeTimer_.reset();       // 会话结束，切换定时器作废
+    probeTimer_.reset();        // 会话结束，切换定时器作废
     probeDeferralUsed_ = false; // 下一会话可再用二次探测
+    decisionPending_ = false;
     endPreeditProbe(); // 防御：无矩形到达的字段不留悬挂组合
     if (!surface_) {
         visible_ = false;
@@ -959,7 +973,8 @@ void VoicePopup::pushFrameBGRA(const uint8_t *bgra, int w, int h) {
     }
     std::lock_guard<std::mutex> lock(mutex_);
     // 隐藏后丢弃迟到帧（hide 已提交透明帧，idle 态的帧会把它覆盖回来）
-    if (!visible_ || !surface_ || !buffers_[0] ||
+    // 判定挂起期同样丢帧：跟随/底部未定，不 map（杜绝中途换 surface）
+    if (!visible_ || decisionPending_ || !surface_ || !buffers_[0] ||
         (topMode_ ? !layerSurface_ : !popup_)) {
         return;
     }

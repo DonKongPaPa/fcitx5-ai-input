@@ -612,6 +612,12 @@ if [ -n "${CAGE_SOCK:-}" ] && command -v virtpoint >/dev/null 2>&1 && \
     sleep 2.5  # Dummy 引擎吐字 + 进候选态（卡片可见，顶部居中；16pt 字号）
     # 大字号候选截图（用户实测溢出场景：字体变化 → 尺寸应随之变化）
     WAYLAND_DISPLAY="$CAGE_SOCK" grim "$OUT_DIR/r23-font16-candidates.png" 2>"$LOG_DIR/grim-r23.log" || true
+    # 方向键下选（用户报告失效）：候选态按 Down 两次 → arrow-select 日志
+    for r23k in Down Down; do
+        call InjectKey "$r23k" true >/dev/null 2>&1 || true
+        call InjectKey "$r23k" false >/dev/null 2>&1 || true
+        sleep 0.3
+    done
     # hover+点击候选行 1（16pt 字体布局更高：行 1 中心 ≈640,130）
     "$DIST_BIN/virtpoint" move 640 130 1280 720 2>/dev/null || true
     sleep 0.6
