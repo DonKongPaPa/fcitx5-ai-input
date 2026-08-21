@@ -173,12 +173,12 @@ void VoicePopup::preferredScale(void *data, wp_fractional_scale_v1 *,
     s->scaleNum_ = scale;
     FCITX_INFO() << "VoicePopup: fractional scale → " << (scale / 120.0);
     if (s->logicalW_ > 0 && s->viewport_) {
-        // 物理池按新 scale 重建，viewport 保持逻辑尺寸
+        // 物理池按新 scale 重建；viewport destination 不在此急切下发——
+        // 需与匹配尺寸的 buffer 同一 commit（见 syncViewport 注释）
         double sc = s->scale();
         int pw = static_cast<int>(s->logicalW_ * sc + 0.5);
         int ph = static_cast<int>(s->logicalH_ * sc + 0.5);
         s->resizeLocked(pw, ph);
-        wp_viewport_set_destination(s->viewport_, s->logicalW_, s->logicalH_);
     }
     if (s->scaleHandler_) {
         s->scaleHandler_(s->scaleNum_ / 120.0); // 出锁后调用更稳，这里同线程
@@ -200,8 +200,6 @@ void VoicePopup::outputScale(void *data, wl_output *, int32_t factor) {
         if (s->logicalW_ > 0 && s->viewport_) {
             int pw = s->logicalW_ * factor, ph = s->logicalH_ * factor;
             s->resizeLocked(pw, ph);
-            wp_viewport_set_destination(s->viewport_, s->logicalW_,
-                                        s->logicalH_);
         }
         if (s->scaleHandler_) {
             s->scaleHandler_(s->scale());
@@ -940,6 +938,7 @@ void VoicePopup::prepare(InputContext *ic) {
     memset(dst, 0, bufSize);
     wl_surface_attach(surface_, buffers_[cur_], 0, 0);
     damageSurface(surface_, compositorVersion_, width_, height_);
+    syncViewportLocked();
     wl_surface_commit(surface_);
     cur_ = 1 - cur_;
     wl_display_flush(display_);
@@ -975,6 +974,7 @@ void VoicePopup::show(InputContext *ic) {
         paintTestPattern(dst, width_, height_);
         wl_surface_attach(surface_, buffers_[cur_], 0, 0);
         damageSurface(surface_, compositorVersion_, width_, height_);
+        syncViewportLocked();
         wl_surface_commit(surface_);
         cur_ = 1 - cur_;
         wl_display_flush(display_);
@@ -1014,6 +1014,7 @@ void VoicePopup::hide() {
             }
             wl_surface_attach(surface_, buffers_[cur_], 0, 0);
             damageSurface(surface_, compositorVersion_, width_, height_);
+            syncViewportLocked();
             wl_surface_commit(surface_);
             cur_ = 1 - cur_;
         }
@@ -1090,9 +1091,9 @@ void VoicePopup::setLogicalSize(int w, int h) {
     std::lock_guard<std::mutex> lock(mutex_);
     logicalW_ = w;
     logicalH_ = h;
-    if (viewport_) {
-        wp_viewport_set_destination(viewport_, w, h);
-    }
+    // destination 不急切下发（防拉伸闪烁，见 syncViewport）；物理池先按
+    // 新逻辑重建，committed 的旧 buffer 在下一帧提交前按旧 destination
+    // 显示
     double sc = scale();
     int pw = static_cast<int>(w * sc + 0.5);
     int ph = static_cast<int>(h * sc + 0.5);
@@ -1101,6 +1102,16 @@ void VoicePopup::setLogicalSize(int w, int h) {
         if (width_ <= 0) {
             resizeLocked(pw, ph);
         }
+    }
+}
+
+// viewport destination 必须与「匹配尺寸的 buffer」同一 commit 下发：
+// 提前改 destination 而表面仍是旧 buffer 的 1-2 帧内，合成器会把旧
+// buffer 拉伸到新逻辑尺寸（resize/移动时的跳闪即此）。所有 commit 前
+// 调本函数（池尺寸在 setLogicalSize/scale 变化时已同步重建）
+void VoicePopup::syncViewportLocked() {
+    if (viewport_ && logicalW_ > 0 && logicalH_ > 0) {
+        wp_viewport_set_destination(viewport_, logicalW_, logicalH_);
     }
 }
 
@@ -1123,6 +1134,7 @@ void VoicePopup::pushFrameBGRA(const uint8_t *bgra, int w, int h) {
     memcpy(pixels_ + cur_ * bufSize, bgra, bufSize);
     wl_surface_attach(surface_, buffers_[cur_], 0, 0);
     damageSurface(surface_, compositorVersion_, width_, height_);
+    syncViewportLocked();
     wl_surface_commit(surface_);
     cur_ = 1 - cur_;
     visible_ = true;

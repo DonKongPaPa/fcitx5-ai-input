@@ -505,10 +505,17 @@ class _SessionBody extends StatelessWidget {
       crossAxisAlignment: CrossAxisAlignment.stretch,
       mainAxisSize: MainAxisSize.min,
       children: [
-        // —— 头部（交叉淡化）——
+        // —— 头部（交叉淡化 + 高度平滑）——
+        // AnimatedSwitcher 过渡期 Stack 取新旧较高者，淡出结束会瞬缩
+        // （mic 头 ~40px ↔ LLM 头 ~17px）把下方文本行顶跳一下；外层
+        // AnimatedSize 把这步收缩也纳入动画
         Padding(
           padding: const EdgeInsets.fromLTRB(12, 8, 12, 2),
-          child: AnimatedSwitcher(
+          child: AnimatedSize(
+            duration: animDurOf(animScale, 220),
+            curve: Curves.easeOutCubic,
+            alignment: Alignment.topCenter,
+            child: AnimatedSwitcher(
             duration: animDurOf(animScale, 180),
             child: switch (data.state) {
               UiState.recording => Row(
@@ -578,6 +585,7 @@ class _SessionBody extends StatelessWidget {
                 ),
               UiState.idle => const SizedBox.shrink(),
             },
+          ),
           ),
         ),
         // —— 文本区（AnimatedSize 平滑长高/推入润色行）——

@@ -189,6 +189,7 @@ private:
     void setupDisplay(wl_display *display);
     bool ensurePopup(InputContext *ic, bool atShow = false); // IC 变化时重建 surface+popup
     void destroyPopupSurface();
+    void syncViewportLocked(); // destination 与匹配 buffer 同 commit 下发
     void teardown();
     bool wantTopMode(InputContext *ic, bool atShow = false); // 定位模式决策（policy × 名单 × 矩形上报能力）
     std::string toLower(std::string s);
