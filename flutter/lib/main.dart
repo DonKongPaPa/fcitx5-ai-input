@@ -132,7 +132,9 @@ double sessionHeaderSlotH(ThemeData theme) {
   final labelH =
       textBlockHeight('正在听…', theme.textTheme.labelSmall!, double.infinity);
   final content = titleH + labelH > 36 ? titleH + labelH : 36.0;
-  return 8 + content + 2;
+  // ×1.15 + 4：可变字体（MiSans VF）行高渲染 > 实测的恒定偏差余量，
+  // 静态字体下只是稍多一点头部呼吸空间
+  return 8 + content * 1.15 + 4;
 }
 
 Size panelSizeFor(ThemeData theme, SessionData d, double fontScale) {
@@ -175,12 +177,14 @@ Size panelSizeFor(ThemeData theme, SessionData d, double fontScale) {
   final tagStyle = theme.textTheme.labelSmall!;
   double h = sessionHeaderSlotH(theme);
   for (final r in rows) {
+    // 块高 ×1.04：行高度量余量（可变字体逐行偏差随行数累积）
     final block = textBlockHeight(
-        r.$1.isEmpty ? ' ' : r.$1, r.$2, textAvail);
+            r.$1.isEmpty ? ' ' : r.$1, r.$2, textAvail) *
+        1.04;
     h += 12 * fontScale + (20 * fontScale > block ? 20 * fontScale : block);
     final tag = r.$3;
     if (tag != null) {
-      h += textBlockHeight(tag, tagStyle, double.infinity) + 2;
+      h += textBlockHeight(tag, tagStyle, double.infinity) * 1.1 + 2;
     }
   }
   final bar = (d.state == UiState.recording || d.state == UiState.result)
@@ -292,7 +296,9 @@ class _VoiceUiHomeState extends State<VoiceUiHome> {
     final win = Size(size.width + kShadowPad * 2, size.height + kShadowPad * 2);
     if (win != _lastReported) {
       _lastReported = win;
-      _invoke('resize', {'w': win.width.round(), 'h': win.height.round()});
+      // ceil：分数缩放（1.25/1.5）下物理像素取整回 logical 会偏小，
+      // 向上取整保证可用高度 ≥ 布局需求
+      _invoke('resize', {'w': win.width.ceil(), 'h': win.height.ceil()});
     }
   }
 
@@ -369,7 +375,7 @@ class _VoiceUiHomeState extends State<VoiceUiHome> {
       WidgetsBinding.instance.addPostFrameCallback((_) {
         if (!mounted || win == _lastReported) return;
         _lastReported = win;
-        _invoke('resize', {'w': win.width.round(), 'h': win.height.round()});
+        _invoke('resize', {'w': win.width.ceil(), 'h': win.height.ceil()});
       });
     }
     return Theme(
