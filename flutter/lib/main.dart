@@ -5,10 +5,10 @@
 // addon 写入 zwp_input_popup_surface_v2 的 shm buffer。
 //
 // 尺寸策略（收窄卡片：与文本框等宽过于抢眼）：
-//   宽度 clamp(TextPainter 实测内容宽, 280, 420)；录音态固定 280；
-//   高度按状态：录音 104 / 结果与候选按换行行数增长（长文本软换行
-//   完整显示不截断，测量见 panelSizeFor）；录音态流式 partial 尾部优先
-//   （放不下截头加省略号，最新内容始终可见）。
+//   会话三态（录音/结果/候选）是同一张卡片、同一套公式：宽度
+//   clamp(单行实测, 360, 420)；高度 = 头部 + 行基数 + 换行增量（长文本
+//   软换行完整显示，不截断不滚动；0.95 悲观测量防溢出）。录音中的
+//   流式 partial 即主文本行，结束时原位过渡为候选「原始版」行。
 //   实际窗口尺寸 = 卡片 + 四周 kShadowPad 阴影余量，变化时回发 resize。
 //
 // 协议（channel 'fcitx5/flutterui'，JSONMethodCodec）：
@@ -54,15 +54,6 @@ double measureWidth(String text, TextStyle style) {
   return tp.width;
 }
 
-int lineCount(String text, TextStyle style, double maxWidth) {
-  if (text.isEmpty) return 1;
-  final tp = TextPainter(
-    text: TextSpan(text: text, style: style),
-    textDirection: TextDirection.ltr,
-  )..layout(maxWidth: maxWidth);
-  return tp.computeLineMetrics().length;
-}
-
 /// 多行文本块高：按可用宽排版后的总像素高（换行的高度测量）
 double textBlockHeight(String text, TextStyle style, double maxWidth) {
   if (text.isEmpty) return 0;
@@ -71,27 +62,6 @@ double textBlockHeight(String text, TextStyle style, double maxWidth) {
     textDirection: TextDirection.ltr,
   )..layout(maxWidth: maxWidth);
   return tp.height;
-}
-
-/// 尾部优先：maxLines 行内放不下时截头加省略号（流式最新内容优先可见）
-String tailFit(String text, TextStyle style, double maxWidth, int maxLines) {
-  if (text.isEmpty) return text;
-  bool fits(String s) {
-    final tp = TextPainter(
-      text: TextSpan(text: s, style: style),
-      textDirection: TextDirection.ltr,
-      maxLines: maxLines,
-    )..layout(maxWidth: maxWidth);
-    return !tp.didExceedMaxLines;
-  }
-
-  if (fits(text)) return text;
-  // 粗定位：按比例跳到后半段，再逐字精调
-  var start = text.length ~/ 2;
-  while (start < text.length && !fits('…${text.substring(start)}')) {
-    start += 1;
-  }
-  return start >= text.length ? '…${text.substring(text.length ~/ 4)}' : '…${text.substring(start)}';
 }
 
 // ---------------------------------------------------------------------------
@@ -141,65 +111,56 @@ class VoiceUiApp extends StatelessWidget {
   }
 }
 
-/// 面板尺寸决策：宽度 TextPainter 实测（280–420，随 fontScale 缩放），
-/// 高度按状态。theme 必须与渲染主题同源（同字体族+字号缩放）——
-/// 测量用默认字体而渲染用 SysFont 时宽度必然失准（候选头部提示
-/// 溢出即此因）
+/// 面板尺寸决策（会话三态同一张卡片同一公式——状态间过渡零跳变）。
+/// theme 必须与渲染主题同源（同字体族+字号缩放）：测量用默认字体而
+/// 渲染用 SysFont 时宽度必然失准（候选头部提示溢出即此因）
 Size panelSizeFor(ThemeData theme, SessionData d, double fontScale) {
-  final minW = kMinW * fontScale, maxW = kMaxW * fontScale;
+  final minW = 360 * fontScale, maxW = kMaxW * fontScale;
+  if (d.state == UiState.idle) {
+    return Size(280 * fontScale, 64 * fontScale);
+  }
+  // 行内容：录音=[partial(bodyMedium)]；结果=[final(titleMedium)]；候选=
+  // [润色(titleSmall), 原始(bodyMedium)]。录音末尾 partial 即原始候选
+  // 文本——宽度与行位置在录音→候选过渡时天然衔接
+  final rows = <(String, TextStyle)>[];
   switch (d.state) {
     case UiState.recording:
-      return Size(280 * fontScale, 104 * fontScale);
+      rows.add((d.partial, theme.textTheme.bodyMedium!));
     case UiState.result:
-      {
-        // 加宽到 3 行内放下为止（步进 40*scale）；到 maxW 仍超就换行
-        // 增长高度（完整显示不截断）。测量宽打 0.95 折：可变字体的
-        // 测量偏差只会让测量行数 ≥ 渲染行数，高度只多不少，不溢出
-        var w = minW;
-        var lines = lineCount(d.resultText, theme.textTheme.titleMedium!,
-            (w - 24) * 0.95);
-        while (lines > 3 && w < maxW) {
-          w += 40 * fontScale;
-          lines = lineCount(d.resultText, theme.textTheme.titleMedium!,
-              (w - 24) * 0.95);
-        }
-        return Size(w, (60 + lines * 24) * fontScale);
-      }
+      rows.add((d.resultText, theme.textTheme.titleMedium!));
     case UiState.candidates:
-      {
-        // 按最长候选一行测宽（润色版另留 subtitle 余量；徽标 22 + 间距 16 + padding 24）
-        final items = d.candidates.take(2).toList();
-        double textW = 0;
-        for (var i = 0; i < items.length; i++) {
-          final style = i == 0
-              ? theme.textTheme.titleSmall!
-              : theme.textTheme.bodyMedium!;
-          final need = measureWidth(items[i], style) + (i == 0 ? 24 : 0);
-          if (need > textW) textW = need;
-        }
-        // 宽度下限 360（随 fontScale）：头部提示行在 MiSans VF 12 下
-        // 需 ~250px 且可变字体测量有 ±5% 偏差——280 最小宽时仅剩 4px
-        // 余量会贴边"超出"。360 下限让头部在任何字体下都有一倍余量，
-        // 不再依赖测量精度
-        final w = (textW + 22 + 16 + 24 + 8).clamp(360.0 * fontScale, maxW);
-        // 换行增量：按 ListTile 内实际文本可用宽（contentPadding 12×2 +
-        // 徽标 20 + leading 间距 16）测多行块高，超出单行高的部分逐行
-        // 加进卡片高。测量宽同样打 0.95 折（同上，只多不少）
-        double extraH = 0;
-        final textAvail = (w - 12 * 2 - 20 - 16) * 0.95;
-        for (var i = 0; i < items.length; i++) {
-          final style = i == 0
-              ? theme.textTheme.titleSmall!
-              : theme.textTheme.bodyMedium!;
-          final block = textBlockHeight(items[i], style, textAvail);
-          final single = textBlockHeight(items[i], style, double.infinity);
-          if (block > single) extraH += block - single;
-        }
-        return Size(w, (44 + items.length * 52 + 8) * fontScale + extraH);
+      final items = d.candidates.take(2).toList();
+      if (items.isNotEmpty) {
+        rows.add((items[0], theme.textTheme.titleSmall!));
+      }
+      if (items.length > 1) {
+        rows.add((items[1], theme.textTheme.bodyMedium!));
       }
     case UiState.idle:
-      return Size(280 * fontScale, 64 * fontScale);
+      break;
   }
+  // 宽度：最长行单行实测（首行另留 subtitle 余量 24；徽标 22+间距 16+
+  // padding 24+8 同候选既有公式），clamp(360, 420)×fontScale
+  double textW = 0;
+  for (var i = 0; i < rows.length; i++) {
+    final need = measureWidth(rows[i].$1, rows[i].$2) + (i == 0 ? 24 : 0);
+    if (need > textW) textW = need;
+  }
+  final w = (textW + 22 + 16 + 24 + 8).clamp(minW, maxW);
+  // 高度：头部 44 + 行基数 52/行 + subtitle 余量 8 + 换行增量 + 底部条
+  //（录音=指示条、结果=倒计时条，均 3px）。换行测量按 0.95×可用宽
+  //（悲观方向）：可变字体 ±5% 偏差只会让测量行数 ≥ 渲染行数，不溢出
+  final textAvail = (w - 12 * 2 - 20 - 16) * 0.95;
+  double extra = 0;
+  for (final r in rows) {
+    final block = textBlockHeight(r.$1, r.$2, textAvail);
+    final single = textBlockHeight(r.$1, r.$2, double.infinity);
+    if (block > single) extra += block - single;
+  }
+  final bar = (d.state == UiState.recording || d.state == UiState.result)
+      ? 3.0
+      : 0.0;
+  return Size(w, (44 + rows.length * 52 + 8) * fontScale + extra + bar);
 }
 
 class VoiceUiHome extends StatefulWidget {
@@ -454,14 +415,17 @@ class VoicePanel extends StatelessWidget {
           switchInCurve: Curves.easeOut,
           switchOutCurve: Curves.easeIn,
           child: KeyedSubtree(
-            key: ValueKey(data.state),
-            child: switch (data.state) {
-              UiState.recording => _RecordingBody(data: data),
-              UiState.result => _ResultBody(data: data),
-              UiState.candidates => _CandidatesBody(
-                  data: data, mouseHover: mouseHover, onHover: onHover, onSelect: onSelect),
-              UiState.idle => const _IdleBody(),
-            },
+            // 会话三态（录音/结果/候选）是同一张卡片连续形变：
+            // 只在 会话↔空闲 间做整体切换，状态间过渡由 _SessionBody
+            // 内部的局部动画完成（文字本体不重建、不闪烁）
+            key: ValueKey(data.state == UiState.idle ? 'idle' : 'session'),
+            child: data.state == UiState.idle
+                ? const _IdleBody()
+                : _SessionBody(
+                    data: data,
+                    mouseHover: mouseHover,
+                    onHover: onHover,
+                    onSelect: onSelect),
           ),
         ),
       ),
@@ -474,125 +438,16 @@ String _fmtMs(int ms) {
   return '${(s ~/ 60).toString().padLeft(2, '0')}:${(s % 60).toString().padLeft(2, '0')}';
 }
 
-// —— 录音态：麦克风 + 计时 + 流式 partial（尾部优先）+ 底部指示条 ——
-class _RecordingBody extends StatelessWidget {
+// —— 会话卡片（录音/结果/候选同一张卡片，连续形变）——
+// 头部随状态交叉淡化；主文本行全程原位：录音=流式 partial 完整软换行
+//（不限行数、无省略、无滚动），候选态它原位变成「原始版」行——徽标
+// 淡入、润色行在上方展开推入；底部条录音=指示条、结果=倒计时条。
+class _SessionBody extends StatelessWidget {
   final SessionData data;
-  const _RecordingBody({required this.data});
-
-  @override
-  Widget build(BuildContext context) {
-    final theme = Theme.of(context);
-    final cs = theme.colorScheme;
-    final partialStyle =
-        theme.textTheme.bodyMedium?.copyWith(color: cs.onSurfaceVariant);
-    return Column(
-      crossAxisAlignment: CrossAxisAlignment.stretch,
-      children: [
-        Padding(
-          padding: const EdgeInsets.fromLTRB(12, 8, 12, 0),
-          child: Row(
-            children: [
-              Container(
-                width: 36,
-                height: 36,
-                decoration: BoxDecoration(
-                  color: cs.errorContainer,
-                  shape: BoxShape.circle,
-                ),
-                child: Icon(Icons.mic, color: cs.onErrorContainer, size: 20),
-              ),
-              const SizedBox(width: 10),
-              Column(
-                crossAxisAlignment: CrossAxisAlignment.start,
-                children: [
-                  Text(_fmtMs(data.elapsedMs),
-                      style: theme.textTheme.titleMedium?.copyWith(
-                        fontFeatures: [FontFeature.tabularFigures()],
-                      )),
-                  Text('正在听…',
-                      style: theme.textTheme.labelSmall?.copyWith(
-                          color: cs.onSurfaceVariant)),
-                ],
-              ),
-            ],
-          ),
-        ),
-        Expanded(
-          child: Padding(
-            padding: const EdgeInsets.symmetric(horizontal: 12),
-            child: Align(
-              alignment: Alignment.centerLeft,
-              // tailFit 用实际可用宽（字体缩放后不再写死 280）
-              child: LayoutBuilder(builder: (ctx, c) {
-                final shown =
-                    tailFit(data.partial, partialStyle!, c.maxWidth, 2);
-                return Text(
-                  shown.isEmpty ? ' ' : shown,
-                  maxLines: 2,
-                  overflow: TextOverflow.ellipsis,
-                  style: partialStyle,
-                );
-              }),
-            ),
-          ),
-        ),
-        const LinearProgressIndicator(minHeight: 3),
-      ],
-    );
-  }
-}
-
-// —— 结果态（LLM 关）：文本 + 自动上屏倒计时条 ——
-class _ResultBody extends StatelessWidget {
-  final SessionData data;
-  const _ResultBody({required this.data});
-
-  @override
-  Widget build(BuildContext context) {
-    final cs = Theme.of(context).colorScheme;
-    return Column(
-      crossAxisAlignment: CrossAxisAlignment.stretch,
-      children: [
-        Padding(
-          padding: const EdgeInsets.fromLTRB(12, 8, 12, 4),
-          child: Row(
-            children: [
-              Icon(Icons.check_circle, color: cs.primary, size: 18),
-              const SizedBox(width: 6),
-              Text('识别结果', style: Theme.of(context).textTheme.labelMedium),
-            ],
-          ),
-        ),
-        Expanded(
-          child: Padding(
-            padding: const EdgeInsets.symmetric(horizontal: 12),
-            child: Align(
-              alignment: Alignment.centerLeft,
-              child: Text(
-                data.resultText,
-                softWrap: true,
-                style: Theme.of(context).textTheme.titleMedium,
-              ),
-            ),
-          ),
-        ),
-        LinearProgressIndicator(
-          minHeight: 3,
-          value: 1.0,
-          backgroundColor: cs.surfaceContainerHighest,
-        ),
-      ],
-    );
-  }
-}
-
-// —— 候选态（LLM 开）：润色版/原始版列表，鼠标/数字/方向键选择 ——
-class _CandidatesBody extends StatelessWidget {
-  final SessionData data;
-  final int mouseHover;
+  final int mouseHover; // 鼠标悬停行（-1=无）
   final ValueChanged<int> onHover;
   final ValueChanged<int> onSelect;
-  const _CandidatesBody({
+  const _SessionBody({
     required this.data,
     required this.mouseHover,
     required this.onHover,
@@ -601,93 +456,218 @@ class _CandidatesBody extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    final cs = Theme.of(context).colorScheme;
     final theme = Theme.of(context);
+    final cs = theme.colorScheme;
+    final isCand = data.state == UiState.candidates;
     final items = data.candidates.take(2).toList();
-    // 鼠标悬停优先显示，其次键盘方向键选择行
-    final hover = mouseHover >= 0 ? mouseHover : data.hover;
+
+    // 主文本行：录音=partial（bodyMedium，与候选原始版同款——过渡时
+    // 样式/位置零跳变）；结果=final（titleMedium，AnimatedDefaultText
+    // Style 平滑过渡）；候选=原始版
+    final String mainText;
+    final TextStyle mainStyle;
+    switch (data.state) {
+      case UiState.recording:
+        mainText = data.partial;
+        mainStyle = theme.textTheme.bodyMedium!;
+      case UiState.result:
+        mainText = data.resultText;
+        mainStyle = theme.textTheme.titleMedium!;
+      case UiState.candidates:
+        mainText = items.length > 1
+            ? items[1]
+            : (items.isNotEmpty ? items[0] : '');
+        mainStyle = theme.textTheme.bodyMedium!;
+      case UiState.idle:
+        mainText = '';
+        mainStyle = theme.textTheme.bodyMedium!;
+    }
+
     return Column(
       crossAxisAlignment: CrossAxisAlignment.stretch,
+      mainAxisSize: MainAxisSize.min,
       children: [
+        // —— 头部（交叉淡化）——
         Padding(
           padding: const EdgeInsets.fromLTRB(12, 8, 12, 2),
-          // 注意不能用 Spacer：Spacer(Expanded flex:1) 会与 Flexible(hint)
-          // 平分剩余空间，提示恒被压到半宽再省略截断（溢出真凶）。
-          // spaceBetween 让 hint 独占全部剩余宽度
-          child: Row(
-            mainAxisAlignment: MainAxisAlignment.spaceBetween,
-            children: [
-              Row(
-                mainAxisSize: MainAxisSize.min,
-                children: [
-                  Icon(Icons.auto_awesome, size: 14, color: cs.primary),
-                  const SizedBox(width: 4),
-                  Text('LLM 优化', style: theme.textTheme.labelSmall),
-                ],
-              ),
-              Flexible(
-                child: Text(
-                  // 提示内容刻意精简：完整版（数字/方向键选择…）在可变
-                  // 字体（MiSans VF 有 ~15px 测量偏差）+ 短候选的窄卡
-                  // 下会触发行溢出（RenderFlex overflowed——FittedBox 的
-                  // 最小固有宽=文本原宽，scaleDown 救不了 flex 分配）。
-                  // 短版在最小卡宽内留足双倍余量，机制上不可能再挤
-                  'Enter=上屏 · Esc=取消',
-                  maxLines: 1,
-                  overflow: TextOverflow.ellipsis,
-                  style: theme.textTheme.labelSmall?.copyWith(
-                      color: cs.onSurfaceVariant),
+          child: AnimatedSwitcher(
+            duration: const Duration(milliseconds: 180),
+            child: switch (data.state) {
+              UiState.recording => Row(
+                  key: const ValueKey('rec'),
+                  children: [
+                    Container(
+                      width: 36,
+                      height: 36,
+                      decoration: BoxDecoration(
+                        color: cs.errorContainer,
+                        shape: BoxShape.circle,
+                      ),
+                      child: Icon(Icons.mic,
+                          color: cs.onErrorContainer, size: 20),
+                    ),
+                    const SizedBox(width: 10),
+                    Column(
+                      crossAxisAlignment: CrossAxisAlignment.start,
+                      children: [
+                        Text(_fmtMs(data.elapsedMs),
+                            style: theme.textTheme.titleMedium?.copyWith(
+                                fontFeatures: [FontFeature.tabularFigures()])),
+                        Text('正在听…',
+                            style: theme.textTheme.labelSmall?.copyWith(
+                                color: cs.onSurfaceVariant)),
+                      ],
+                    ),
+                  ],
                 ),
-              ),
+              UiState.result => Row(
+                  key: const ValueKey('res'),
+                  children: [
+                    Icon(Icons.check_circle, color: cs.primary, size: 18),
+                    const SizedBox(width: 6),
+                    Text('识别结果', style: theme.textTheme.labelMedium),
+                  ],
+                ),
+              UiState.candidates => Row(
+                  key: const ValueKey('cand'),
+                  // 注意不能用 Spacer：Spacer(Expanded flex:1) 会与
+                  // Flexible(hint) 平分剩余空间，提示恒被压到半宽再省略
+                  // 截断（溢出真凶）。spaceBetween 让 hint 独占剩余宽度
+                  mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                  children: [
+                    Row(
+                      mainAxisSize: MainAxisSize.min,
+                      children: [
+                        Icon(Icons.auto_awesome,
+                            size: 14, color: cs.primary),
+                        const SizedBox(width: 4),
+                        Text('LLM 优化', style: theme.textTheme.labelSmall),
+                      ],
+                    ),
+                    Flexible(
+                      child: Text(
+                        // 提示内容刻意精简：完整版在可变字体+窄卡下会触
+                        // 发行溢出（RenderFlex overflowed）。短版在最小
+                        // 卡宽内留足双倍余量
+                        'Enter=上屏 · Esc=取消',
+                        maxLines: 1,
+                        overflow: TextOverflow.ellipsis,
+                        style: theme.textTheme.labelSmall?.copyWith(
+                            color: cs.onSurfaceVariant),
+                      ),
+                    ),
+                  ],
+                ),
+              UiState.idle => const SizedBox.shrink(),
+            },
+          ),
+        ),
+        // —— 文本区（AnimatedSize 平滑长高/推入润色行）——
+        AnimatedSize(
+          duration: const Duration(milliseconds: 220),
+          curve: Curves.easeOutCubic,
+          alignment: Alignment.topCenter,
+          child: Column(
+            crossAxisAlignment: CrossAxisAlignment.stretch,
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              if (isCand && items.isNotEmpty)
+                TweenAnimationBuilder<double>(
+                  // 润色行入场：淡入（推展由外层 AnimatedSize 完成）
+                  tween: Tween(begin: 0, end: 1),
+                  duration: const Duration(milliseconds: 220),
+                  builder: (_, v, child) => Opacity(opacity: v, child: child),
+                  child: _row(theme, cs,
+                      index: 0,
+                      text: items[0],
+                      style: theme.textTheme.titleSmall!,
+                      interactive: true),
+                ),
+              _row(theme, cs,
+                  index: 1,
+                  text: mainText.isEmpty ? ' ' : mainText,
+                  style: mainStyle,
+                  interactive: isCand && items.length > 1),
             ],
           ),
         ),
-        for (var i = 0; i < items.length; i++)
-          MouseRegion(
-            cursor: SystemMouseCursors.click,
-            onEnter: (_) => onHover(i),
-            onExit: (_) => onHover(-1),
-            child: GestureDetector(
-              behavior: HitTestBehavior.opaque,
-              onTap: () => onSelect(i),
-              child: AnimatedContainer(
-                duration: const Duration(milliseconds: 100),
-                color: i == hover ? cs.surfaceContainerHighest : null,
-                child: ListTile(
-                  dense: true,
-                  visualDensity: VisualDensity.compact,
-                  contentPadding: const EdgeInsets.symmetric(horizontal: 12),
-                  leading: Container(
-                    width: 20,
-                    height: 20,
-                    alignment: Alignment.center,
-                    decoration: BoxDecoration(
-                      color: i == 0 ? cs.primary : cs.surfaceContainerHighest,
-                      shape: BoxShape.circle,
-                    ),
-                    child: Text('${i + 1}',
-                        style: TextStyle(
-                          fontSize: 11,
-                          color: i == 0 ? cs.onPrimary : cs.onSurfaceVariant,
-                        )),
-                  ),
-                  // 长候选软换行完整显示（高度增量由 panelSizeFor 同步
-                  // 测量；不再单行省略——长文本必须可审阅）
-                  title: Text(
-                    items[i],
-                    softWrap: true,
-                    style: i == 0 ? theme.textTheme.titleSmall : theme.textTheme.bodyMedium,
-                  ),
-                  subtitle: i == 0
-                      ? Text('润色版',
-                          style: theme.textTheme.labelSmall
-                              ?.copyWith(color: cs.primary))
-                      : null,
-                ),
-              ),
-            ),
+        // —— 底部条 ——
+        if (data.state == UiState.recording)
+          const LinearProgressIndicator(minHeight: 3),
+        if (data.state == UiState.result)
+          LinearProgressIndicator(
+            minHeight: 3,
+            value: 1.0,
+            backgroundColor: cs.surfaceContainerHighest,
           ),
       ],
+    );
+  }
+
+  // 数字徽标（圆形）
+  Widget _badge(ColorScheme cs, int number, {required bool primary}) {
+    return Container(
+      width: 20,
+      height: 20,
+      alignment: Alignment.center,
+      decoration: BoxDecoration(
+        color: primary ? cs.primary : cs.surfaceContainerHighest,
+        shape: BoxShape.circle,
+      ),
+      child: Text('$number',
+          style: TextStyle(
+            fontSize: 11,
+            color: primary ? cs.onPrimary : cs.onSurfaceVariant,
+          )),
+    );
+  }
+
+  // 统一行：几何与候选行完全同构——录音/结果态徽标以 AnimatedOpacity
+  // 隐身占位（文本 x 位置在状态过渡间恒定，候选态原位淡入）；结果态的
+  // 字号变化经 AnimatedDefaultTextStyle 平滑过渡
+  Widget _row(ThemeData theme, ColorScheme cs,
+      {required int index,
+      required String text,
+      required TextStyle style,
+      required bool interactive}) {
+    final hovered = interactive &&
+        (mouseHover >= 0 ? mouseHover : data.hover) == index;
+    Widget core = AnimatedContainer(
+      duration: const Duration(milliseconds: 100),
+      color: hovered ? cs.surfaceContainerHighest : null,
+      child: ListTile(
+        dense: true,
+        visualDensity: VisualDensity.compact,
+        contentPadding: const EdgeInsets.symmetric(horizontal: 12),
+        leading: AnimatedOpacity(
+          duration: const Duration(milliseconds: 220),
+          opacity: interactive ? 1 : 0,
+          child: _badge(cs, index + 1, primary: index == 0),
+        ),
+        title: AnimatedDefaultTextStyle(
+          duration: const Duration(milliseconds: 180),
+          style: style,
+          child: Text(text, softWrap: true),
+        ),
+        subtitle: (interactive && index == 0)
+            ? Text('润色版',
+                style: theme.textTheme.labelSmall
+                    ?.copyWith(color: cs.primary))
+            : null,
+      ),
+    );
+    if (!interactive) {
+      return core;
+    }
+    return MouseRegion(
+      cursor: SystemMouseCursors.click,
+      onEnter: (_) => onHover(index),
+      onExit: (_) => onHover(-1),
+      child: GestureDetector(
+        behavior: HitTestBehavior.opaque,
+        onTap: () => onSelect(index),
+        child: core,
+      ),
     );
   }
 }
