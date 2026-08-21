@@ -476,11 +476,11 @@ class _SessionBodyState extends State<_SessionBody> {
       crossAxisAlignment: CrossAxisAlignment.stretch,
       mainAxisSize: MainAxisSize.min,
       children: [
-        // —— 头部（min 高度托底：录音头是最高的状态，槽高保下方行不因
-        // 头部切换上跳；可变字体下内容若再高一点则自由撑开——只托底
-        // 不封顶，结构上不会溢出）——
+        // —— 头部（min 高度托底 40：防止候选/结果的矮头部与选项间出现
+        // 大空隙（曾设 56——录音头内容驱动不受影响，但矮头部下多出
+        // ~30px 空当）；录音头的更高内容自由撑开，只托底不封顶）——
         ConstrainedBox(
-          constraints: const BoxConstraints(minHeight: 56),
+          constraints: const BoxConstraints(minHeight: 40),
           child: Align(
             alignment: Alignment.topLeft,
             child: Padding(
