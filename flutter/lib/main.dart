@@ -126,6 +126,28 @@ class _VoiceUiHomeState extends State<VoiceUiHome> {
     super.initState();
     _ch.setMethodCallHandler(_onCall);
     _invoke('ready');
+    // 持久帧回调：每帧布局完成后回读卡片尺寸、变化即上报。不能挂在
+    // build 的 post-frame 上——AnimatedSize 等动画只在 render 层逐帧
+    // 进行不触发 build，最终尺寸曾因此漏报（展开形态被旧窗口裁掉，
+    // 直到下一次 setState 才"神奇恢复"）
+    WidgetsBinding.instance.addPersistentFrameCallback((_) {
+      if (!mounted) return;
+      final ro = _cardKey.currentContext?.findRenderObject();
+      if (ro is RenderBox && ro.hasSize) {
+        _reportSize(ro.size);
+      }
+    });
+  }
+
+  void _reportSize(Size card) {
+    final win = Size(
+      card.width + (kShadowPad + kGrowthSlack) * 2,
+      card.height + (kShadowPad + kGrowthSlack) * 2,
+    );
+    if (win != _lastReported) {
+      _lastReported = win;
+      _invoke('resize', {'w': win.width.ceil(), 'h': win.height.ceil()});
+    }
   }
 
   @override
@@ -246,22 +268,6 @@ class _VoiceUiHomeState extends State<VoiceUiHome> {
         fontSizeFactor: _fontScale,
       ),
     );
-    // 尺寸上报：后置帧回读卡片的**动画中**渲染尺寸（key 在 AnimatedSize
-    // 上层）——窗口与卡片尺寸动画逐帧同步，增长每帧增量小、余量可覆盖，
-    // 不再有内容超出窗口的过渡帧
-    WidgetsBinding.instance.addPostFrameCallback((_) {
-      final ro = _cardKey.currentContext?.findRenderObject();
-      if (ro is RenderBox && ro.hasSize && mounted) {
-        final win = Size(
-          ro.size.width + (kShadowPad + kGrowthSlack) * 2,
-          ro.size.height + (kShadowPad + kGrowthSlack) * 2,
-        );
-        if (win != _lastReported) {
-          _lastReported = win;
-          _invoke('resize', {'w': win.width.ceil(), 'h': win.height.ceil()});
-        }
-      }
-    });
     return Theme(
       data: theme,
       child: Scaffold(
