@@ -517,16 +517,25 @@ void AiInputEngine::migrateLegacyConfig() {
         FCITX_INFO() << "AiInput: 迁移——旧默认定位回退名单已清空"
                         "（跟随优先语义）";
     }
-    // 配置值里的旧包路径改写（voiceinput 时代安装/下载路径 → 新名）：
-    // 模型目录、GGUF/llamacpp、funasr 服务脚本都是包内绝对路径
+    // 配置值里的旧**包内**路径改写（/usr/lib、/usr/share 下的路径随旧包
+    // 卸载而消失，必须指向新包位置）。~/.local 的用户数据路径不改写：
+    // 旧下载位置仍然有效（resolver 有回退），改写反而指到不存在的目录
+    static const char *const kPkgPaths[][2] = {
+        {"/usr/lib/fcitx5-voiceinput", "/usr/lib/fcitx5-aiinput"},
+        {"/usr/share/fcitx5-voiceinput", "/usr/share/fcitx5-aiinput"},
+    };
     for (auto *opt : {&config_.sherpaModelDir, &config_.senseVoiceDir,
                       &config_.funasrServerCmd, &config_.funasrLocalCmd,
                       &config_.funasrLocalModelDir}) {
         std::string v = opt->value();
-        auto pos = v.find("fcitx5-voiceinput");
-        if (pos != std::string::npos) {
-            opt->setValue(v.replace(pos, strlen("fcitx5-voiceinput"),
-                                    "fcitx5-aiinput"));
+        for (const auto &pp : kPkgPaths) {
+            auto pos = v.find(pp[0]);
+            if (pos != std::string::npos) {
+                v.replace(pos, strlen(pp[0]), pp[1]);
+            }
+        }
+        if (v != opt->value()) {
+            opt->setValue(v);
             changed = true;
         }
     }
