@@ -31,7 +31,7 @@ const double kMaxW = 420;
 // 超出边界 ~11px）；指针坐标是含余量的表面局部坐标，Padding 天然吸收
 const double kShadowPad = 12;
 // 增长余量：内容自然长高的当前帧先落在透明余量里，resize 下一帧跟上
-const double kGrowthSlack = 16;
+const double kGrowthSlack = 20;
 
 // 全局动画时长：基准毫秒 × 挡位系数（与 C++ animScaleOf 对应：快 1.0/
 // 标准 1.6/慢 3.0，默认慢速——挡位由 C++ 随每条 update/font 消息下发）
@@ -246,8 +246,9 @@ class _VoiceUiHomeState extends State<VoiceUiHome> {
         fontSizeFactor: _fontScale,
       ),
     );
-    // 尺寸上报：后置帧回读卡片实际渲染尺寸（任何字体/缩放都不会溢出
-    // ——内容从不被塞进预算尺寸的盒子里，窗口跟随内容）
+    // 尺寸上报：后置帧回读卡片的**动画中**渲染尺寸（key 在 AnimatedSize
+    // 上层）——窗口与卡片尺寸动画逐帧同步，增长每帧增量小、余量可覆盖，
+    // 不再有内容超出窗口的过渡帧
     WidgetsBinding.instance.addPostFrameCallback((_) {
       final ro = _cardKey.currentContext?.findRenderObject();
       if (ro is RenderBox && ro.hasSize && mounted) {
@@ -282,21 +283,21 @@ class _VoiceUiHomeState extends State<VoiceUiHome> {
               maxWidth: double.infinity,
               minHeight: 0,
               maxHeight: double.infinity,
-              child: AnimatedSize(
-                // 卡片尺寸动画（视觉过渡）：child 自然尺寸布局，
-                // AnimatedSize 只裁显不约束
-                duration: animDurOf(_animScale, 220),
-                curve: Curves.easeOutCubic,
-                alignment: Alignment.topCenter,
-                child: ConstrainedBox(
-                  // 宽度治理（纯几何）：窄内容撑到下限、长单行在上限
-                  // 换行——与字体无关
-                  constraints: BoxConstraints(
-                    minWidth: 360 * _fontScale,
-                    maxWidth: 420 * _fontScale,
-                  ),
-                  child: KeyedSubtree(
-                    key: _cardKey,
+              child: KeyedSubtree(
+                key: _cardKey,
+                child: AnimatedSize(
+                  // 卡片尺寸动画（视觉过渡）：child 自然尺寸布局，
+                  // AnimatedSize 只裁显不约束
+                  duration: animDurOf(_animScale, 220),
+                  curve: Curves.easeOutCubic,
+                  alignment: Alignment.topCenter,
+                  child: ConstrainedBox(
+                    // 宽度治理（纯几何）：窄内容撑到下限、长单行在上限
+                    // 换行——与字体无关
+                    constraints: BoxConstraints(
+                      minWidth: 360 * _fontScale,
+                      maxWidth: 420 * _fontScale,
+                    ),
                     child: VoicePanel(
                       data: _data,
                       mouseHover: _mouseHover,

@@ -1116,10 +1116,20 @@ void VoicePopup::syncViewportLocked() {
 }
 
 void VoicePopup::pushFrameBGRA(const uint8_t *bgra, int w, int h) {
-    if (w != width_ || h != height_) {
-        resize(w, h);
-    }
     std::lock_guard<std::mutex> lock(mutex_);
+    if (w != width_ || h != height_) {
+        // 池振荡防护：resize 消息已把逻辑/池更新到目标物理尺寸，而引擎
+        // metrics 尚未生效时按**旧尺寸**出帧——此时把池缩回去会让窗口
+        // 抖一下再长回（偶发 UI 截断的另一半根因）。旧尺寸迟到帧直接
+        // 丢弃，等 metrics 更新后的新尺寸帧
+        const double sc = scale();
+        const int pw = static_cast<int>(logicalW_ * sc + 0.5);
+        const int ph = static_cast<int>(logicalH_ * sc + 0.5);
+        if (width_ == pw && height_ == ph && (w != pw || h != ph)) {
+            return; // 池已在目标位，这是迟到帧
+        }
+        resizeLocked(w, h);
+    }
     // 隐藏后丢弃迟到帧（hide 已提交透明帧，idle 态的帧会把它覆盖回来）
     // 判定挂起期同样丢帧：跟随/底部未定，不 map（杜绝中途换 surface）
     if (!visible_ || decisionPending_ || !surface_ || !buffers_[0] ||
