@@ -417,13 +417,15 @@ void VoicePopup::registryGlobalImpl(void *data, wl_registry *reg, uint32_t name,
         size_t stride = self->width_ * 4;
         size_t bufSize = stride * self->height_;
         size_t poolSize = bufSize * 2;
+        self->poolCapacity_ = poolSize + poolSize / 2 + (512 << 10);
         self->poolFd_ =
             memfd_create("vi-popup", MFD_CLOEXEC);
-        ftruncate(self->poolFd_, poolSize);
+        ftruncate(self->poolFd_, self->poolCapacity_);
         self->pixels_ = static_cast<uint8_t *>(
-            mmap(nullptr, poolSize, PROT_READ | PROT_WRITE, MAP_SHARED,
-                 self->poolFd_, 0));
-        self->pool_ = wl_shm_create_pool(self->shm_, self->poolFd_, poolSize);
+            mmap(nullptr, self->poolCapacity_, PROT_READ | PROT_WRITE,
+                 MAP_SHARED, self->poolFd_, 0));
+        self->pool_ = wl_shm_create_pool(self->shm_, self->poolFd_,
+                                         self->poolCapacity_);
         for (int i = 0; i < 2; ++i) {
             self->buffers_[i] = wl_shm_pool_create_buffer(
                 self->pool_, i * bufSize, self->width_, self->height_, stride,
@@ -1015,6 +1017,28 @@ void VoicePopup::resizeLocked(int w, int h) {
     if (!pool_ || (w == width_ && h == height_)) {
         return;
     }
+    const size_t stride = static_cast<size_t>(w) * 4;
+    const size_t bufSize = stride * h;
+    const size_t needed = bufSize * 2;
+    if (pool_ && needed <= poolCapacity_) {
+        // 容量桶内：只重建 buffer（轻量，compositor 侧仅引用池映射的
+        // 子区间）。整池重建（munmap/memfd/mmap/合成器重导入）曾是
+        // 动画期间逐帧 resize 的掉帧主因，现在只在跨桶时发生
+        for (auto &b : buffers_) {
+            if (b) {
+                wl_buffer_destroy(b);
+                b = nullptr;
+            }
+        }
+        width_ = w;
+        height_ = h;
+        for (int i = 0; i < 2; ++i) {
+            buffers_[i] = wl_shm_pool_create_buffer(
+                pool_, i * bufSize, w, h, stride, WL_SHM_FORMAT_ARGB8888);
+        }
+        cur_ = 0;
+        return;
+    }
     for (auto &b : buffers_) {
         if (b) {
             wl_buffer_destroy(b);
@@ -1022,19 +1046,18 @@ void VoicePopup::resizeLocked(int w, int h) {
         }
     }
     wl_shm_pool_destroy(pool_);
-    munmap(pixels_, static_cast<size_t>(width_) * height_ * 4 * 2);
+    munmap(pixels_, poolCapacity_);
     close(poolFd_);
 
     width_ = w;
     height_ = h;
-    size_t stride = static_cast<size_t>(w) * 4;
-    size_t bufSize = stride * h;
-    size_t poolSize = bufSize * 2;
+    // 预留 1.5× + 512KB 余量：后续增长多数落在桶内
+    poolCapacity_ = needed + needed / 2 + (512 << 10);
     poolFd_ = memfd_create("vi-popup", MFD_CLOEXEC);
-    ftruncate(poolFd_, poolSize);
+    ftruncate(poolFd_, poolCapacity_);
     pixels_ = static_cast<uint8_t *>(
-        mmap(nullptr, poolSize, PROT_READ | PROT_WRITE, MAP_SHARED, poolFd_, 0));
-    pool_ = wl_shm_create_pool(shm_, poolFd_, poolSize);
+        mmap(nullptr, poolCapacity_, PROT_READ | PROT_WRITE, MAP_SHARED, poolFd_, 0));
+    pool_ = wl_shm_create_pool(shm_, poolFd_, poolCapacity_);
     for (int i = 0; i < 2; ++i) {
         buffers_[i] = wl_shm_pool_create_buffer(
             pool_, i * bufSize, w, h, stride, WL_SHM_FORMAT_ARGB8888);
@@ -1132,13 +1155,14 @@ void VoicePopup::teardown() {
         wl_shm_pool_destroy(pool_);
     }
     if (pixels_) {
-        munmap(pixels_, width_ * height_ * 4 * 2);
+        munmap(pixels_, poolCapacity_);
     }
     if (poolFd_ >= 0) {
         close(poolFd_);
     }
     pool_ = nullptr;
     pixels_ = nullptr;
+    poolCapacity_ = 0;
     display_ = nullptr;
 }
 

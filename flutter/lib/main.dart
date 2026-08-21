@@ -140,9 +140,14 @@ class _VoiceUiHomeState extends State<VoiceUiHome> {
   }
 
   void _reportSize(Size card) {
+    // 尺寸量化到 32px 步进（向上取整）：动画期间卡片逐帧生长，若逐帧
+    // 上报，C++ 每帧重建 shm 池+metrics 重排——流式期进度条掉帧的主因。
+    // 量化后窗口始终 ≥ 卡片（余量吸收差值，透明不可见），重建次数降一个
+    // 数量级
+    const q = 32.0;
     final win = Size(
-      card.width + (kShadowPad + kGrowthSlack) * 2,
-      card.height + (kShadowPad + kGrowthSlack) * 2,
+      ((card.width + (kShadowPad + kGrowthSlack) * 2) / q).ceilToDouble() * q,
+      ((card.height + (kShadowPad + kGrowthSlack) * 2) / q).ceilToDouble() * q,
     );
     if (win != _lastReported) {
       _lastReported = win;

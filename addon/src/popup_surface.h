@@ -266,6 +266,7 @@ private:
     wl_shm_pool *pool_ = nullptr;
     wl_buffer *buffers_[2] = {nullptr, nullptr};
     uint8_t *pixels_ = nullptr; // mmap 的整个池
+    size_t poolCapacity_ = 0;   // 池容量字节（桶内 resize 只换 buffer）
     int poolFd_ = -1;
     int cur_ = 0;
     int width_ = 0, height_ = 0;
