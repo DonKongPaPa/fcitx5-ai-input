@@ -16,15 +16,15 @@ pacman -Scc --noconfirm >/dev/null 2>&1 || true
 bash "$SRC/packaging/common/stage.sh"
 
 STAGE="$SRC/packaging/out/stage"
-PKG="$SRC/artifacts/packages/fcitx5-voice-input-$VERSION-1-x86_64.pkg.tar.zst"
+PKG="$SRC/artifacts/packages/fcitx5-ai-input-$VERSION-1-x86_64.pkg.tar.zst"
 mkdir -p "$SRC/artifacts/packages"
 
 cd "$STAGE"
 {
-    echo "pkgname = fcitx5-voice-input"
+    echo "pkgname = fcitx5-ai-input"
     echo "pkgver = $VERSION-1"
     echo "pkgdesc = Fcitx5 voice input: sherpa-onnx streaming ASR (FunASR/GGUF tiers) + Flutter MD3 cursor-following card"
-    echo "url = https://github.com/DonKongPaPa/fcitx5-voice-input"
+    echo "url = https://github.com/DonKongPaPa/fcitx5-ai-input"
     echo "builddate = $(date +%s)"
     echo "packager = CI <ci@invalid>"
     echo "size = $(du -sb "$STAGE" | cut -f1)"

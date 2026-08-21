@@ -24,7 +24,7 @@ mkdir -p "$PKGDIR/DEBIAN"
 cp -a "$STAGE/usr" "$PKGDIR/"
 
 cat > "$PKGDIR/DEBIAN/control" <<EOF
-Package: fcitx5-voice-input
+Package: fcitx5-ai-input
 Version: $VERSION
 Section: utils
 Priority: optional
@@ -48,7 +48,7 @@ exit 0
 EOF
 chmod 755 "$PKGDIR/DEBIAN/postinst"
 
-PKG="$SRC/artifacts/packages/fcitx5-voice-input_${VERSION}-1_amd64.deb"
+PKG="$SRC/artifacts/packages/fcitx5-ai-input_${VERSION}-1_amd64.deb"
 mkdir -p "$SRC/artifacts/packages"
 dpkg-deb --root-owner-group -Zxz --build "$PKGDIR" "$PKG" >/dev/null
 echo ">> 产物: $PKG ($(du -h "$PKG" | cut -f1))"

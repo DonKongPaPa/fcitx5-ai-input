@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""voiceinput 的 FunASR 流式识别服务（宿主原生运行，无容器）。
+"""aiinput 的 FunASR 流式识别服务（宿主原生运行，无容器）。
 
 实验 001 结论的落地：Fun-ASR-MLT-Nano 没有 chunk 流式接口，"实时"用
 累积窗口实现——每 WINDOW_MS 对从头累积的音频整体重识别，回传全量文本。

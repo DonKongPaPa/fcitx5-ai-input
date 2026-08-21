@@ -2,7 +2,7 @@
 #include "funasr_local_engine.h"
 
 #include "audio_capture.h"
-#include "voiceinput_config.h"
+#include "aiinput_config.h"
 
 #include <fcitx-utils/log.h>
 
@@ -22,7 +22,7 @@ static uint64_t nowUs() {
     return static_cast<uint64_t>(ts.tv_sec) * 1000000 + ts.tv_nsec / 1000;
 }
 
-void FunAsrLocalEngine::start(EventLoop *loop, const VoiceInputConfig *config,
+void FunAsrLocalEngine::start(EventLoop *loop, const AiInputConfig *config,
                               Callbacks cbs) {
     loop_ = loop;
     config_ = config;
@@ -82,7 +82,7 @@ static void writeWav(const std::string &path,
 }
 
 void FunAsrLocalEngine::runCli() {
-    wavPath_ = "/tmp/voiceinput-session.wav";
+    wavPath_ = "/tmp/aiinput-session.wav";
     writeWav(wavPath_, pcm_);
 
     const std::string dir = config_->funasrLocalModelDir.value();

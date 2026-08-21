@@ -1,4 +1,4 @@
-# fcitx5-voice-input
+# fcitx5-ai-input
 
 Linux 语音输入，长在 fcitx5 里：**按住右 Ctrl 说话，松开出字**。任何输入法激活时都能用（rime / 拼音 / 键盘英语，无需切换），识别文本直接落在光标处。悬浮卡片由 Flutter 渲染，进程内嵌入 fcitx5，无独立窗口、无独立进程。
 
@@ -33,13 +33,13 @@ Linux 语音输入，长在 fcitx5 里：**按住右 Ctrl 说话，松开出字*
 
 ```bash
 # Arch
-pacman -U fcitx5-voice-input-*.pkg.tar.zst
+pacman -U fcitx5-ai-input-*.pkg.tar.zst
 # Debian
-apt install ./fcitx5-voice-input_*.deb
+apt install ./fcitx5-ai-input_*.deb
 # Fedora
-dnf install fcitx5-voice-input-*.rpm
+dnf install fcitx5-ai-input-*.rpm
 # 其他（需 gcc/cmake/fcitx5-dev/wayland-dev/fontconfig-dev）
-tar xf fcitx5-voice-input-*.tar.* && cd fcitx5-voice-input-* && sudo bash install.sh
+tar xf fcitx5-ai-input-*.tar.* && cd fcitx5-ai-input-* && sudo bash install.sh
 ```
 
 安装后重启 fcitx5 即生效（模块自动加载，无需添加输入法）。
@@ -47,10 +47,10 @@ tar xf fcitx5-voice-input-*.tar.* && cd fcitx5-voice-input-* && sudo bash instal
 使用内置 Sherpa 引擎（推荐，零显存）需下载模型（~200MB，sha256 锁定）：
 
 ```bash
-sudo bash /usr/lib/fcitx5-voiceinput/scripts/fetch-sherpa-runtime.sh   # 运行时库（首次）
-bash /usr/lib/fcitx5-voiceinput/scripts/fetch-sherpa-models.sh         # 模型 → ~/.local/share/fcitx5-voiceinput/models/
+sudo bash /usr/lib/fcitx5-aiinput/scripts/fetch-sherpa-runtime.sh   # 运行时库（首次）
+bash /usr/lib/fcitx5-aiinput/scripts/fetch-sherpa-models.sh         # 模型 → ~/.local/share/fcitx5-aiinput/models/
 # 可选：SenseVoice 松手重识别（中英混说/标点质量更好）
-bash /usr/lib/fcitx5-voiceinput/scripts/fetch-sherpa-models.sh --model sensevoice
+bash /usr/lib/fcitx5-aiinput/scripts/fetch-sherpa-models.sh --model sensevoice
 ```
 
 ## 使用

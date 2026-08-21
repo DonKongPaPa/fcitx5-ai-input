@@ -1,5 +1,5 @@
-#ifndef _FCITX5_VOICEINPUT_POPUP_SURFACE_H_
-#define _FCITX5_VOICEINPUT_POPUP_SURFACE_H_
+#ifndef _FCITX5_AIINPUT_POPUP_SURFACE_H_
+#define _FCITX5_AIINPUT_POPUP_SURFACE_H_
 
 #include <fcitx/instance.h>
 #include <fcitx-utils/event.h>
@@ -135,7 +135,7 @@ public:
     }
     int logicalWidth() const { return logicalW_; }
     int logicalHeight() const { return logicalH_; }
-    // scale 变化回调（voiceinput 据此更新引擎 metrics 重渲物理帧）
+    // scale 变化回调（aiinput 据此更新引擎 metrics 重渲物理帧）
     void setScaleHandler(std::function<void(double)> h) {
         scaleHandler_ = std::move(h);
     }
@@ -284,4 +284,4 @@ private:
 
 } // namespace fcitx
 
-#endif // _FCITX5_VOICEINPUT_POPUP_SURFACE_H_
+#endif // _FCITX5_AIINPUT_POPUP_SURFACE_H_

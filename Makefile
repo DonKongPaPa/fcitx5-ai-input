@@ -1,4 +1,4 @@
-# fcitx5-voice-input 构建测试管线
+# fcitx5-ai-input 构建测试管线
 # 用法示例：
 #   make images            # 构建全部镜像
 #   make build             # 编译 addon/flutter/testapp → artifacts/dist/

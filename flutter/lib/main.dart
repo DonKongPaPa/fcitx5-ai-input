@@ -1,4 +1,4 @@
-// voice_ui：fcitx5-voiceinput 的浮窗 UI（MD3）
+// voice_ui：fcitx5-aiinput 的浮窗 UI（MD3）
 //
 // 运行方式：Flutter 引擎进程内嵌入 fcitx5 addon（raw embedder API +
 // kSoftware 软渲染），无 GTK 窗口/无独立进程——引擎把整窗帧直接交给

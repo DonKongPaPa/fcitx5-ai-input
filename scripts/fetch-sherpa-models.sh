@@ -3,7 +3,7 @@
 #
 # 用法：
 #   fetch-sherpa-models.sh [--dest DIR] [--from-local DIR]
-#   --dest       目标目录（默认 ~/.local/share/fcitx5-voiceinput/models/sherpa-paraformer）
+#   --dest       目标目录（默认 ~/.local/share/fcitx5-aiinput/models/sherpa-paraformer）
 #   --from-local 从本地已有目录复制（如实验 004 的下载副本），跳过网络下载
 #   SHERPA_MIRROR=https://ghproxy... 环境变量可加 GitHub 镜像前缀
 #
@@ -42,7 +42,7 @@ else
     SUBDIR="sherpa-onnx-streaming-paraformer-bilingual-zh-en"
 fi
 
-DEST="$HOME/.local/share/fcitx5-voiceinput/models/sherpa-$MODEL"
+DEST="$HOME/.local/share/fcitx5-aiinput/models/sherpa-$MODEL"
 FROM_LOCAL=""
 
 while [[ $# -gt 0 ]]; do

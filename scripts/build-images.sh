@@ -10,7 +10,7 @@ if [ ${#TARGETS[@]} -eq 0 ] || [ "${TARGETS[0]}" = "all" ]; then
 fi
 
 build() {
-    local name="$1" tag="localhost/voiceinput-$1"
+    local name="$1" tag="localhost/aiinput-$1"
     if [ ! -f "$CTX/Containerfile.$name" ]; then
         echo ">> 跳过 $name（Containerfile.$name 不存在）"
         return
@@ -21,8 +21,8 @@ build() {
 
 ensure_image() {
     local name="$1"
-    if ! podman image exists "localhost/voiceinput-$name:latest"; then
-        echo ">> voiceinput-$name 不存在，先构建"
+    if ! podman image exists "localhost/aiinput-$name:latest"; then
+        echo ">> aiinput-$name 不存在，先构建"
         build "$name"
     fi
 }

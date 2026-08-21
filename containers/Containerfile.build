@@ -1,6 +1,6 @@
 # 编译镜像：base + 构建工具链 + Flutter SDK（中国镜像下载）
-# 依赖 voiceinput-base 先构建
-FROM voiceinput-base:latest
+# 依赖 aiinput-base 先构建
+FROM aiinput-base:latest
 
 USER root
 

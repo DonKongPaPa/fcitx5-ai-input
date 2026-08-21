@@ -1,7 +1,7 @@
 # 共享宿主镜像：cage(wlroots headless) + 补丁版 wf-recorder
 # 三个桌面环境（niri/kwin/gnome-shell）都以嵌套客户端运行在 cage 里，
 # 录屏统一走 cage 的 wlr-screencopy（画面即被测合成器的输出）。
-FROM voiceinput-base:latest
+FROM aiinput-base:latest
 
 USER root
 

@@ -4,13 +4,13 @@
 #   funasr-container.sh start-gpu          # funasr-gpu 容器 :10095（GPU 直通）
 #   funasr-container.sh start-cpu [quant]  # funasr-cpu 容器 :10096（默认 int8）
 #   funasr-container.sh status | stop      # stop = 全量销毁，不留常驻
-# 容器网 voiceinput-net：被测 niri 容器经 DNS 名 funasr-gpu/funasr-cpu 访问；
+# 容器网 aiinput-net：被测 niri 容器经 DNS 名 funasr-gpu/funasr-cpu 访问；
 # 同时 publish 到宿主 127.0.0.1 供冒烟计时。
 set -euo pipefail
 
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
-IMAGE="localhost/voiceinput-funasr:latest"
-NET="voiceinput-net"
+IMAGE="localhost/aiinput-funasr:latest"
+NET="aiinput-net"
 EXP="$ROOT/experiments/001-funasr-nano-local"
 DATA="$EXP/data"
 LOG_DIR="$ROOT/artifacts"
@@ -58,7 +58,7 @@ start() {  # $1=name $2=host_port $3=额外参数…
         -e MODEL_DIR="$MODEL_DIR" -e REMOTE_CODE="$REMOTE_CODE" \
         "$@" \
         "$IMAGE" \
-        bash -c "${GPU_SETUP:-}"' exec python /opt/voiceinput/server.py \
+        bash -c "${GPU_SETUP:-}"' exec python /opt/aiinput/server.py \
             --host 0.0.0.0 --port 10095 \
             --model-dir "$MODEL_DIR" --remote-code "$REMOTE_CODE" '"$EXTRA_OPTS"
     echo ">> $name 启动（日志: podman logs $name）"

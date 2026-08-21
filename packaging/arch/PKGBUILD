@@ -1,11 +1,11 @@
 # Arch PKGBUILD（由 packaging/arch/build.sh 在容器内驱动）
 # 打包产物：本地预编译 Flutter bundle + 当场构建的 addon
-pkgname=fcitx5-voice-input
+pkgname=fcitx5-ai-input
 pkgver=VERSION
 pkgrel=2
 pkgdesc="Fcitx5 voice input: ASR (FunASR streaming/local) + LLM-polished candidates with Flutter MD3 overlay"
 arch=('x86_64')
-url="https://github.com/DonKongPaPa/fcitx5-voice-input"
+url="https://github.com/DonKongPaPa/fcitx5-ai-input"
 license=('MIT')
 depends=('fcitx5' 'libpulse' 'fontconfig')
 makedepends=('cmake' 'gcc' 'wayland' 'fontconfig')

@@ -1,10 +1,10 @@
-Name:           fcitx5-voice-input
+Name:           fcitx5-ai-input
 Version:        0.2.0
 Release:        1%{?dist}
 Summary:        Fcitx5 voice input: ASR + LLM-polished candidates with Flutter overlay
 
 License:        MIT
-URL:            https://github.com/DonKongPaPa/fcitx5-voice-input
+URL:            https://github.com/DonKongPaPa/fcitx5-ai-input
 BuildArch:      x86_64
 Requires:       fcitx5
 Requires:       pulseaudio-utils
@@ -30,16 +30,16 @@ fcitx5-configtool.
 cp -a %{_stage_src}/usr %{buildroot}/
 
 %files
-%{_libdir}/fcitx5/voiceinput.so
-%{_libdir}/fcitx5-voiceinput/libflutter_engine.so
-%{_libdir}/fcitx5-voiceinput/libsherpa-onnx-c-api.so
-%{_libdir}/fcitx5-voiceinput/libonnxruntime.so
-%{_libdir}/fcitx5-voiceinput/funasr-server/server.py
-%{_libdir}/fcitx5-voiceinput/funasr-server/funasr-serve.sh
-/usr/share/fcitx5/addon/voiceinput.conf
-/usr/share/fcitx5-voiceinput/flutter/flutter_assets
-/usr/share/fcitx5-voiceinput/flutter/icudtl.dat
-/usr/share/doc/fcitx5-voice-input/LICENSE
+%{_libdir}/fcitx5/aiinput.so
+%{_libdir}/fcitx5-aiinput/libflutter_engine.so
+%{_libdir}/fcitx5-aiinput/libsherpa-onnx-c-api.so
+%{_libdir}/fcitx5-aiinput/libonnxruntime.so
+%{_libdir}/fcitx5-aiinput/funasr-server/server.py
+%{_libdir}/fcitx5-aiinput/funasr-server/funasr-serve.sh
+/usr/share/fcitx5/addon/aiinput.conf
+/usr/share/fcitx5-aiinput/flutter/flutter_assets
+/usr/share/fcitx5-aiinput/flutter/icudtl.dat
+/usr/share/doc/fcitx5-ai-input/LICENSE
 
 %changelog
 * Tue Aug 19 2026 DonKongPaPa <raykent92@gmail.com> - 0.2.0-1

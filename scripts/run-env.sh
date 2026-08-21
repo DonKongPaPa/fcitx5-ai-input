@@ -7,7 +7,7 @@ ENV_NAME="${1:?用法: run-env.sh niri|kde|gnome}"
 shift || true
 
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
-IMAGE="localhost/voiceinput-${ENV_NAME}:latest"
+IMAGE="localhost/aiinput-${ENV_NAME}:latest"
 OUT="$ROOT/artifacts/envcheck/${ENV_NAME}"
 mkdir -p "$OUT"
 

@@ -1,4 +1,4 @@
-/* voiceinput 测试应用（GTK4）
+/* aiinput 测试应用（GTK4）
  *
  * 单窗口文本框：焦点/文本变化时以 JSON 行输出当前缓冲区（stdout + TEST_RESULT_FILE），
  * 供管线断言 fcitx5 提交的文本是否落点正确。
@@ -60,7 +60,7 @@ static void on_focus_in(GtkEventControllerFocus *ctrl, gpointer user_data) {
 static gboolean on_tick(gpointer user_data) {
     static int sec = 0;
     char buf[64];
-    snprintf(buf, sizeof(buf), "voiceinput-testapp-gtk %d", sec++);
+    snprintf(buf, sizeof(buf), "aiinput-testapp-gtk %d", sec++);
     gtk_window_set_title(GTK_WINDOW(user_data), buf);
     gtk_widget_queue_draw(GTK_WIDGET(user_data));
     return G_SOURCE_CONTINUE;
@@ -73,7 +73,7 @@ static gboolean on_timeout(gpointer user_data) {
 
 static void on_activate(GtkApplication *app, gpointer user_data) {
     GtkWidget *win = gtk_application_window_new(app);
-    gtk_window_set_title(GTK_WINDOW(win), "voiceinput-testapp-gtk");
+    gtk_window_set_title(GTK_WINDOW(win), "aiinput-testapp-gtk");
     gtk_window_set_default_size(GTK_WINDOW(win), 640, 220);
 
     GtkWidget *entry = gtk_entry_new();
@@ -100,7 +100,7 @@ static void on_activate(GtkApplication *app, gpointer user_data) {
 }
 
 int main(int argc, char **argv) {
-    GtkApplication *app = gtk_application_new("org.fcitx5.voiceinput.testapp",
+    GtkApplication *app = gtk_application_new("org.fcitx5.aiinput.testapp",
                                               G_APPLICATION_DEFAULT_FLAGS);
     g_signal_connect(app, "activate", G_CALLBACK(on_activate), NULL);
     int rc = g_application_run(G_APPLICATION(app), argc, argv);

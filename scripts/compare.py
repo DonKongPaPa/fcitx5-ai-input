@@ -72,7 +72,7 @@ def main():
         trs.append(f"<tr class='{cls}'>{tds}</tr>")
 
     OUT.write_text(f"""<!DOCTYPE html>
-<html lang="zh"><head><meta charset="utf-8"><title>voiceinput 方案对比</title>
+<html lang="zh"><head><meta charset="utf-8"><title>aiinput 方案对比</title>
 <style>
  body {{ font-family: sans-serif; margin: 2em; }}
  table {{ border-collapse: collapse; }}
@@ -81,7 +81,7 @@ def main():
  tr.ok td:nth-child(4) {{ color: #2e7d32; }}
  tr.bad td:nth-child(4) {{ color: #c62828; font-weight: bold; }}
 </style></head><body>
-<h1>fcitx5-voice-input 方案对比</h1>
+<h1>fcitx5-ai-input 方案对比</h1>
 <p>历史运行汇总（用于评估各环境/录屏方案的资源干扰与延迟）。数值为容器内采样均值。</p>
 <table>
 <tr>{''.join(f'<th>{h}</th>' for h in header)}</tr>

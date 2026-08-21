@@ -1,7 +1,7 @@
 {
   "$schema": "https://json-schema.org/draft/2020-12/schema",
-  "$id": "https://github.com/DonKongPaPa/fcitx5-voice-input/report.schema.json",
-  "title": "fcitx5-voice-input 测试报告",
+  "$id": "https://github.com/DonKongPaPa/fcitx5-ai-input/report.schema.json",
+  "title": "fcitx5-ai-input 测试报告",
   "description": "每份报告对应一个环境一次运行；schema_version 管理格式演进",
   "type": "object",
   "required": ["schema_version", "run_id", "git", "env", "build", "summary", "cases"],

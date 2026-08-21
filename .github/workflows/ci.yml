@@ -27,8 +27,8 @@ jobs:
           pacman -S --noconfirm --needed dbus >/dev/null
           DESTDIR=/tmp/stage cmake --install /tmp/b >/dev/null
           cp -a /tmp/stage/usr/* /usr/
-          # 共存场景：普通输入法为默认 IM（voiceinput 是 Module，无 IM 条目）
+          # 共存场景：普通输入法为默认 IM（aiinput 是 Module，无 IM 条目）
           mkdir -p "$HOME/.config/fcitx5"
           printf "[Groups/0]\nName=Default\nDefault Layout=us\nDefaultIM=keyboard-us\n\n[Groups/0/Items/0]\nName=keyboard-us\n\n[Group Order]\n0=Default\n" > "$HOME/.config/fcitx5/profile"
           dbus-run-session -- bash -c 'fcitx5 -d --replace >/tmp/f.log 2>&1; sleep 4'
-          grep -q "VoiceInput module loaded" /tmp/f.log && echo "✓ module loaded"
+          grep -q "AiInput module loaded" /tmp/f.log && echo "✓ module loaded"

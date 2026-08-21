@@ -14,7 +14,7 @@ if command -v apt-get >/dev/null 2>&1; then
     apt-get install -y -qq --no-install-recommends         build-essential cmake pkg-config gettext git dbus         libfcitx5core-dev libfcitx5utils-dev libfcitx5config-dev         fcitx5-modules-dev fcitx5 libwayland-dev libwayland-bin         libfontconfig1-dev pulseaudio-utils libglib2.0-bin >/dev/null 2>&1 || true
 fi
 
-NAME="fcitx5-voice-input-$VERSION"
+NAME="fcitx5-ai-input-$VERSION"
 STAGE=/tmp/tarball/$NAME
 rm -rf /tmp/tarball; mkdir -p "$STAGE"
 
@@ -31,7 +31,7 @@ rm -rf "$STAGE/artifacts" "$STAGE/.git" "$STAGE/build" \
 
 # Flutter JIT 资产 + raw embedder 引擎 .so + sherpa-onnx 运行时（自带，
 # 免安装期下载）
-FLUTTER_DIR="${FLUTTER_ASSETS:-$SRC/artifacts/dist/share/fcitx5-voiceinput/flutter}"
+FLUTTER_DIR="${FLUTTER_ASSETS:-$SRC/artifacts/dist/share/fcitx5-aiinput/flutter}"
 ENGINE="${FLUTTER_ENGINE_LIBRARY:-$SRC/.cache/flutter-embedder/libflutter_engine.so}"
 SHERPA_CAPI="${SHERPA_ONNX_LIBRARY:-$SRC/.cache/sherpa-onnx/libsherpa-onnx-c-api.so}"
 [ -d "$FLUTTER_DIR/flutter_assets" ] || { echo "!! flutter_assets 缺失: $FLUTTER_DIR"; exit 1; }

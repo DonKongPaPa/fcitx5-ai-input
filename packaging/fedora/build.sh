@@ -16,13 +16,13 @@ bash "$SRC/packaging/common/stage.sh"
 RPMDIR=/tmp/rpm
 rm -rf "$RPMDIR"
 mkdir -p "$RPMDIR"/{BUILDROOT,SPECS,BUILD,SRPMS}
-cp "$SRC/packaging/fedora/fcitx5-voice-input.spec" "$RPMDIR/SPECS/"
-sed -i "s/^Version:.*/Version:        $VERSION/" "$RPMDIR/SPECS/fcitx5-voice-input.spec"
+cp "$SRC/packaging/fedora/fcitx5-ai-input.spec" "$RPMDIR/SPECS/"
+sed -i "s/^Version:.*/Version:        $VERSION/" "$RPMDIR/SPECS/fcitx5-ai-input.spec"
 
 rpmbuild -bb --define "_topdir $RPMDIR" \
     --define "_stage_src $SRC/packaging/out/stage" \
     --define "debug_package %{nil}" \
-    "$RPMDIR/SPECS/fcitx5-voice-input.spec" >/tmp/rpmbuild.log 2>&1 || {
+    "$RPMDIR/SPECS/fcitx5-ai-input.spec" >/tmp/rpmbuild.log 2>&1 || {
         echo "!! rpmbuild 失败"; grep -aE "^error|not found" /tmp/rpmbuild.log | head; exit 1; }
 
 PKG=$(ls "$RPMDIR"/RPMS/x86_64/*.rpm)

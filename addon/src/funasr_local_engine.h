@@ -1,5 +1,5 @@
-#ifndef _FCITX5_VOICEINPUT_FUNASR_LOCAL_ENGINE_H_
-#define _FCITX5_VOICEINPUT_FUNASR_LOCAL_ENGINE_H_
+#ifndef _FCITX5_AIINPUT_FUNASR_LOCAL_ENGINE_H_
+#define _FCITX5_AIINPUT_FUNASR_LOCAL_ENGINE_H_
 
 #include "asr_engine.h"
 #include "audio_capture.h"
@@ -21,7 +21,7 @@ namespace fcitx {
 class FunAsrLocalEngine : public AsrEngine {
 public:
     bool streamingCapable() const override { return false; }
-    void start(EventLoop *loop, const VoiceInputConfig *config,
+    void start(EventLoop *loop, const AiInputConfig *config,
                Callbacks cbs) override;
     void stop() override;    // 落盘 → 起 CLI → onFinish
     void cancel() override;  // 杀采集/CLI，丢弃
@@ -34,7 +34,7 @@ private:
     void teardownAll();
 
     EventLoop *loop_ = nullptr;
-    const VoiceInputConfig *config_ = nullptr;
+    const AiInputConfig *config_ = nullptr;
     Callbacks cbs_;
     bool finished_ = false;
 
@@ -51,4 +51,4 @@ private:
 
 } // namespace fcitx
 
-#endif // _FCITX5_VOICEINPUT_FUNASR_LOCAL_ENGINE_H_
+#endif // _FCITX5_AIINPUT_FUNASR_LOCAL_ENGINE_H_

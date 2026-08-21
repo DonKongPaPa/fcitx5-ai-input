@@ -1,6 +1,6 @@
 # KDE 测试环境（最小：仅 kwin，不装完整 Plasma 会话）
 # 无头方案：kwin 嵌套运行在 cage(wlroots headless) 里，录屏走 cage 的 screencopy
-FROM voiceinput-host:latest
+FROM aiinput-host:latest
 
 USER root
 

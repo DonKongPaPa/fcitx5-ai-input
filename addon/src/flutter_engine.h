@@ -1,5 +1,5 @@
-#ifndef _FCITX5_VOICEINPUT_FLUTTER_ENGINE_H_
-#define _FCITX5_VOICEINPUT_FLUTTER_ENGINE_H_
+#ifndef _FCITX5_AIINPUT_FLUTTER_ENGINE_H_
+#define _FCITX5_AIINPUT_FLUTTER_ENGINE_H_
 
 #include <fcitx-utils/event.h>
 
@@ -135,9 +135,9 @@ private:
     std::atomic<bool> shuttingDown_{false};
 };
 
-// JSON 字符串转义（voiceinput.cpp 组 update 消息用）
+// JSON 字符串转义（aiinput.cpp 组 update 消息用）
 std::string flutterJsonEscape(const std::string &s);
 
 } // namespace fcitx
 
-#endif // _FCITX5_VOICEINPUT_FLUTTER_ENGINE_H_
+#endif // _FCITX5_AIINPUT_FLUTTER_ENGINE_H_

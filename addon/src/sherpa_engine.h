@@ -1,5 +1,5 @@
-#ifndef _FCITX5_VOICEINPUT_SHERPA_ENGINE_H_
-#define _FCITX5_VOICEINPUT_SHERPA_ENGINE_H_
+#ifndef _FCITX5_AIINPUT_SHERPA_ENGINE_H_
+#define _FCITX5_AIINPUT_SHERPA_ENGINE_H_
 
 #include "asr_engine.h"
 
@@ -9,8 +9,8 @@
 
 namespace fcitx {
 
-// 模型目录解析（voiceinput.cpp 健康检查共用）
-std::string resolveSherpaModelDir(const VoiceInputConfig *config);
+// 模型目录解析（aiinput.cpp 健康检查共用）
+std::string resolveSherpaModelDir(const AiInputConfig *config);
 std::string findModelFile(const std::string &dir, const char *prefix, bool preferInt8);
 
 /**
@@ -30,7 +30,7 @@ class SherpaOnnxEngine : public AsrEngine {
 public:
     bool streamingCapable() const override { return true; }
 
-    void start(EventLoop *loop, const VoiceInputConfig *config,
+    void start(EventLoop *loop, const AiInputConfig *config,
                Callbacks cbs) override;
     void stop() override;
     void cancel() override;
@@ -38,10 +38,10 @@ public:
 private:
     void finishSession(const std::string &text);
     void teardownAll();
-    void initOfflineRecognizer(const VoiceInputConfig *config);
+    void initOfflineRecognizer(const AiInputConfig *config);
 
     EventLoop *loop_ = nullptr;
-    const VoiceInputConfig *config_ = nullptr;
+    const AiInputConfig *config_ = nullptr;
     Callbacks cbs_;
     bool finished_ = false;
 
@@ -63,4 +63,4 @@ private:
 
 } // namespace fcitx
 
-#endif // _FCITX5_VOICEINPUT_SHERPA_ENGINE_H_
+#endif // _FCITX5_AIINPUT_SHERPA_ENGINE_H_

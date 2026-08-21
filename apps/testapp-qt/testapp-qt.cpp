@@ -1,4 +1,4 @@
-// voiceinput 测试应用（Qt6）
+// aiinput 测试应用（Qt6）
 //
 // 与 testapp-gtk 等价：单窗口 QLineEdit，焦点/文本变化时输出 JSON 行
 // （stdout + TEST_RESULT_FILE），内置 500ms 重绘定时器保证录屏帧连续。
@@ -50,7 +50,7 @@ int main(int argc, char *argv[]) {
     QApplication app(argc, argv);
 
     QWidget win;
-    win.setWindowTitle(QStringLiteral("voiceinput-testapp-qt"));
+    win.setWindowTitle(QStringLiteral("aiinput-testapp-qt"));
     win.resize(640, 220);
 
     auto *edit = new QLineEdit;

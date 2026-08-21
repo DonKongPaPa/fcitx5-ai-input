@@ -1,5 +1,5 @@
-#ifndef _FCITX5_VOICEINPUT_CONFIG_H_
-#define _FCITX5_VOICEINPUT_CONFIG_H_
+#ifndef _FCITX5_AIINPUT_CONFIG_H_
+#define _FCITX5_AIINPUT_CONFIG_H_
 
 #include <fcitx-config/configuration.h>
 #include <fcitx-config/enum.h>
@@ -33,7 +33,7 @@ FCITX_CONFIG_ENUM_I18N_ANNOTATION(FunASRQuantKind, "None", "Int8");
 // configtool 由该 Configuration 自动生成设置页；保存后经 D-Bus 触发
 // reloadConfig()，参数即时生效（无需重启 fcitx5）
 FCITX_CONFIGURATION(
-    VoiceInputConfig,
+    AiInputConfig,
 
     // —— 组1 触发 ——
     Option<KeyList> triggerKeys{
@@ -52,7 +52,7 @@ FCITX_CONFIGURATION(
     Option<std::string> sherpaModelDir{
         this, "SherpaModelDir",
         "Sherpa 模型目录（含 encoder.int8.onnx/decoder.int8.onnx/tokens.txt；"
-        "留空 = ~/.local/share/fcitx5-voiceinput/models/sherpa-paraformer，"
+        "留空 = ~/.local/share/fcitx5-aiinput/models/sherpa-paraformer，"
         "下载见 scripts/fetch-sherpa-models.sh）",
         ""};
     Option<int> sherpaNumThreads{
@@ -118,17 +118,17 @@ FCITX_CONFIGURATION(
         FunASRQuantKind::None};
     Option<std::string> funasrServerCmd{
         this, "FunASRServerCmd",
-        "服务启动脚本路径（如 /opt/fcitx5-voice-input/scripts/funasr-serve.sh，"
+        "服务启动脚本路径（如 /opt/fcitx5-ai-input/scripts/funasr-serve.sh，"
         "支持 FUNASR_PORT/FUNASR_DEVICE/FUNASR_QUANT 环境变量）",
         ""};
 
     // —— 组2.2 FunASR 本地（GGUF 档）——
     Option<std::string> funasrLocalCmd{
         this, "FunASRLocalCmd", "llama-funasr-cli 可执行文件路径",
-        "/usr/lib/fcitx5-voiceinput/llamacpp/llama-funasr-cli"};
+        "/usr/lib/fcitx5-aiinput/llamacpp/llama-funasr-cli"};
     Option<std::string> funasrLocalModelDir{
         this, "FunASRLocalModelDir", "GGUF 模型目录（encoder/llm/vad/tiktoken）",
-        "/usr/lib/fcitx5-voiceinput/gguf"};
+        "/usr/lib/fcitx5-aiinput/gguf"};
     Option<std::string> funasrLocalQuant{
         this, "FunASRLocalQuant", "LLM 量化（q8_0=更准 或 q4km=更小）",
         "q8_0"};
@@ -151,4 +151,4 @@ FCITX_CONFIGURATION(
 
 } // namespace fcitx
 
-#endif // _FCITX5_VOICEINPUT_CONFIG_H_
+#endif // _FCITX5_AIINPUT_CONFIG_H_

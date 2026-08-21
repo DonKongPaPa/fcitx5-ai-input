@@ -111,7 +111,7 @@ jobs:
           prerelease: ${{ contains(github.ref_name, '-') }}
           generate_release_notes: true
           body: |
-            ## fcitx5-voice-input ${{ github.ref_name }}
+            ## fcitx5-ai-input ${{ github.ref_name }}
 
             语音输入：任何输入法激活时长按右 Ctrl 即用（无需切换，与
             rime/pinyin 共存）。内置 sherpa-onnx CPU 流式引擎（零显存，
@@ -121,9 +121,9 @@ jobs:
             configtool 热改设置。
 
             ### 安装
-            - **Arch**: `pacman -U fcitx5-voice-input-*.pkg.tar.zst`
-            - **Debian**: `apt install ./fcitx5-voice-input_*.deb`
-            - **Fedora**: `dnf install fcitx5-voice-input-*.rpm`
+            - **Arch**: `pacman -U fcitx5-ai-input-*.pkg.tar.zst`
+            - **Debian**: `apt install ./fcitx5-ai-input_*.deb`
+            - **Fedora**: `dnf install fcitx5-ai-input-*.rpm`
             - **其他**: 解压 tarball 后 `sudo bash install.sh`（需 gcc/cmake/fcitx5-dev/wayland-dev）
 
             ### 依赖

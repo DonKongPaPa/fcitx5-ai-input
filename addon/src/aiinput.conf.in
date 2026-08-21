@@ -1,9 +1,9 @@
 [Addon]
-Name=Voice Input
+Name=AI Input
 Category=Module
 Version=@PROJECT_VERSION@
 Type=SharedLibrary
-Library=voiceinput
+Library=aiinput
 Depends=dbus
 Priority=Default
 Enabled=True
