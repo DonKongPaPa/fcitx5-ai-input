@@ -636,11 +636,11 @@ void AiInputEngine::startFlutterEngine() {
 static double animScaleOf(const AiInputConfig &cfg) {
     switch (cfg.uiAnimSpeed.value()) {
     case UiAnimSpeedKind::Fast:
-        return 0.6;
+        return 1.0; // 旧基线（220/180ms 档）
     case UiAnimSpeedKind::Normal:
-        return 1.0;
+        return 1.6;
     case UiAnimSpeedKind::Slow:
-        return 1.8;
+        return 3.0; // 用户反馈 1.8× 仍偏快——慢速挡加大到 3×
     }
     return 1.0;
 }

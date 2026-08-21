@@ -32,9 +32,9 @@ const double kMaxW = 420;
 // 超出边界 ~11px）；指针坐标是含余量的表面局部坐标，Padding 天然吸收
 const double kShadowPad = 12;
 
-// 全局动画时长：基准毫秒 × 挡位系数（与 C++ animScaleOf 对应；默认
-// 慢速 1.8——挡位由 C++ 随每条 update/font 消息下发）
-const double kDefaultAnimScale = 1.8;
+// 全局动画时长：基准毫秒 × 挡位系数（与 C++ animScaleOf 对应：快 1.0/
+// 标准 1.6/慢 3.0，默认慢速——挡位由 C++ 随每条 update/font 消息下发）
+const double kDefaultAnimScale = 3.0;
 Duration animDurOf(double scale, int baseMs) =>
     Duration(milliseconds: (baseMs * scale).round());
 
