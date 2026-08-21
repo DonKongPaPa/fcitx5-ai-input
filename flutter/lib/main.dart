@@ -13,7 +13,9 @@
 //
 // 协议（channel 'fcitx5/flutterui'，JSONMethodCodec）：
 //   C++→Dart : MethodCall('update', {state, partial, elapsed_ms, final,
-//                 timeout_ms, candidates, hover})
+//                 timeout_ms, candidates, hover, anim})
+//              anim = 动画速率挡位系数（慢 1.8/标准 1.0/快 0.6，
+//              configtool UiAnimSpeed 热改即时生效；font 消息同样携带）
 //   Dart→C++ : invokeMethod('ready')
 //              invokeMethod('resize', {w, h})     // 含阴影余量的整窗尺寸
 //              invokeMethod('selectCandidate', {index})
@@ -29,6 +31,12 @@ const double kMaxW = 420;
 // 卡片阴影余量：快照区比卡片四周各大这么多（BoxShadow blur10+spread1
 // 超出边界 ~11px）；指针坐标是含余量的表面局部坐标，Padding 天然吸收
 const double kShadowPad = 12;
+
+// 全局动画时长：基准毫秒 × 挡位系数（与 C++ animScaleOf 对应；默认
+// 慢速 1.8——挡位由 C++ 随每条 update/font 消息下发）
+const double kDefaultAnimScale = 1.8;
+Duration animDurOf(double scale, int baseMs) =>
+    Duration(milliseconds: (baseMs * scale).round());
 
 Future<void> main() async {
   WidgetsFlutterBinding.ensureInitialized();
@@ -178,6 +186,7 @@ class _VoiceUiHomeState extends State<VoiceUiHome> {
   int _localElapsed = 0;
   String? _sysFontFamily; // classicui 跟随字体（FontLoader 注册后启用）
   double _fontScale = 1.0; // size/12 基准
+  double _animScale = kDefaultAnimScale; // 动画速率挡位系数
   ThemeData? _renderTheme; // build 捕获的规范化渲染主题（测量同源用）
   int _mouseHover = -1; // 鼠标悬停行（本地状态；键盘选择走 data.hover）
   Size _lastReported = Size.zero;
@@ -203,6 +212,9 @@ class _VoiceUiHomeState extends State<VoiceUiHome> {
   Future<dynamic> _onCall(MethodCall call) async {
     if (call.method != 'update') return null;
     final msg = (call.arguments as Map?)?.cast<String, dynamic>() ?? {};
+    // 动画挡位随任意消息到达（update/font 均携带）
+    final animScale = (msg['anim'] as num?)?.toDouble();
+    if (animScale != null) _animScale = animScale;
     // 字体跟随（C++ fontconfig 解析后下发）
     if (msg['state'] == 'font') {
       await _applyFont(msg['path'] as String? ?? '',
@@ -355,7 +367,7 @@ class _VoiceUiHomeState extends State<VoiceUiHome> {
               child: AnimatedSize(
                 // 状态切换的尺寸过渡：窗口尺寸直接跳到目标态（透明区无感），
                 // 卡片本体在窗口内平滑伸缩，避免逐帧 resize 的反馈循环
-                duration: const Duration(milliseconds: 220),
+                duration: animDurOf(_animScale, 220),
                 curve: Curves.easeOutCubic,
                 alignment: Alignment.topCenter,
                 child: SizedBox(
@@ -364,6 +376,7 @@ class _VoiceUiHomeState extends State<VoiceUiHome> {
                   child: VoicePanel(
                     data: _data,
                     mouseHover: _mouseHover,
+                    animScale: _animScale,
                     onHover: _onHoverRow,
                     onSelect: _selectCandidate,
                   ),
@@ -383,12 +396,14 @@ class _VoiceUiHomeState extends State<VoiceUiHome> {
 class VoicePanel extends StatelessWidget {
   final SessionData data;
   final int mouseHover; // 鼠标悬停行（-1=无）
+  final double animScale; // 全局动画速率挡位系数
   final ValueChanged<int> onHover;
   final ValueChanged<int> onSelect;
   const VoicePanel({
     super.key,
     required this.data,
     required this.mouseHover,
+    required this.animScale,
     required this.onHover,
     required this.onSelect,
   });
@@ -411,7 +426,7 @@ class VoicePanel extends StatelessWidget {
         // 状态间内容过渡（录音指示器 → 结果 → 候选）：尺寸变化由外层
         // AnimatedSize 平滑衔接，这里补内容层的淡入淡出
         child: AnimatedSwitcher(
-          duration: const Duration(milliseconds: 180),
+          duration: animDurOf(animScale, 180),
           switchInCurve: Curves.easeOut,
           switchOutCurve: Curves.easeIn,
           child: KeyedSubtree(
@@ -424,6 +439,7 @@ class VoicePanel extends StatelessWidget {
                 : _SessionBody(
                     data: data,
                     mouseHover: mouseHover,
+                    animScale: animScale,
                     onHover: onHover,
                     onSelect: onSelect),
           ),
@@ -445,11 +461,13 @@ String _fmtMs(int ms) {
 class _SessionBody extends StatelessWidget {
   final SessionData data;
   final int mouseHover; // 鼠标悬停行（-1=无）
+  final double animScale; // 全局动画速率挡位系数
   final ValueChanged<int> onHover;
   final ValueChanged<int> onSelect;
   const _SessionBody({
     required this.data,
     required this.mouseHover,
+    required this.animScale,
     required this.onHover,
     required this.onSelect,
   });
@@ -491,7 +509,7 @@ class _SessionBody extends StatelessWidget {
         Padding(
           padding: const EdgeInsets.fromLTRB(12, 8, 12, 2),
           child: AnimatedSwitcher(
-            duration: const Duration(milliseconds: 180),
+            duration: animDurOf(animScale, 180),
             child: switch (data.state) {
               UiState.recording => Row(
                   key: const ValueKey('rec'),
@@ -564,7 +582,7 @@ class _SessionBody extends StatelessWidget {
         ),
         // —— 文本区（AnimatedSize 平滑长高/推入润色行）——
         AnimatedSize(
-          duration: const Duration(milliseconds: 220),
+          duration: animDurOf(animScale, 220),
           curve: Curves.easeOutCubic,
           alignment: Alignment.topCenter,
           child: Column(
@@ -575,7 +593,7 @@ class _SessionBody extends StatelessWidget {
                 TweenAnimationBuilder<double>(
                   // 润色行入场：淡入（推展由外层 AnimatedSize 完成）
                   tween: Tween(begin: 0, end: 1),
-                  duration: const Duration(milliseconds: 220),
+                  duration: animDurOf(animScale, 220),
                   builder: (_, v, child) => Opacity(opacity: v, child: child),
                   child: _row(theme, cs,
                       index: 0,
@@ -633,19 +651,19 @@ class _SessionBody extends StatelessWidget {
     final hovered = interactive &&
         (mouseHover >= 0 ? mouseHover : data.hover) == index;
     Widget core = AnimatedContainer(
-      duration: const Duration(milliseconds: 100),
+      duration: animDurOf(animScale, 100),
       color: hovered ? cs.surfaceContainerHighest : null,
       child: ListTile(
         dense: true,
         visualDensity: VisualDensity.compact,
         contentPadding: const EdgeInsets.symmetric(horizontal: 12),
         leading: AnimatedOpacity(
-          duration: const Duration(milliseconds: 220),
+          duration: animDurOf(animScale, 220),
           opacity: interactive ? 1 : 0,
           child: _badge(cs, index + 1, primary: index == 0),
         ),
         title: AnimatedDefaultTextStyle(
-          duration: const Duration(milliseconds: 180),
+          duration: animDurOf(animScale, 180),
           style: style,
           child: Text(text, softWrap: true),
         ),

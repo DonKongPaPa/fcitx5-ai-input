@@ -632,10 +632,30 @@ void AiInputEngine::startFlutterEngine() {
     }
 }
 
+// 动画速率挡位 → 全局时长系数（Dart 侧所有动画按此缩放）
+static double animScaleOf(const AiInputConfig &cfg) {
+    switch (cfg.uiAnimSpeed.value()) {
+    case UiAnimSpeedKind::Fast:
+        return 0.6;
+    case UiAnimSpeedKind::Normal:
+        return 1.0;
+    case UiAnimSpeedKind::Slow:
+        return 1.8;
+    }
+    return 1.0;
+}
+
+std::string AiInputEngine::animField() const {
+    std::ostringstream as;
+    as << ",\"anim\":" << animScaleOf(config_);
+    return as.str();
+}
+
 void AiInputEngine::pushUiState() {
     if (!flutter_ || !flutter_->running()) {
         return;
     }
+    const std::string anim = animField();
     // 内联预编辑同步：录音=partial，结果=final，候选=当前
     // 选中行（方向键/hover 变化经 pushUiState 一并同步）——组合文本与
     // 卡片选中项恒一致，上屏时 commitString 原地替换，视觉无缝
@@ -671,13 +691,13 @@ void AiInputEngine::pushUiState() {
         flutter_->sendUpdate(
             "{\"state\":\"recording\",\"partial\":\"" +
             flutterJsonEscape(partial_) + "\",\"elapsed_ms\":" +
-            std::to_string((nowUs() - recordStartUs_) / 1000) + "}");
+            std::to_string((nowUs() - recordStartUs_) / 1000) + anim + "}");
         break;
     case State::Result:
         flutter_->sendUpdate(
             "{\"state\":\"result\",\"final\":\"" +
             flutterJsonEscape(finalText_) + "\",\"timeout_ms\":" +
-            std::to_string(config_.popupTimeoutMs.value()) + "}");
+            std::to_string(config_.popupTimeoutMs.value()) + anim + "}");
         break;
     case State::Candidates: {
         std::string arr;
@@ -692,12 +712,12 @@ void AiInputEngine::pushUiState() {
         flutter_->sendUpdate(
             "{\"state\":\"candidates\",\"final\":\"" +
             flutterJsonEscape(finalText_) + "\",\"candidates\":[" + arr +
-            "],\"hover\":" + std::to_string(hover) + "}");
+            "],\"hover\":" + std::to_string(hover) + anim + "}");
         break;
     }
     case State::Idle:
     case State::Pressing:
-        flutter_->sendUpdate("{\"state\":\"idle\"}");
+        flutter_->sendUpdate("{\"state\":\"idle\"" + anim + "}");
         break;
     }
 }
@@ -808,7 +828,8 @@ void AiInputEngine::sendFontToUi() {
             }
             fontResolving_ = false;
             if (json.length() > 4) {
-                flutter_->sendUpdate("{\"state\":\"font\"," + json.substr(1));
+                flutter_->sendUpdate("{\"state\":\"font\"" + animField() +
+                                     "," + json.substr(1));
                 FCITX_INFO() << "AiInput: UI 字体 → " << json;
             }
             return true;
@@ -1234,7 +1255,7 @@ void AiInputEngine::enterIdle() {
         popup_->hide();
     }
     if (flutter_ && flutter_->running()) {
-        flutter_->sendUpdate("{\"state\":\"idle\"}");
+flutter_->sendUpdate("{\"state\":\"idle\"" + animField() + "}");
     }
     state_ = State::Idle;
     thresholdTimer_.reset();

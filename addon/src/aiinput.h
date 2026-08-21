@@ -148,7 +148,8 @@ private:
 
     // —— Flutter（进程内嵌入引擎）——
     void startFlutterEngine();
-    void pushUiState();                  // 状态机 → Dart update 推送
+    void pushUiState();
+    std::string animField() const; // 动画速率字段（update/font 消息共用）                  // 状态机 → Dart update 推送
     void onFlutterMessage(const std::string &method,
                           const std::string &argsJson);
 

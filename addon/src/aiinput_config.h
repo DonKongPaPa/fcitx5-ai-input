@@ -30,6 +30,11 @@ FCITX_CONFIG_ENUM_I18N_ANNOTATION(FunASRDeviceKind, "Auto", "Gpu", "Cpu");
 FCITX_CONFIG_ENUM(FunASRQuantKind, None, Int8);
 FCITX_CONFIG_ENUM_I18N_ANNOTATION(FunASRQuantKind, "None", "Int8");
 
+// UI 动画速率挡位：卡片全部动画时长按挡位系数缩放（随 update/font
+// 消息下发 Dart，configtool 热改即时生效）
+FCITX_CONFIG_ENUM(UiAnimSpeedKind, Slow, Normal, Fast);
+FCITX_CONFIG_ENUM_I18N_ANNOTATION(UiAnimSpeedKind, "Slow", "Normal", "Fast");
+
 // configtool 由该 Configuration 自动生成设置页；保存后经 D-Bus 触发
 // reloadConfig()，参数即时生效（无需重启 fcitx5）
 FCITX_CONFIGURATION(
@@ -147,6 +152,10 @@ FCITX_CONFIGURATION(
     Option<int> popupTimeoutMs{
         this, "PopupTimeoutMs", "结果停留时长（毫秒，200-10000，无候选时自动上屏）",
         1500};
+    Option<UiAnimSpeedKind, NoConstrain<UiAnimSpeedKind>, DefaultMarshaller<UiAnimSpeedKind>, UiAnimSpeedKindI18NAnnotation> uiAnimSpeed{
+        this, "UiAnimSpeed",
+        "卡片动画速率（慢速/标准/快速，缩放全部过渡动画时长；默认慢速）",
+        UiAnimSpeedKind::Slow};
 );
 
 } // namespace fcitx
