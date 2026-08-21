@@ -6,8 +6,9 @@
 //
 // 尺寸策略（收窄卡片：与文本框等宽过于抢眼）：
 //   宽度 clamp(TextPainter 实测内容宽, 280, 420)；录音态固定 280；
-//   高度按状态：录音 104 / 结果按行数 / 候选按条数。
-//   流式 partial 尾部优先（放不下截头加省略号，最新内容始终可见）。
+//   高度按状态：录音 104 / 结果与候选按换行行数增长（长文本软换行
+//   完整显示不截断，测量见 panelSizeFor）；录音态流式 partial 尾部优先
+//   （放不下截头加省略号，最新内容始终可见）。
 //   实际窗口尺寸 = 卡片 + 四周 kShadowPad 阴影余量，变化时回发 resize。
 //
 // 协议（channel 'fcitx5/flutterui'，JSONMethodCodec）：
@@ -60,6 +61,16 @@ int lineCount(String text, TextStyle style, double maxWidth) {
     textDirection: TextDirection.ltr,
   )..layout(maxWidth: maxWidth);
   return tp.computeLineMetrics().length;
+}
+
+/// 多行文本块高：按可用宽排版后的总像素高（换行的高度测量）
+double textBlockHeight(String text, TextStyle style, double maxWidth) {
+  if (text.isEmpty) return 0;
+  final tp = TextPainter(
+    text: TextSpan(text: text, style: style),
+    textDirection: TextDirection.ltr,
+  )..layout(maxWidth: maxWidth);
+  return tp.height;
 }
 
 /// 尾部优先：maxLines 行内放不下时截头加省略号（流式最新内容优先可见）
@@ -141,16 +152,18 @@ Size panelSizeFor(ThemeData theme, SessionData d, double fontScale) {
       return Size(280 * fontScale, 104 * fontScale);
     case UiState.result:
       {
-        // 3 行放不下就加宽（步进 40*scale），仍放不下按 3 行截断
+        // 加宽到 3 行内放下为止（步进 40*scale）；到 maxW 仍超就换行
+        // 增长高度（完整显示不截断）。测量宽打 0.95 折：可变字体的
+        // 测量偏差只会让测量行数 ≥ 渲染行数，高度只多不少，不溢出
         var w = minW;
         var lines = lineCount(d.resultText, theme.textTheme.titleMedium!,
-            w - 24 /* 左右 padding */);
+            (w - 24) * 0.95);
         while (lines > 3 && w < maxW) {
           w += 40 * fontScale;
-          lines =
-              lineCount(d.resultText, theme.textTheme.titleMedium!, w - 24);
+          lines = lineCount(d.resultText, theme.textTheme.titleMedium!,
+              (w - 24) * 0.95);
         }
-        return Size(w, (60 + lines.clamp(1, 3) * 24) * fontScale);
+        return Size(w, (60 + lines * 24) * fontScale);
       }
     case UiState.candidates:
       {
@@ -169,7 +182,20 @@ Size panelSizeFor(ThemeData theme, SessionData d, double fontScale) {
         // 余量会贴边"超出"。360 下限让头部在任何字体下都有一倍余量，
         // 不再依赖测量精度
         final w = (textW + 22 + 16 + 24 + 8).clamp(360.0 * fontScale, maxW);
-        return Size(w, (44 + items.length * 52 + 8 /* 首条 subtitle */) * fontScale);
+        // 换行增量：按 ListTile 内实际文本可用宽（contentPadding 12×2 +
+        // 徽标 20 + leading 间距 16）测多行块高，超出单行高的部分逐行
+        // 加进卡片高。测量宽同样打 0.95 折（同上，只多不少）
+        double extraH = 0;
+        final textAvail = (w - 12 * 2 - 20 - 16) * 0.95;
+        for (var i = 0; i < items.length; i++) {
+          final style = i == 0
+              ? theme.textTheme.titleSmall!
+              : theme.textTheme.bodyMedium!;
+          final block = textBlockHeight(items[i], style, textAvail);
+          final single = textBlockHeight(items[i], style, double.infinity);
+          if (block > single) extraH += block - single;
+        }
+        return Size(w, (44 + items.length * 52 + 8) * fontScale + extraH);
       }
     case UiState.idle:
       return Size(280 * fontScale, 64 * fontScale);
@@ -544,8 +570,7 @@ class _ResultBody extends StatelessWidget {
               alignment: Alignment.centerLeft,
               child: Text(
                 data.resultText,
-                maxLines: 3,
-                overflow: TextOverflow.ellipsis,
+                softWrap: true,
                 style: Theme.of(context).textTheme.titleMedium,
               ),
             ),
@@ -646,10 +671,11 @@ class _CandidatesBody extends StatelessWidget {
                           color: i == 0 ? cs.onPrimary : cs.onSurfaceVariant,
                         )),
                   ),
+                  // 长候选软换行完整显示（高度增量由 panelSizeFor 同步
+                  // 测量；不再单行省略——长文本必须可审阅）
                   title: Text(
                     items[i],
-                    maxLines: 1,
-                    overflow: TextOverflow.ellipsis,
+                    softWrap: true,
                     style: i == 0 ? theme.textTheme.titleSmall : theme.textTheme.bodyMedium,
                   ),
                   subtitle: i == 0
