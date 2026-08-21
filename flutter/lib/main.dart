@@ -26,11 +26,12 @@ import 'dart:io';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 
-const double kMinW = 280;
 const double kMaxW = 420;
 // 卡片阴影余量：快照区比卡片四周各大这么多（BoxShadow blur10+spread1
 // 超出边界 ~11px）；指针坐标是含余量的表面局部坐标，Padding 天然吸收
 const double kShadowPad = 12;
+// 增长余量：内容自然长高的当前帧先落在透明余量里，resize 下一帧跟上
+const double kGrowthSlack = 16;
 
 // 全局动画时长：基准毫秒 × 挡位系数（与 C++ animScaleOf 对应：快 1.0/
 // 标准 1.6/慢 3.0，默认慢速——挡位由 C++ 随每条 update/font 消息下发）
@@ -47,29 +48,6 @@ Future<void> main() async {
     ..addFont(rootBundle.load('assets/fonts/NotoSansSC-Regular.otf'));
   await loader.load();
   runApp(const VoiceUiApp());
-}
-
-// ---------------------------------------------------------------------------
-// 文本测量（TextPainter，官方 API）
-// ---------------------------------------------------------------------------
-double measureWidth(String text, TextStyle style) {
-  if (text.isEmpty) return 0;
-  final tp = TextPainter(
-    text: TextSpan(text: text, style: style),
-    textDirection: TextDirection.ltr,
-    maxLines: 1,
-  )..layout();
-  return tp.width;
-}
-
-/// 多行文本块高：按可用宽排版后的总像素高（换行的高度测量）
-double textBlockHeight(String text, TextStyle style, double maxWidth) {
-  if (text.isEmpty) return 0;
-  final tp = TextPainter(
-    text: TextSpan(text: text, style: style),
-    textDirection: TextDirection.ltr,
-  )..layout(maxWidth: maxWidth);
-  return tp.height;
 }
 
 // ---------------------------------------------------------------------------
@@ -119,80 +97,6 @@ class VoiceUiApp extends StatelessWidget {
   }
 }
 
-/// 面板尺寸决策（会话三态同一张卡片同一公式——状态间过渡零跳变）。
-/// 行为自绘（顶对齐、显式 padding），测量与布局一一对应；头部固定
-/// 44·fontScale 槽位（内容差异不再影响下方行位置）。theme 必须与渲染
-/// 主题同源（同字体族+字号缩放）
-// 头部固定槽高度（会话三态共用）：录音头最高（计时两行文字随字号
-// 缩放，16pt 下实测超出 44·fs 常数曾撑出 4.5px 溢出），按其实测内容
-// 取高；布局与尺寸公式共用本函数
-double sessionHeaderSlotH(ThemeData theme) {
-  final titleH =
-      textBlockHeight('00:00', theme.textTheme.titleMedium!, double.infinity);
-  final labelH =
-      textBlockHeight('正在听…', theme.textTheme.labelSmall!, double.infinity);
-  final content = titleH + labelH > 36 ? titleH + labelH : 36.0;
-  // ×1.15 + 4：可变字体（MiSans VF）行高渲染 > 实测的恒定偏差余量，
-  // 静态字体下只是稍多一点头部呼吸空间
-  return 8 + content * 1.15 + 4;
-}
-
-Size panelSizeFor(ThemeData theme, SessionData d, double fontScale) {
-  final minW = 360 * fontScale, maxW = kMaxW * fontScale;
-  if (d.state == UiState.idle) {
-    return Size(280 * fontScale, 64 * fontScale);
-  }
-  // 行内容（text, style, tag）：录音=[partial]；结果=[final]；候选=
-  // [润色(带 tag), 原始(带 tag「识别结果」)]。录音末尾 partial 即原始
-  // 候选文本——过渡时宽度与行位置天然衔接
-  final rows = <(String, TextStyle, String?)>[];
-  switch (d.state) {
-    case UiState.recording:
-      rows.add((d.partial, theme.textTheme.bodyMedium!, null));
-    case UiState.result:
-      rows.add((d.resultText, theme.textTheme.titleMedium!, null));
-    case UiState.candidates:
-      final items = d.candidates.take(2).toList();
-      if (items.isNotEmpty) {
-        rows.add((items[0], theme.textTheme.titleSmall!, '润色版'));
-      }
-      if (items.length > 1) {
-        rows.add((items[1], theme.textTheme.bodyMedium!, '识别结果'));
-      }
-    case UiState.idle:
-      break;
-  }
-  // 宽度：最长行单行实测（徽标 20+间距 8+左右 padding 24+余量 8），
-  // clamp(360, 420)×fontScale
-  double textW = 0;
-  for (final r in rows) {
-    final need = measureWidth(r.$1, r.$2);
-    if (need > textW) textW = need;
-  }
-  final w = (textW + 20 + 8 + 24 + 8).clamp(minW, maxW);
-  // 高度 = 头部槽 44·fs + Σ 行（v-pad 12·fs + max(徽标 20, 文本块高) +
-  // tag 行高）+ 底部条。换行测量按 0.95×可用宽（悲观方向）：可变字体
-  // ±5% 偏差只会让测量行数 ≥ 渲染行数，不溢出
-  final textAvail = (w - 12 * 2 - 20 - 8) * 0.95;
-  final tagStyle = theme.textTheme.labelSmall!;
-  double h = sessionHeaderSlotH(theme);
-  for (final r in rows) {
-    // 块高 ×1.04：行高度量余量（可变字体逐行偏差随行数累积）
-    final block = textBlockHeight(
-            r.$1.isEmpty ? ' ' : r.$1, r.$2, textAvail) *
-        1.04;
-    h += 12 * fontScale + (20 * fontScale > block ? 20 * fontScale : block);
-    final tag = r.$3;
-    if (tag != null) {
-      h += textBlockHeight(tag, tagStyle, double.infinity) * 1.1 + 2;
-    }
-  }
-  final bar = (d.state == UiState.recording || d.state == UiState.result)
-      ? 6.0
-      : 0.0;
-  return Size(w, h + bar);
-}
-
 class VoiceUiHome extends StatefulWidget {
   const VoiceUiHome({super.key});
 
@@ -209,9 +113,9 @@ class _VoiceUiHomeState extends State<VoiceUiHome> {
   String? _sysFontFamily; // classicui 跟随字体（FontLoader 注册后启用）
   double _fontScale = 1.0; // size/12 基准
   double _animScale = kDefaultAnimScale; // 动画速率挡位系数
-  ThemeData? _renderTheme; // build 捕获的规范化渲染主题（测量同源用）
   int _mouseHover = -1; // 鼠标悬停行（本地状态；键盘选择走 data.hover）
   Size _lastReported = Size.zero;
+  final GlobalKey _cardKey = GlobalKey(); // 卡片实际尺寸回读（布局后）
 
   void _invoke(String method, [dynamic args]) {
     _ch.invokeMethod(method, args).catchError((_) => null);
@@ -290,31 +194,7 @@ class _VoiceUiHomeState extends State<VoiceUiHome> {
 
   void _update(SessionData d) {
     setState(() => _data = d);
-    // 窗口尺寸 = 卡片（已按当前字体测量）+ 阴影余量，变化即上报
-    // （C++ 侧据此更新引擎 metrics → 重排 → 下一帧即新尺寸，popup 池随帧自动重建）
-    final size = panelSizeFor(_measureTheme(), d, _fontScale);
-    final win = Size(size.width + kShadowPad * 2, size.height + kShadowPad * 2);
-    if (win != _lastReported) {
-      _lastReported = win;
-      // ceil：分数缩放（1.25/1.5）下物理像素取整回 logical 会偏小，
-      // 向上取整保证可用高度 ≥ 布局需求
-      _invoke('resize', {'w': win.width.ceil(), 'h': win.height.ceil()});
-    }
-  }
-
-  /// 测量主题：与 build 的渲染主题同源（同字体族 + 同字号缩放），否则
-  /// TextPainter 实测宽与实际渲染宽失配 → 溢出。注意：直接对裸
-  /// ThemeData().textTheme.apply(fontSizeFactor≠1) 会命中框架断言
-  /// （部分样式 fontSize 为 null）——Theme.of 返回的规范化主题才安全，
-  /// 故 build 时捕获、此处复用；兜底主题因子恒 1（断言允许）
-  ThemeData _measureTheme() {
-    if (_renderTheme != null) return _renderTheme!;
-    final brightness = WidgetsBinding.instance.platformDispatcher.platformBrightness;
-    return ThemeData(
-      useMaterial3: true,
-      fontFamily: 'NotoSansSC',
-      colorScheme: ColorScheme.fromSeed(seedColor: const Color(0xFF6750A4), brightness: brightness),
-    );
+    // 尺寸上报统一走 build 的后置帧回读（实际渲染尺寸）
   }
 
   /// 系统字体应用：文件加载进 FontLoader('SysFont')，12pt 为 1.0 基准缩放
@@ -366,43 +246,64 @@ class _VoiceUiHomeState extends State<VoiceUiHome> {
         fontSizeFactor: _fontScale,
       ),
     );
-    _renderTheme = theme; // 测量同源（_measureTheme 复用）
-    // 测量与渲染同源：size 已含 fontScale，不再二次放大
-    final size = panelSizeFor(theme, _data, _fontScale);
-    // 非状态变化路径（如字体热更）的尺寸上报兜底：后置帧上报
-    final win = Size(size.width + kShadowPad * 2, size.height + kShadowPad * 2);
-    if (win != _lastReported) {
-      WidgetsBinding.instance.addPostFrameCallback((_) {
-        if (!mounted || win == _lastReported) return;
-        _lastReported = win;
-        _invoke('resize', {'w': win.width.ceil(), 'h': win.height.ceil()});
-      });
-    }
+    // 尺寸上报：后置帧回读卡片实际渲染尺寸（任何字体/缩放都不会溢出
+    // ——内容从不被塞进预算尺寸的盒子里，窗口跟随内容）
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      final ro = _cardKey.currentContext?.findRenderObject();
+      if (ro is RenderBox && ro.hasSize && mounted) {
+        final win = Size(
+          ro.size.width + (kShadowPad + kGrowthSlack) * 2,
+          ro.size.height + (kShadowPad + kGrowthSlack) * 2,
+        );
+        if (win != _lastReported) {
+          _lastReported = win;
+          _invoke('resize', {'w': win.width.ceil(), 'h': win.height.ceil()});
+        }
+      }
+    });
     return Theme(
       data: theme,
       child: Scaffold(
         backgroundColor: Colors.transparent,
         body: Center(
+          // 窗口 = 上次上报尺寸：Align 向下传松约束，内容按自然尺寸布局
+          //（增长的一帧内新内容落在透明余量里，下一帧 resize 跟上——
+          // 结构上不可能出现 overflow 条纹，与字体测量无关）
           child: SizedBox(
-            width: size.width + kShadowPad * 2,
-            height: size.height + kShadowPad * 2,
-            child: Padding(
-              padding: const EdgeInsets.all(kShadowPad),
+            width: _lastReported.width,
+            height: _lastReported.height,
+            // OverflowBox 无界约束：卡片按自然尺寸布局（窗口 0×0 引导期
+            // 也能长出真实大小——Align/Padding 的松约束上限=窗口尺寸，
+            // 曾把尺寸回读环死锁在初始 56×56）；超出窗口的部分由 surface
+            // 裁掉，kGrowthSlack 余量兜住 resize 跟进前的过渡帧
+            child: OverflowBox(
+              alignment: Alignment.center,
+              minWidth: 0,
+              maxWidth: double.infinity,
+              minHeight: 0,
+              maxHeight: double.infinity,
               child: AnimatedSize(
-                // 状态切换的尺寸过渡：窗口尺寸直接跳到目标态（透明区无感），
-                // 卡片本体在窗口内平滑伸缩，避免逐帧 resize 的反馈循环
+                // 卡片尺寸动画（视觉过渡）：child 自然尺寸布局，
+                // AnimatedSize 只裁显不约束
                 duration: animDurOf(_animScale, 220),
                 curve: Curves.easeOutCubic,
                 alignment: Alignment.topCenter,
-                child: SizedBox(
-                  width: size.width,
-                  height: size.height,
-                  child: VoicePanel(
-                    data: _data,
-                    mouseHover: _mouseHover,
-                    animScale: _animScale,
-                    onHover: _onHoverRow,
-                    onSelect: _selectCandidate,
+                child: ConstrainedBox(
+                  // 宽度治理（纯几何）：窄内容撑到下限、长单行在上限
+                  // 换行——与字体无关
+                  constraints: BoxConstraints(
+                    minWidth: 360 * _fontScale,
+                    maxWidth: 420 * _fontScale,
+                  ),
+                  child: KeyedSubtree(
+                    key: _cardKey,
+                    child: VoicePanel(
+                      data: _data,
+                      mouseHover: _mouseHover,
+                      animScale: _animScale,
+                      onHover: _onHoverRow,
+                      onSelect: _selectCandidate,
+                    ),
                   ),
                 ),
               ),
@@ -563,9 +464,11 @@ class _SessionBodyState extends State<_SessionBody> {
       crossAxisAlignment: CrossAxisAlignment.stretch,
       mainAxisSize: MainAxisSize.min,
       children: [
-        // —— 头部（固定 44·fs 槽：内容交叉淡化，高度恒定不顶动行）——
-        SizedBox(
-          height: sessionHeaderSlotH(theme),
+        // —— 头部（min 高度托底：录音头是最高的状态，槽高保下方行不因
+        // 头部切换上跳；可变字体下内容若再高一点则自由撑开——只托底
+        // 不封顶，结构上不会溢出）——
+        ConstrainedBox(
+          constraints: const BoxConstraints(minHeight: 56),
           child: Align(
             alignment: Alignment.topLeft,
             child: Padding(
