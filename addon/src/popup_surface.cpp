@@ -490,9 +490,9 @@ void VoicePopup::beginPreeditProbe(InputContext *ic) {
     }
     // 可见组合文本「语音输入中」逐字打出：每字一次组合变化=每字一次
     // 报文机会（一次性整串 set 只有一次组合变化，报文可有可无）。
-    // preedit 永不入文；录音中由 updatePreeditText 把流式 partial 灌进
-    // 来——组合增长=打拼音的等价物，应用随文字增长持续重报矩形，卡片
-    // 实时跟随。上屏时 commitString 按协议替换 preedit（自清洁）
+    // preedit 永不入文、且全程恒为这五个字（流式/候选文本只在卡片里
+    // 展示）——组合长度恒定，光标矩形不随识别进度行进，卡片稳定锚在
+    // 开始位置。上屏时 commitString 按协议替换 preedit（自清洁）
     static const char *const kProbe = "\u8bed\u97f3\u8f93\u5165\u4e2d"; // 语音输入中
     Text preedit(std::string(kProbe, 3)); // 首字「语」
     ic->inputPanel().setClientPreedit(preedit);
@@ -506,25 +506,10 @@ void VoicePopup::beginPreeditProbe(InputContext *ic) {
     FCITX_INFO() << "VoicePopup: 预输入探针已置（可见组合文本，逼应用重报光标矩形）";
 }
 
-// 探针逐字未完时排队的 partial，打完放行（持锁）
-void VoicePopup::flushPendingPreeditLocked() {
-    if (!hasPendingPreedit_) {
-        return;
-    }
-    hasPendingPreedit_ = false;
-    if (auto *ic = icRef_.get()) {
-        ic->inputPanel().setClientPreedit(Text(pendingPreedit_));
-        ic->updatePreedit();
-    }
-}
-
 void VoicePopup::typeProbeNext(InputContext *ic) {
     static const char *const kProbe =
         "\u8bed\u97f3\u8f93\u5165\u4e2d"; // 语音输入中（每字 3 字节）
     if (!ic || !preeditProbeActive_ || probeTypingIdx_ >= 5) {
-        if (probeTypingIdx_ >= 5) {
-            flushPendingPreeditLocked(); // 打完：放行排队的 partial
-        }
         probeTypeTimer_.reset();
         return;
     }
@@ -559,7 +544,6 @@ void VoicePopup::endPreeditProbe() {
     }
     preeditProbeActive_ = false;
     probeTypingIdx_ = 5;
-    hasPendingPreedit_ = false;
     if (auto *ic = icRef_.get()) {
         ic->inputPanel().setClientPreedit(Text());
         ic->updatePreedit();
@@ -580,25 +564,6 @@ void VoicePopup::primePreedit(InputContext *ic) {
     beginPreeditProbe(ic);
 }
 
-// 录音中把流式 partial 写入组合文本：文字增长 → 应用重报矩形 →
-// 合成器实时挪卡片（classicui 打拼音的等价机制）。仅在探针挂着时
-void VoicePopup::updatePreeditText(const std::string &text) {
-    std::lock_guard<std::mutex> lock(mutex_);
-    if (!preeditProbeActive_) {
-        return;
-    }
-    if (probeTypingIdx_ < 5) {
-        // 逐字未完：排队等打完（后到覆盖先到，永远显示最新）
-        pendingPreedit_ = text;
-        hasPendingPreedit_ = true;
-        return;
-    }
-    probeTypeTimer_.reset();
-    if (auto *ic = icRef_.get()) {
-        ic->inputPanel().setClientPreedit(Text(text));
-        ic->updatePreedit();
-    }
-}
 
 // 判定挂起结算 → layer 底部（持锁，两个触发点共用：8s 保险丝、录音
 // 结束——结果/候选卡片必须显示，不能再等矩形）

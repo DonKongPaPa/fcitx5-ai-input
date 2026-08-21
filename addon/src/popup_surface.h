@@ -106,10 +106,6 @@ public:
     // 探针逐字打出：一次性整串 set 只有一次组合变化、报文可有可无；
     // 逐字 = 每字一次组合变化 = 每字一次报文机会
     void typeProbeNext(InputContext *ic);
-    void flushPendingPreeditLocked(); // 逐字打完后放行排队的 partial
-    // 录音中把流式 partial 写进组合文本（探针挂着时）——组合增长逼
-    // 应用持续重报矩形，卡片实时跟随文字
-    void updatePreeditText(const std::string &text);
     // surface 切换（结算回退 layer）或判定挂起解除（矩形到达放开首帧）
     // 时回调：引擎需要向新 surface 重推一帧 UI
     void setModeSwitchHandler(std::function<void()> h) {
@@ -247,10 +243,6 @@ private:
     bool preeditProbeActive_ = false; // 预输入探针是否在挂
     int probeTypingIdx_ = 0; // 探针逐字进度（5=打完）
     std::unique_ptr<EventSourceTime> probeTypeTimer_;
-    // 逐字未完时 partial 先排队：让探针五个字打完再出识别字（流式出字
-    // 不过早打断探针）；打完即放行，后到覆盖先到
-    std::string pendingPreedit_;
-    bool hasPendingPreedit_ = false;
     // 应用级跟随知识（进程生命周期）：矩形事件或上屏记账成功过的程序
     // 名集合——重聚焦产生新 IC 时凭此首下即跟随（Electron 的 text-input
     // 按会话重建 IC，IC 级标志每次清零）

@@ -656,36 +656,10 @@ void AiInputEngine::pushUiState() {
         return;
     }
     const std::string anim = animField();
-    // 内联预编辑同步：录音=partial，结果=final，候选=当前
-    // 选中行（方向键/hover 变化经 pushUiState 一并同步）——组合文本与
-    // 卡片选中项恒一致，上屏时 commitString 原地替换，视觉无缝
-    if (popup_) {
-        std::string inline_;
-        switch (state_) {
-        case State::Recording:
-            inline_ = partial_;
-            break;
-        case State::Result:
-            inline_ = finalText_;
-            break;
-        case State::Candidates:
-            if (!candidates_.empty()) {
-                const int row = uiHoverRow_ >= 0
-                                    ? std::min(uiHoverRow_,
-                                               static_cast<int>(
-                                                   candidates_.size()) - 1)
-                                    : keyboardRow_;
-                inline_ = candidates_[row];
-            }
-            break;
-        case State::Idle:
-        case State::Pressing:
-            break;
-        }
-        if (!inline_.empty()) { // 空 = 不动（清除只走 endPreeditProbe）
-            popup_->updatePreeditText(inline_);
-        }
-    }
+    // 预编辑组合文本恒为探针的「语音输入中」直到上屏/取消——不随流式
+    // partial 或候选选中项变化（组合文本变长会让光标矩形随换行行进、
+    // 窗口跟着跳；候选期替换组合文本偶发把卡片从文末拽回首行）。
+    // 流式/候选文本只在卡片里展示，上屏时 commitString 原地替换
     switch (state_) {
     case State::Recording:
         flutter_->sendUpdate(
@@ -925,7 +899,7 @@ bool AiInputEngine::handleKey(const Key &key, bool pressed,
             commitCandidate(static_cast<size_t>(keyboardRow_), ic);
             return true;
         }
-        if (key.check(FcitxKey_Escape)) {
+        if (key.check(FcitxKey_Escape) || key.check(FcitxKey_BackSpace)) {
             uiNotify("cancelled");
             enterIdle();
             return true;
@@ -996,7 +970,8 @@ bool AiInputEngine::handleKey(const Key &key, bool pressed,
         break;
 
     case State::Recording:
-        if (pressed && key.check(FcitxKey_Escape)) {
+        if (pressed && (key.check(FcitxKey_Escape) ||
+                        key.check(FcitxKey_BackSpace))) {
             // 录音中取消：中止会话，不产生任何提交
             if (asr_) {
                 asr_->cancel();
@@ -1145,10 +1120,7 @@ void AiInputEngine::finishRecording() {
 }
 
 void AiInputEngine::onAsrPartial(const std::string &text) {
-    if (popup_ && state_ == State::Recording && !text.empty()) {
-        // 空 partial 不清组合（停止瞬间的空回调控件曾让内联文本消失）
-        popup_->updatePreeditText(text); // 组合文本增长 → 矩形实时走
-    }
+    // partial 只进卡片展示（组合文本恒为「语音输入中」，见 pushUiState）
     if (state_ != State::Recording) {
         return;
     }
