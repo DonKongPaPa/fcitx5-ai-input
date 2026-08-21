@@ -33,6 +33,12 @@ extern "C" const wl_interface xdg_popup_interface = {};
 
 namespace fcitx {
 
+static uint64_t nowUsSafe() {
+    return std::chrono::duration_cast<std::chrono::microseconds>(
+               std::chrono::steady_clock::now().time_since_epoch())
+        .count();
+}
+
 static constexpr int kDefaultWidth = 360;
 static constexpr int kDefaultHeight = 200;
 
@@ -265,42 +271,68 @@ void VoicePopup::pointerButton(void *data, wl_pointer *, uint32_t,
     }
 }
 
+// wayland 模块监听注册（可重试）：addon 加载顺序不保证 wayland 先于本
+// 模块——构造时拿不到就在 prepare()（首个焦点事件，彼时全部 addon 已
+// 加载）再试。注意必须在不持 mutex_ 的上下文调用：对已建立的连接，
+// 注册回调会立即同步触发 onConnectionCreated（它自己要拿锁）
+void VoicePopup::ensureWaylandWatcher() {
+    if (connHandler_) {
+        return;
+    }
+    auto *wayland = instance_->addonManager().addon("wayland", true);
+    if (!wayland) {
+        return; // 仍未加载，下次 prepare 再试
+    }
+    connHandler_ = wayland->call<IWaylandModule::addConnectionCreatedCallback>(
+        [this](const std::string &name, wl_display *display, FocusGroup *) {
+            onConnectionCreated(name, display);
+        });
+    closeHandler_ = wayland->call<IWaylandModule::addConnectionClosedCallback>(
+        [this](const std::string &, wl_display *) {
+            // 连接已死：只清指针，不 destroy（对象已随 display 失效）
+            std::lock_guard<std::mutex> lock(mutex_);
+            surface_ = nullptr;
+            surfaceCompat_ = nullptr;
+            viewport_ = nullptr;
+            fscale_ = nullptr;
+            popup_ = nullptr;
+            im_ = nullptr;
+            layerSurface_ = nullptr;
+            layerShell_ = nullptr;
+            layerConfigured_ = false;
+            emptyRegion_ = nullptr;
+            pool_ = nullptr;
+            for (auto &b : buffers_) {
+                b = nullptr;
+            }
+            pixels_ = nullptr;
+            compositor_ = nullptr;
+            shm_ = nullptr;
+            seat_ = nullptr;
+            pointer_ = nullptr;
+            output_ = nullptr;
+            hasCursorRect_ = false;
+            display_ = nullptr;
+        });
+    FCITX_INFO() << "VoicePopup: wayland connection watcher registered";
+}
+
+// 构造时 wayland 可能尚未加载（addon 加载顺序不保证）：1s 重试，30 次
+// 仍不成功则放弃（prepare() 每次焦点事件的重试仍是兜底）。回调返回
+// false 即源自动移除——不要在回调内 reset 自身源（破坏分发）
+void VoicePopup::scheduleWatcherRetry() {
+    watcherRetry_ = instance_->eventLoop().addTimeEvent(
+        CLOCK_MONOTONIC, nowUsSafe() + 1'000'000ull, 0,
+        [this](EventSourceTime *, uint64_t) {
+            ensureWaylandWatcher();
+            return connHandler_ == nullptr && ++watcherTries_ < 30;
+        });
+}
+
 VoicePopup::VoicePopup(Instance *instance) : instance_(instance) {
-    if (auto *wayland = instance_->addonManager().addon("wayland", true)) {
-        connHandler_ = wayland->call<IWaylandModule::addConnectionCreatedCallback>(
-            [this](const std::string &name, wl_display *display, FocusGroup *) {
-                onConnectionCreated(name, display);
-            });
-        closeHandler_ = wayland->call<IWaylandModule::addConnectionClosedCallback>(
-            [this](const std::string &, wl_display *) {
-                // 连接已死：只清指针，不 destroy（对象已随 display 失效）
-                std::lock_guard<std::mutex> lock(mutex_);
-                surface_ = nullptr;
-                surfaceCompat_ = nullptr;
-                viewport_ = nullptr;
-                fscale_ = nullptr;
-                popup_ = nullptr;
-                im_ = nullptr;
-                layerSurface_ = nullptr;
-                layerShell_ = nullptr;
-                layerConfigured_ = false;
-                emptyRegion_ = nullptr;
-                pool_ = nullptr;
-                for (auto &b : buffers_) {
-                    b = nullptr;
-                }
-                pixels_ = nullptr;
-                compositor_ = nullptr;
-                shm_ = nullptr;
-                seat_ = nullptr;
-                pointer_ = nullptr;
-                output_ = nullptr;
-                hasCursorRect_ = false;
-                display_ = nullptr;
-            });
-        FCITX_INFO() << "VoicePopup: wayland connection watcher registered";
-    } else {
-        FCITX_WARN() << "VoicePopup: wayland module unavailable";
+    ensureWaylandWatcher();
+    if (!connHandler_) {
+        scheduleWatcherRetry();
     }
 }
 
@@ -486,12 +518,6 @@ void VoicePopup::flushPendingPreeditLocked() {
         ic->inputPanel().setClientPreedit(Text(pendingPreedit_));
         ic->updatePreedit();
     }
-}
-
-static uint64_t nowUsSafe() {
-    return std::chrono::duration_cast<std::chrono::microseconds>(
-               std::chrono::steady_clock::now().time_since_epoch())
-        .count();
 }
 
 void VoicePopup::typeProbeNext(InputContext *ic) {
@@ -890,6 +916,9 @@ static void paintTestPattern(uint8_t *argb, int w, int h) {
 }
 
 void VoicePopup::prepare(InputContext *ic) {
+    // 先补注册（若构造时 wayland 未加载）：不得持锁——对已建立连接
+    // 注册回调会立即同步触发 onConnectionCreated（它要拿锁）
+    ensureWaylandWatcher();
     std::lock_guard<std::mutex> lock(mutex_);
     // 光标矩形诊断：fcitx 核心从前端（wayland text-input / XIM spot）汇总。
     // 不打 frontendName()——那是 5.1 API（bookworm 5.0.21 编不过）；前端

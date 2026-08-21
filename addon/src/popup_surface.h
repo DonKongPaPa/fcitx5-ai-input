@@ -180,6 +180,12 @@ public:
 
 private:
     void onConnectionCreated(const std::string &name, wl_display *display);
+    // wayland 监听注册（构造时可能未加载：定时重试 + prepare 兜底；
+    // 不持锁调用——对已建立连接注册回调会立即同步触发 onConnectionCreated）
+    void ensureWaylandWatcher();
+    void scheduleWatcherRetry();
+    int watcherTries_ = 0;
+    std::unique_ptr<EventSourceTime> watcherRetry_;
     void setupDisplay(wl_display *display);
     bool ensurePopup(InputContext *ic, bool atShow = false); // IC 变化时重建 surface+popup
     void destroyPopupSurface();
