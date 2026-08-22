@@ -1,5 +1,5 @@
-#ifndef _FCITX5_VOICEINPUT_POPUP_SURFACE_H_
-#define _FCITX5_VOICEINPUT_POPUP_SURFACE_H_
+#ifndef _FCITX5_AIINPUT_POPUP_SURFACE_H_
+#define _FCITX5_AIINPUT_POPUP_SURFACE_H_
 
 #include <fcitx/instance.h>
 #include <fcitx-utils/event.h>
@@ -106,10 +106,6 @@ public:
     // 探针逐字打出：一次性整串 set 只有一次组合变化、报文可有可无；
     // 逐字 = 每字一次组合变化 = 每字一次报文机会
     void typeProbeNext(InputContext *ic);
-    void flushPendingPreeditLocked(); // 逐字打完后放行排队的 partial
-    // 录音中把流式 partial 写进组合文本（探针挂着时）——组合增长逼
-    // 应用持续重报矩形，卡片实时跟随文字
-    void updatePreeditText(const std::string &text);
     // surface 切换（结算回退 layer）或判定挂起解除（矩形到达放开首帧）
     // 时回调：引擎需要向新 surface 重推一帧 UI
     void setModeSwitchHandler(std::function<void()> h) {
@@ -135,7 +131,7 @@ public:
     }
     int logicalWidth() const { return logicalW_; }
     int logicalHeight() const { return logicalH_; }
-    // scale 变化回调（voiceinput 据此更新引擎 metrics 重渲物理帧）
+    // scale 变化回调（aiinput 据此更新引擎 metrics 重渲物理帧）
     void setScaleHandler(std::function<void(double)> h) {
         scaleHandler_ = std::move(h);
     }
@@ -180,9 +176,16 @@ public:
 
 private:
     void onConnectionCreated(const std::string &name, wl_display *display);
+    // wayland 监听注册（构造时可能未加载：定时重试 + prepare 兜底；
+    // 不持锁调用——对已建立连接注册回调会立即同步触发 onConnectionCreated）
+    void ensureWaylandWatcher();
+    void scheduleWatcherRetry();
+    int watcherTries_ = 0;
+    std::unique_ptr<EventSourceTime> watcherRetry_;
     void setupDisplay(wl_display *display);
     bool ensurePopup(InputContext *ic, bool atShow = false); // IC 变化时重建 surface+popup
     void destroyPopupSurface();
+    void syncViewportLocked(); // destination 与匹配 buffer 同 commit 下发
     void teardown();
     bool wantTopMode(InputContext *ic, bool atShow = false); // 定位模式决策（policy × 名单 × 矩形上报能力）
     std::string toLower(std::string s);
@@ -240,10 +243,6 @@ private:
     bool preeditProbeActive_ = false; // 预输入探针是否在挂
     int probeTypingIdx_ = 0; // 探针逐字进度（5=打完）
     std::unique_ptr<EventSourceTime> probeTypeTimer_;
-    // 逐字未完时 partial 先排队：让探针五个字打完再出识别字（流式出字
-    // 不过早打断探针）；打完即放行，后到覆盖先到
-    std::string pendingPreedit_;
-    bool hasPendingPreedit_ = false;
     // 应用级跟随知识（进程生命周期）：矩形事件或上屏记账成功过的程序
     // 名集合——重聚焦产生新 IC 时凭此首下即跟随（Electron 的 text-input
     // 按会话重建 IC，IC 级标志每次清零）
@@ -267,6 +266,7 @@ private:
     wl_shm_pool *pool_ = nullptr;
     wl_buffer *buffers_[2] = {nullptr, nullptr};
     uint8_t *pixels_ = nullptr; // mmap 的整个池
+    size_t poolCapacity_ = 0;   // 池容量字节（桶内 resize 只换 buffer）
     int poolFd_ = -1;
     int cur_ = 0;
     int width_ = 0, height_ = 0;
@@ -284,4 +284,4 @@ private:
 
 } // namespace fcitx
 
-#endif // _FCITX5_VOICEINPUT_POPUP_SURFACE_H_
+#endif // _FCITX5_AIINPUT_POPUP_SURFACE_H_

@@ -1,4 +1,4 @@
-# fcitx5-voice-input
+# fcitx5-ai-input
 
 Linux 语音输入，长在 fcitx5 里：**按住右 Ctrl 说话，松开出字**。任何输入法激活时都能用（rime / 拼音 / 键盘英语，无需切换），识别文本直接落在光标处。悬浮卡片由 Flutter 渲染，进程内嵌入 fcitx5，无独立窗口、无独立进程。
 
@@ -33,13 +33,13 @@ Linux 语音输入，长在 fcitx5 里：**按住右 Ctrl 说话，松开出字*
 
 ```bash
 # Arch
-pacman -U fcitx5-voice-input-*.pkg.tar.zst
+pacman -U fcitx5-ai-input-*.pkg.tar.zst
 # Debian
-apt install ./fcitx5-voice-input_*.deb
+apt install ./fcitx5-ai-input_*.deb
 # Fedora
-dnf install fcitx5-voice-input-*.rpm
+dnf install fcitx5-ai-input-*.rpm
 # 其他（需 gcc/cmake/fcitx5-dev/wayland-dev/fontconfig-dev）
-tar xf fcitx5-voice-input-*.tar.* && cd fcitx5-voice-input-* && sudo bash install.sh
+tar xf fcitx5-ai-input-*.tar.* && cd fcitx5-ai-input-* && sudo bash install.sh
 ```
 
 安装后重启 fcitx5 即生效（模块自动加载，无需添加输入法）。
@@ -47,10 +47,10 @@ tar xf fcitx5-voice-input-*.tar.* && cd fcitx5-voice-input-* && sudo bash instal
 使用内置 Sherpa 引擎（推荐，零显存）需下载模型（~200MB，sha256 锁定）：
 
 ```bash
-sudo bash /usr/lib/fcitx5-voiceinput/scripts/fetch-sherpa-runtime.sh   # 运行时库（首次）
-bash /usr/lib/fcitx5-voiceinput/scripts/fetch-sherpa-models.sh         # 模型 → ~/.local/share/fcitx5-voiceinput/models/
+sudo bash /usr/lib/fcitx5-aiinput/scripts/fetch-sherpa-runtime.sh   # 运行时库（首次）
+bash /usr/lib/fcitx5-aiinput/scripts/fetch-sherpa-models.sh         # 模型 → ~/.local/share/fcitx5-aiinput/models/
 # 可选：SenseVoice 松手重识别（中英混说/标点质量更好）
-bash /usr/lib/fcitx5-voiceinput/scripts/fetch-sherpa-models.sh --model sensevoice
+bash /usr/lib/fcitx5-aiinput/scripts/fetch-sherpa-models.sh --model sensevoice
 ```
 
 ## 使用
@@ -61,7 +61,7 @@ bash /usr/lib/fcitx5-voiceinput/scripts/fetch-sherpa-models.sh --model sensevoic
 4. 松开：直接上屏（默认），或进候选框选择（LLM 候选开启时）
    - 候选态：`1-9` 选对应项 / `↑↓←→` 换行 / `Enter` 选首项 / `Esc` 取消
    - 鼠标：hover 高亮 + 点击选择
-5. 录音中 `Esc` 取消整轮
+5. 录音中 `Esc` / `Backspace` 取消整轮（候选/结果态同义）
 
 所有行为可在 `fcitx5-configtool → 插件 → Voice Input` 中配置，保存即生效（无需重启）。
 
@@ -77,6 +77,7 @@ bash /usr/lib/fcitx5-voiceinput/scripts/fetch-sherpa-models.sh --model sensevoic
 | PositionFallbackApps | （空） | 强制底部居中的应用名单（程序名子串匹配） |
 | UIFont | （空） | 卡片字体（Pango 串；空=跟随 classicui 字体） |
 | LLMEnabled | true | 开启时结果先入候选框（当前润色为规则版，LLM 后端开发中） |
+| UiAnimSpeed | 慢速 | 卡片动画速率挡位（慢速/标准/快速，缩放全部过渡动画时长） |
 | PopupTimeoutMs | 1500 | 无候选时结果停留时长 |
 
 FunASR 服务档：configtool「模型部署」组配置 `FunASRAutoStart` + `FunASRServerCmd`（指向 `funasr-serve.sh`），连接失败自动拉起；或手动 `scripts/funasr-serve.sh start`。

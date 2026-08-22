@@ -1,7 +1,7 @@
-#ifndef _FCITX5_VOICEINPUT_ASR_ENGINE_H_
-#define _FCITX5_VOICEINPUT_ASR_ENGINE_H_
+#ifndef _FCITX5_AIINPUT_ASR_ENGINE_H_
+#define _FCITX5_AIINPUT_ASR_ENGINE_H_
 
-#include "voiceinput_config.h"
+#include "aiinput_config.h"
 
 #include <fcitx-utils/event.h>
 
@@ -30,7 +30,7 @@ public:
     };
     virtual ~AsrEngine() = default;
     virtual bool streamingCapable() const = 0;
-    virtual void start(EventLoop *loop, const VoiceInputConfig *config,
+    virtual void start(EventLoop *loop, const AiInputConfig *config,
                        Callbacks cbs) = 0;
     virtual void stop() = 0;
     // 取消会话：不触发 onFinish/onCancel 之外的收尾副作用
@@ -43,7 +43,7 @@ class DummyAsrEngine : public AsrEngine {
 public:
     bool streamingCapable() const override { return true; }
 
-    void start(EventLoop *loop, const VoiceInputConfig *config,
+    void start(EventLoop *loop, const AiInputConfig *config,
                Callbacks cbs) override {
         loop_ = loop;
         cbs_ = std::move(cbs);
@@ -167,7 +167,7 @@ private:
     }
 
     EventLoop *loop_ = nullptr;
-    const VoiceInputConfig *config_ = nullptr;
+    const AiInputConfig *config_ = nullptr;
     Callbacks cbs_;
     std::string text_;
     size_t pos_ = 0;
@@ -178,4 +178,4 @@ private:
 
 } // namespace fcitx
 
-#endif // _FCITX5_VOICEINPUT_ASR_ENGINE_H_
+#endif // _FCITX5_AIINPUT_ASR_ENGINE_H_

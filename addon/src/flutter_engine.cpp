@@ -504,7 +504,7 @@ void FlutterEngineHost::onPointer(PointerKind kind, double x, double y) {
     }
 }
 
-// 供 voiceinput.cpp 组 update JSON（导出 jsonEscape 语义）
+// 供 aiinput.cpp 组 update JSON（导出 jsonEscape 语义）
 std::string flutterJsonEscape(const std::string &s) { return jsonEscape(s); }
 
 } // namespace fcitx

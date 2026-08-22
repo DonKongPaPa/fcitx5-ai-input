@@ -1,5 +1,5 @@
-#ifndef _FCITX5_VOICEINPUT_AUDIO_CAPTURE_H_
-#define _FCITX5_VOICEINPUT_AUDIO_CAPTURE_H_
+#ifndef _FCITX5_AIINPUT_AUDIO_CAPTURE_H_
+#define _FCITX5_AIINPUT_AUDIO_CAPTURE_H_
 
 #include <fcitx-utils/event.h>
 
@@ -119,4 +119,4 @@ private:
 
 } // namespace fcitx
 
-#endif // _FCITX5_VOICEINPUT_AUDIO_CAPTURE_H_
+#endif // _FCITX5_AIINPUT_AUDIO_CAPTURE_H_

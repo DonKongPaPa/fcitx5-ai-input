@@ -144,7 +144,7 @@ def render_html(r: dict) -> str:
 
     return f"""<!DOCTYPE html>
 <html lang="zh"><head><meta charset="utf-8">
-<title>voiceinput 测试报告 {r['run_id']}</title>
+<title>aiinput 测试报告 {r['run_id']}</title>
 <style>
  body {{ font-family: sans-serif; margin: 2em; background: #fafafa; }}
  h1 {{ font-size: 1.4em; }}
@@ -154,7 +154,7 @@ def render_html(r: dict) -> str:
  table {{ border-collapse: collapse; }}
  th, td {{ text-align: left; padding: 4px 10px; border-bottom: 1px solid #eee; }}
 </style></head><body>
-<h1>fcitx5-voice-input 测试报告</h1>
+<h1>fcitx5-ai-input 测试报告</h1>
 <div class='meta'>
   <b>run_id</b> {r['run_id']} ｜ <b>环境</b> {r['env']['compositor']}（{r['env']['image']}）
    ｜ <b>fcitx5</b> {r['env'].get('fcitx5', '')}<br>

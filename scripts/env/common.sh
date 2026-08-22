@@ -18,7 +18,7 @@ export SDL_IM_MODULE=fcitx
 export GLFW_IM_MODULE=ibus   # flutter linux (glfw) 兼容
 export LIBGL_ALWAYS_SOFTWARE=1
 
-# 输入法环境只保留 voiceinput，避免其他引擎干扰
+# 输入法环境只保留 aiinput，避免其他引擎干扰
 export INPUT_METHOD=fcitx
 
 wait_wayland_socket() {
@@ -80,7 +80,7 @@ setup_virtual_mic() {
     local tries=0 id=""
     while [ $tries -lt 15 ]; do
         id="$(pactl load-module module-null-sink sink_name="$VIRTUAL_MIC_SINK" \
-            sink_properties=device.description=voiceinput-test-mic 2>>"$LOG_DIR/pactl-load.log" || true)"
+            sink_properties=device.description=aiinput-test-mic 2>>"$LOG_DIR/pactl-load.log" || true)"
         case "$id" in
             ''|*[!0-9]*) id="" ;;
         esac
@@ -112,7 +112,7 @@ play_to_mic() {
 start_fcitx5() {
     fcitx5 -d --replace >"$LOG_DIR/fcitx5.log" 2>&1
     wait_dbus_name org.fcitx.Fcitx5 60
-    # 只启用 voiceinput 输入法
+    # 只启用 aiinput 输入法
     # (配置由 run-test.sh 在启动前写入 ~/.config/fcitx5/profile)
 }
 

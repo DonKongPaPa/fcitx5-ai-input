@@ -1,4 +1,4 @@
-#include "voiceinput.h"
+#include "aiinput.h"
 #include "flutter_engine.h"
 #include "popup_surface.h"
 #include "funasr_local_engine.h"
@@ -128,7 +128,7 @@ static bool portListening(const std::string &host, int port) {
     return ok;
 }
 
-std::string VoiceInputEngine::healthCheckJson(bool deep) {
+std::string AiInputEngine::healthCheckJson(bool deep) {
     auto esc = [](const std::string &x) { return flutterJsonEscape(x); };
     std::ostringstream j;
     j << "{";
@@ -265,7 +265,7 @@ std::string VoiceInputEngine::healthCheckJson(bool deep) {
     return j.str();
 }
 
-void VoiceInputEngine::onEngineChanged(AsrEngineKind next) {
+void AiInputEngine::onEngineChanged(AsrEngineKind next) {
     if (next == lastEngine_) {
         return;
     }
@@ -286,18 +286,18 @@ void VoiceInputEngine::onEngineChanged(AsrEngineKind next) {
         findFunasrPid(port, nullptr) > 0) {
         // 切离 FunASR：服务在跑就停（释放 3.7G RAM + 5.1G VRAM）
         runServerScript(cmd, "stop");
-        FCITX_INFO() << "VoiceInput: 引擎切换→" << AsrEngineKindToString(next)
+        FCITX_INFO() << "AiInput: 引擎切换→" << AsrEngineKindToString(next)
                      << "，已停止 funasr 服务";
     } else if (next == AsrEngineKind::FunASR &&
                config_.funasrAutoStart.value() && !cmd.empty() &&
                findFunasrPid(port, nullptr) <= 0) {
         // 切回 FunASR 且 AutoStart：拉起（模型加载 15-60s）
         runServerScript(cmd, "start");
-        FCITX_INFO() << "VoiceInput: 引擎切换→FunASR（AutoStart），拉起服务";
+        FCITX_INFO() << "AiInput: 引擎切换→FunASR（AutoStart），拉起服务";
     }
 }
 
-void VoiceInputEngine::runServerScript(const std::string &cmd,
+void AiInputEngine::runServerScript(const std::string &cmd,
                                         const std::string &action) {
     if (pid_t pid = fork(); pid == 0) {
         setsid();
@@ -318,19 +318,26 @@ void VoiceInputEngine::runServerScript(const std::string &cmd,
 // 包管理器的新安装（加载了旧副本却无从察觉）。~/.local 保留给
 // tarball/手动安装（无系统包时兜底）
 static bool findFlutterAssets(std::string *assetsDir, std::string *icuPath) {
-    if (const char *env = getenv("VOICEINPUT_FLUTTER_DIR"); env && *env) {
+    // 旧环境变量（voiceinput 时代）仍认
+    const char *env = getenv("AIINPUT_FLUTTER_DIR");
+    if (!env || !*env) {
+        env = getenv("VOICEINPUT_FLUTTER_DIR");
+    }
+    if (env && *env) {
         *assetsDir = std::string(env) + "/flutter_assets";
         *icuPath = std::string(env) + "/icudtl.dat";
         return true;
     }
     std::vector<std::string> candidates;
+    candidates.push_back("/usr/share/fcitx5-aiinput/flutter");
+    candidates.push_back("/usr/local/share/fcitx5-aiinput/flutter");
+    // 旧包路径兜底（新旧包短暂共存/卸载残留场景）
     candidates.push_back("/usr/share/fcitx5-voiceinput/flutter");
-    candidates.push_back("/usr/local/share/fcitx5-voiceinput/flutter");
     if (const char *xdg = getenv("XDG_DATA_HOME"); xdg && *xdg) {
-        candidates.push_back(std::string(xdg) + "/fcitx5-voiceinput/flutter");
+        candidates.push_back(std::string(xdg) + "/fcitx5-aiinput/flutter");
     } else if (const char *home = getenv("HOME"); home && *home) {
         candidates.push_back(std::string(home) +
-                             "/.local/share/fcitx5-voiceinput/flutter");
+                             "/.local/share/fcitx5-aiinput/flutter");
     }
     for (const auto &dir : candidates) {
         std::string assets = dir + "/flutter_assets";
@@ -344,10 +351,10 @@ static bool findFlutterAssets(std::string *assetsDir, std::string *icuPath) {
     return false;
 }
 
-VoiceInputEngine::VoiceInputEngine(Instance *instance)
+AiInputEngine::AiInputEngine(Instance *instance)
     : instance_(instance) {
-    // 配置：~/.config/fcitx5/conf/voiceinput.config（不存在则用默认值）
-    readAsIni(config_, "conf/voiceinput.config");
+    // 配置：~/.config/fcitx5/conf/aiinput.config（不存在则用默认值）
+    readAsIni(config_, "conf/aiinput.config");
     reloadConfig();
 
     popup_ = std::make_unique<VoicePopup>(instance_);
@@ -477,7 +484,7 @@ VoiceInputEngine::VoiceInputEngine(Instance *instance)
         warmupTimer_->setOneShot();
     }
 
-    FCITX_INFO() << "VoiceInput module loaded (config: mode="
+    FCITX_INFO() << "AiInput module loaded (config: mode="
                  << TriggerModeToString(config_.triggerMode.value())
                  << " keys=" << config_.triggerKeys.value().size()
                  << " engine="
@@ -485,15 +492,15 @@ VoiceInputEngine::VoiceInputEngine(Instance *instance)
                  << ")——全局热键模式，与其他输入法共存";
 }
 
-VoiceInputEngine::~VoiceInputEngine() {
+AiInputEngine::~AiInputEngine() {
     // 故意泄漏 VoicePopup：addon unload 后 wayland display 仍会 dispatch
     // 若干轮（fractional scale/output 事件），销毁对象会让回调打进已释放
     // 内存（SIGTERM 退出即 SEGV）。进程退出统一回收
     (void)popup_.release();
 }
 
-AddonInstance *VoiceInputEngineFactory::create(AddonManager *manager) {
-    return new VoiceInputEngine(manager->instance());
+AddonInstance *AiInputEngineFactory::create(AddonManager *manager) {
+    return new AiInputEngine(manager->instance());
 }
 
 // 旧版默认回退名单：与新"跟随优先"语义冲突（chromium 上屏后可继承
@@ -502,18 +509,59 @@ static const char *kLegacyFallbackApps =
     "chromium,chrome,brave,msedge,vivaldi,opera,electron,vscode,code,"
     "slack,discord,teams,qq,telegram";
 
-void VoiceInputEngine::migrateLegacyConfig() {
+void AiInputEngine::migrateLegacyConfig() {
+    bool changed = false;
     if (config_.positionFallbackApps.value() == kLegacyFallbackApps) {
         config_.positionFallbackApps.setValue(std::string(""));
-        if (safeSaveAsIni(config_, "conf/voiceinput.config")) {
-            FCITX_INFO() << "VoiceInput: 迁移——旧默认定位回退名单已清空"
-                            "（跟随优先语义）";
+        changed = true;
+        FCITX_INFO() << "AiInput: 迁移——旧默认定位回退名单已清空"
+                        "（跟随优先语义）";
+    }
+    // 配置值里的旧**包内**路径改写（/usr/lib、/usr/share 下的路径随旧包
+    // 卸载而消失，必须指向新包位置）。~/.local 的用户数据路径不改写：
+    // 旧下载位置仍然有效（resolver 有回退），改写反而指到不存在的目录
+    static const char *const kPkgPaths[][2] = {
+        {"/usr/lib/fcitx5-voiceinput", "/usr/lib/fcitx5-aiinput"},
+        {"/usr/share/fcitx5-voiceinput", "/usr/share/fcitx5-aiinput"},
+    };
+    for (auto *opt : {&config_.sherpaModelDir, &config_.senseVoiceDir,
+                      &config_.funasrServerCmd, &config_.funasrLocalCmd,
+                      &config_.funasrLocalModelDir}) {
+        std::string v = opt->value();
+        for (const auto &pp : kPkgPaths) {
+            auto pos = v.find(pp[0]);
+            if (pos != std::string::npos) {
+                v.replace(pos, strlen(pp[0]), pp[1]);
+            }
         }
+        if (v != opt->value()) {
+            opt->setValue(v);
+            changed = true;
+        }
+    }
+    if (changed) {
+        safeSaveAsIni(config_, "conf/aiinput.config");
     }
 }
 
-void VoiceInputEngine::reloadConfig() {
-    readAsIni(config_, "conf/voiceinput.config");
+// 配置文件是否存在（PkgConfig 域 = ~/.config/fcitx5）
+static bool configFileExists(const char *path) {
+    auto f = StandardPath::global().open(StandardPath::Type::PkgConfig,
+                                         path, O_RDONLY);
+    return f.fd() >= 0;
+}
+
+void AiInputEngine::reloadConfig() {
+    // 搬迁：voiceinput 时代的配置文件 → aiinput（只搬一次；旧文件保留
+    // 不删，回滚旧包仍可用）
+    if (!configFileExists("conf/aiinput.config") &&
+        configFileExists("conf/voiceinput.config")) {
+        readAsIni(config_, "conf/voiceinput.config");
+        safeSaveAsIni(config_, "conf/aiinput.config");
+        FCITX_INFO() << "AiInput: 配置已迁移 voiceinput.config → "
+                        "aiinput.config";
+    }
+    readAsIni(config_, "conf/aiinput.config");
     migrateLegacyConfig();
     if (popup_) { // 定位策略热更新（PositionMode/PositionFallbackApps）
         popup_->setPositionPolicy(config_.positionMode.value(),
@@ -524,12 +572,12 @@ void VoiceInputEngine::reloadConfig() {
 
 // configtool 保存链路：D-Bus SetConfig → setConfig（基类默认 no-op）。
 // 与 classicui 同模式：载入 + 落盘 + 应用
-void VoiceInputEngine::setConfig(const RawConfig &config) {
+void AiInputEngine::setConfig(const RawConfig &config) {
     auto prev = config_.asrEngine.value();
     config_.load(config, true);
     migrateLegacyConfig();
-    if (safeSaveAsIni(config_, "conf/voiceinput.config")) {
-        FCITX_INFO() << "VoiceInput: configtool 保存已落盘";
+    if (safeSaveAsIni(config_, "conf/aiinput.config")) {
+        FCITX_INFO() << "AiInput: configtool 保存已落盘";
     }
     if (config_.asrEngine.value() != prev) {
         onEngineChanged(config_.asrEngine.value());
@@ -542,7 +590,7 @@ void VoiceInputEngine::setConfig(const RawConfig &config) {
     uiNotify("config-saved-via-configtool");
 }
 
-void VoiceInputEngine::ensureTestService() {
+void AiInputEngine::ensureTestService() {
     if (testService_ || !instance_) {
         return;
     }
@@ -556,24 +604,24 @@ void VoiceInputEngine::ensureTestService() {
         return;
     }
     testService_ = std::make_unique<TestService>(this);
-    bus_->addObjectVTable("/org/fcitx/VoiceInput", "org.fcitx.VoiceInput.Test",
+    bus_->addObjectVTable("/org/fcitx/AiInput", "org.fcitx.AiInput.Test",
                           *testService_);
-    FCITX_INFO() << "VoiceInput test D-Bus service registered";
+    FCITX_INFO() << "AiInput test D-Bus service registered";
 }
 
 // ---------------------------------------------------------------------------
 // Flutter 引擎
 // ---------------------------------------------------------------------------
 
-void VoiceInputEngine::startFlutterEngine() {
+void AiInputEngine::startFlutterEngine() {
     if (flutter_->running()) {
         return;
     }
     std::string assets, icu;
     if (!findFlutterAssets(&assets, &icu)) {
-        FCITX_WARN() << "VoiceInput: Flutter 资产未找到（"
-                        "VOICEINPUT_FLUTTER_DIR 可覆盖；安装包应含 "
-                        "/usr/share/fcitx5-voiceinput/flutter）——回退色块模式";
+        FCITX_WARN() << "AiInput: Flutter 资产未找到（"
+                        "AIINPUT_FLUTTER_DIR 可覆盖；安装包应含 "
+                        "/usr/share/fcitx5-aiinput/flutter）——回退色块模式";
         if (popup_) {
             popup_->setPatternMode(true);
         }
@@ -584,52 +632,46 @@ void VoiceInputEngine::startFlutterEngine() {
     }
 }
 
-void VoiceInputEngine::pushUiState() {
+// 动画速率挡位 → 全局时长系数（Dart 侧所有动画按此缩放）
+static double animScaleOf(const AiInputConfig &cfg) {
+    switch (cfg.uiAnimSpeed.value()) {
+    case UiAnimSpeedKind::Fast:
+        return 1.0; // 旧基线（220/180ms 档）
+    case UiAnimSpeedKind::Normal:
+        return 1.6;
+    case UiAnimSpeedKind::Slow:
+        return 3.0; // 用户反馈 1.8× 仍偏快——慢速挡加大到 3×
+    }
+    return 1.0;
+}
+
+std::string AiInputEngine::animField() const {
+    std::ostringstream as;
+    as << ",\"anim\":" << animScaleOf(config_);
+    return as.str();
+}
+
+void AiInputEngine::pushUiState() {
     if (!flutter_ || !flutter_->running()) {
         return;
     }
-    // 内联预编辑同步：录音=partial，结果=final，候选=当前
-    // 选中行（方向键/hover 变化经 pushUiState 一并同步）——组合文本与
-    // 卡片选中项恒一致，上屏时 commitString 原地替换，视觉无缝
-    if (popup_) {
-        std::string inline_;
-        switch (state_) {
-        case State::Recording:
-            inline_ = partial_;
-            break;
-        case State::Result:
-            inline_ = finalText_;
-            break;
-        case State::Candidates:
-            if (!candidates_.empty()) {
-                const int row = uiHoverRow_ >= 0
-                                    ? std::min(uiHoverRow_,
-                                               static_cast<int>(
-                                                   candidates_.size()) - 1)
-                                    : keyboardRow_;
-                inline_ = candidates_[row];
-            }
-            break;
-        case State::Idle:
-        case State::Pressing:
-            break;
-        }
-        if (!inline_.empty()) { // 空 = 不动（清除只走 endPreeditProbe）
-            popup_->updatePreeditText(inline_);
-        }
-    }
+    const std::string anim = animField();
+    // 预编辑组合文本恒为探针的「语音输入中」直到上屏/取消——不随流式
+    // partial 或候选选中项变化（组合文本变长会让光标矩形随换行行进、
+    // 窗口跟着跳；候选期替换组合文本偶发把卡片从文末拽回首行）。
+    // 流式/候选文本只在卡片里展示，上屏时 commitString 原地替换
     switch (state_) {
     case State::Recording:
         flutter_->sendUpdate(
             "{\"state\":\"recording\",\"partial\":\"" +
             flutterJsonEscape(partial_) + "\",\"elapsed_ms\":" +
-            std::to_string((nowUs() - recordStartUs_) / 1000) + "}");
+            std::to_string((nowUs() - recordStartUs_) / 1000) + anim + "}");
         break;
     case State::Result:
         flutter_->sendUpdate(
             "{\"state\":\"result\",\"final\":\"" +
             flutterJsonEscape(finalText_) + "\",\"timeout_ms\":" +
-            std::to_string(config_.popupTimeoutMs.value()) + "}");
+            std::to_string(config_.popupTimeoutMs.value()) + anim + "}");
         break;
     case State::Candidates: {
         std::string arr;
@@ -644,19 +686,19 @@ void VoiceInputEngine::pushUiState() {
         flutter_->sendUpdate(
             "{\"state\":\"candidates\",\"final\":\"" +
             flutterJsonEscape(finalText_) + "\",\"candidates\":[" + arr +
-            "],\"hover\":" + std::to_string(hover) + "}");
+            "],\"hover\":" + std::to_string(hover) + anim + "}");
         break;
     }
     case State::Idle:
     case State::Pressing:
-        flutter_->sendUpdate("{\"state\":\"idle\"}");
+        flutter_->sendUpdate("{\"state\":\"idle\"" + anim + "}");
         break;
     }
 }
 
 // —— UI 字体解析：UIFont 配置 > classicui 的 Font > 内置 NotoSansSC ——
 // 返回 {"path","family","size"}；path 空 = 用内置兜底
-std::string VoiceInputEngine::resolveUiFont() {
+std::string AiInputEngine::resolveUiFont() {
     std::string pango = config_.uiFont.value();
     if (pango.empty()) {
         // 跟随 classicui：读其配置文件的 Font（如 "MiSans VF 12"）
@@ -732,7 +774,7 @@ std::string VoiceInputEngine::resolveUiFont() {
 // 解析必须放后台线程：fontconfig 全局锁与 classicui/pango 的字体线程
 // 互等——主循环同步调 FcInitLoadConfigAndFonts 会死锁（主线程与 pango
 // 字体线程双挂，键盘输入全冻结）
-void VoiceInputEngine::sendFontToUi() {
+void AiInputEngine::sendFontToUi() {
     if (!flutter_ || !flutter_->running() || fontResolving_) {
         return;
     }
@@ -760,8 +802,9 @@ void VoiceInputEngine::sendFontToUi() {
             }
             fontResolving_ = false;
             if (json.length() > 4) {
-                flutter_->sendUpdate("{\"state\":\"font\"," + json.substr(1));
-                FCITX_INFO() << "VoiceInput: UI 字体 → " << json;
+                flutter_->sendUpdate("{\"state\":\"font\"" + animField() +
+                                     "," + json.substr(1));
+                FCITX_INFO() << "AiInput: UI 字体 → " << json;
             }
             return true;
         });
@@ -777,7 +820,7 @@ void VoiceInputEngine::sendFontToUi() {
 }
 
 // metrics 更新统一 defer（防 dispatch/平台回调上下文重入引擎锁）
-void VoiceInputEngine::deferredMetrics(int w, int h) {
+void AiInputEngine::deferredMetrics(int w, int h) {
     pendingMW_ = w;
     pendingMH_ = h;
     metricsTimer_ = instance_->eventLoop().addTimeEvent(
@@ -797,7 +840,7 @@ void VoiceInputEngine::deferredMetrics(int w, int h) {
     }
 }
 
-void VoiceInputEngine::onFlutterMessage(const std::string &method,
+void AiInputEngine::onFlutterMessage(const std::string &method,
                                         const std::string &args) {
     // {"index":N} / {"row":N}——极简字段提取（协议自约定）
     auto numOf = [](const std::string &s, const char *key) -> int {
@@ -817,7 +860,7 @@ void VoiceInputEngine::onFlutterMessage(const std::string &method,
     } else if (method == "hoverChanged") {
         uiHoverRow_ = numOf(args, "row");
     } else if (method == "ready") {
-        FCITX_INFO() << "VoiceInput: Flutter UI ready";
+        FCITX_INFO() << "AiInput: Flutter UI ready";
         pushUiState();
         sendFontToUi();
     }
@@ -827,7 +870,7 @@ void VoiceInputEngine::onFlutterMessage(const std::string &method,
 // 状态机
 // ---------------------------------------------------------------------------
 
-bool VoiceInputEngine::isTriggerKey(const Key &key) const {
+bool AiInputEngine::isTriggerKey(const Key &key) const {
     const auto &list = config_.triggerKeys.value();
     // 标准匹配（非修饰键路径）
     if (key.keyListIndex(list) >= 0) {
@@ -847,7 +890,7 @@ bool VoiceInputEngine::isTriggerKey(const Key &key) const {
     return false;
 }
 
-bool VoiceInputEngine::handleKey(const Key &key, bool pressed,
+bool AiInputEngine::handleKey(const Key &key, bool pressed,
                                  InputContext *ic) {
     // —— 候选状态：数字/Enter/空格/Esc/方向键 ——
     if (state_ == State::Candidates && pressed) {
@@ -856,7 +899,7 @@ bool VoiceInputEngine::handleKey(const Key &key, bool pressed,
             commitCandidate(static_cast<size_t>(keyboardRow_), ic);
             return true;
         }
-        if (key.check(FcitxKey_Escape)) {
+        if (key.check(FcitxKey_Escape) || key.check(FcitxKey_BackSpace)) {
             uiNotify("cancelled");
             enterIdle();
             return true;
@@ -927,7 +970,8 @@ bool VoiceInputEngine::handleKey(const Key &key, bool pressed,
         break;
 
     case State::Recording:
-        if (pressed && key.check(FcitxKey_Escape)) {
+        if (pressed && (key.check(FcitxKey_Escape) ||
+                        key.check(FcitxKey_BackSpace))) {
             // 录音中取消：中止会话，不产生任何提交
             if (asr_) {
                 asr_->cancel();
@@ -984,7 +1028,7 @@ bool VoiceInputEngine::handleKey(const Key &key, bool pressed,
     return false; // 其余按键透传给应用
 }
 
-void VoiceInputEngine::startThresholdTimer() {
+void AiInputEngine::startThresholdTimer() {
     thresholdTimer_.reset();
     thresholdTimer_ = instance_->eventLoop().addTimeEvent(
         CLOCK_MONOTONIC, nowUs() + config_.triggerThresholdMs.value() * 1000, 0,
@@ -1004,7 +1048,7 @@ void VoiceInputEngine::startThresholdTimer() {
 }
 
 // 按当前配置创建 ASR 引擎（会话级：配置热改后下一会话即生效）
-static std::unique_ptr<AsrEngine> makeAsrEngine(const VoiceInputConfig &cfg) {
+static std::unique_ptr<AsrEngine> makeAsrEngine(const AiInputConfig &cfg) {
     switch (cfg.asrEngine.value()) {
     case AsrEngineKind::FunASR:
         return std::make_unique<FunAsrWsEngine>();
@@ -1018,7 +1062,7 @@ static std::unique_ptr<AsrEngine> makeAsrEngine(const VoiceInputConfig &cfg) {
     }
 }
 
-void VoiceInputEngine::beginRecording(InputContext *ic) {
+void AiInputEngine::beginRecording(InputContext *ic) {
     if (!ic) {
         enterIdle();
         return;
@@ -1055,7 +1099,7 @@ void VoiceInputEngine::beginRecording(InputContext *ic) {
     asr_->start(&instance_->eventLoop(), &config_, std::move(cbs));
 }
 
-void VoiceInputEngine::finishRecording() {
+void AiInputEngine::finishRecording() {
     uiNotify("recording-stop");
     // 尾音宽限：parec/PulseAudio 链路还有 ~200-300ms 已采音频在路上，
     // 且解码需要时间追平——立刻 stop 会截掉松开前的内容（漏字）。
@@ -1075,11 +1119,8 @@ void VoiceInputEngine::finishRecording() {
     }
 }
 
-void VoiceInputEngine::onAsrPartial(const std::string &text) {
-    if (popup_ && state_ == State::Recording && !text.empty()) {
-        // 空 partial 不清组合（停止瞬间的空回调控件曾让内联文本消失）
-        popup_->updatePreeditText(text); // 组合文本增长 → 矩形实时走
-    }
+void AiInputEngine::onAsrPartial(const std::string &text) {
+    // partial 只进卡片展示（组合文本恒为「语音输入中」，见 pushUiState）
     if (state_ != State::Recording) {
         return;
     }
@@ -1088,7 +1129,7 @@ void VoiceInputEngine::onAsrPartial(const std::string &text) {
     uiNotify("partial", text);
 }
 
-void VoiceInputEngine::onAsrFinish(const std::string &text) {
+void AiInputEngine::onAsrFinish(const std::string &text) {
     if (state_ != State::Recording) {
         return;
     }
@@ -1113,7 +1154,7 @@ void VoiceInputEngine::onAsrFinish(const std::string &text) {
     }
 }
 
-void VoiceInputEngine::startResultTimer() {
+void AiInputEngine::startResultTimer() {
     resultTimer_.reset();
     resultTimer_ = instance_->eventLoop().addTimeEvent(
         CLOCK_MONOTONIC, nowUs() + config_.popupTimeoutMs.value() * 1000, 0,
@@ -1141,7 +1182,7 @@ void VoiceInputEngine::startResultTimer() {
 // 此时状态已 Idle（调用点都在 enterIdle 后），我们的 PreInputMethod
 // watcher 不拦非触发键 → 到达应用 → 光标往返一次 → 应用重报光标矩形。
 // focus 不可能在 commitString 与本调用之间变化（同一主循环迭代）
-void VoiceInputEngine::nudgeCaretRect(InputContext *ic) {
+void AiInputEngine::nudgeCaretRect(InputContext *ic) {
     if (!ic) {
         return;
     }
@@ -1154,16 +1195,16 @@ void VoiceInputEngine::nudgeCaretRect(InputContext *ic) {
             }
         }
     }
-    FCITX_LOG(Info) << "VoiceInput: 上屏后光标微移已注入（触发矩形重报）";
+    FCITX_LOG(Info) << "AiInput: 上屏后光标微移已注入（触发矩形重报）";
 }
 
-void VoiceInputEngine::notifyUiCommit() {
+void AiInputEngine::notifyUiCommit() {
     if (popup_) {
         popup_->notifyCommit();
     }
 }
 
-void VoiceInputEngine::commitCandidate(size_t index, InputContext *ic) {
+void AiInputEngine::commitCandidate(size_t index, InputContext *ic) {
     if (index >= candidates_.size()) {
         return;
     }
@@ -1181,12 +1222,12 @@ void VoiceInputEngine::commitCandidate(size_t index, InputContext *ic) {
     nudgeCaretRect(ic ? ic : sessionIcRef_.get());
 }
 
-void VoiceInputEngine::enterIdle() {
+void AiInputEngine::enterIdle() {
     if (popup_) {
         popup_->hide();
     }
     if (flutter_ && flutter_->running()) {
-        flutter_->sendUpdate("{\"state\":\"idle\"}");
+flutter_->sendUpdate("{\"state\":\"idle\"" + animField() + "}");
     }
     state_ = State::Idle;
     thresholdTimer_.reset();
@@ -1202,7 +1243,7 @@ void VoiceInputEngine::enterIdle() {
     uiNotify("idle");
 }
 
-std::string VoiceInputEngine::stateName() const {
+std::string AiInputEngine::stateName() const {
     switch (state_) {
     case State::Idle: return "idle";
     case State::Pressing: return "pressing";
@@ -1214,7 +1255,7 @@ std::string VoiceInputEngine::stateName() const {
 }
 
 // —— Dummy 润色：句末无标点则补句号（真实 LLM 接入后替换）——
-std::string VoiceInputEngine::polish(const std::string &text) {
+std::string AiInputEngine::polish(const std::string &text) {
     if (text.empty()) {
         return text;
     }
@@ -1226,7 +1267,7 @@ std::string VoiceInputEngine::polish(const std::string &text) {
     return text;
 }
 
-std::string VoiceInputEngine::joinCandidates() const {
+std::string AiInputEngine::joinCandidates() const {
     std::string out;
     for (size_t i = 0; i < candidates_.size(); ++i) {
         if (i) out += " | ";
@@ -1235,7 +1276,7 @@ std::string VoiceInputEngine::joinCandidates() const {
     return out;
 }
 
-void VoiceInputEngine::uiNotify(const std::string &what,
+void AiInputEngine::uiNotify(const std::string &what,
                                 const std::string &detail) {
     FCITX_INFO() << "[ui] " << what << (detail.empty() ? "" : ": " + detail);
 }
@@ -1291,7 +1332,7 @@ std::string TestService::HealthCheck(std::string mode) {
 
 // 编译期版本回读：容器/宿主断言加载的二进制与包一致（防陈旧 dist/
 // ~/.local 残留遮蔽新安装）
-std::string TestService::Version() { return VOICEINPUT_VERSION_STRING; }
+std::string TestService::Version() { return AIINPUT_VERSION_STRING; }
 
 std::vector<std::string> TestService::Candidates() {
     return engine_->candidates();
@@ -1299,4 +1340,4 @@ std::vector<std::string> TestService::Candidates() {
 
 } // namespace fcitx
 
-FCITX_ADDON_FACTORY(fcitx::VoiceInputEngineFactory)
+FCITX_ADDON_FACTORY(fcitx::AiInputEngineFactory)

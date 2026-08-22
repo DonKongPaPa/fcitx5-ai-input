@@ -1,7 +1,7 @@
 # niri 测试环境（最小）
 # 无头方案：cage(wlroots headless, 60Hz 帧时钟) 托管 niri 嵌套运行
 #（niri 官方不支持 headless 输出，见 niri-wm/niri Discussion #714）
-FROM voiceinput-host:latest
+FROM aiinput-host:latest
 
 USER root
 

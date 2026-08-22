@@ -16,7 +16,7 @@ make shell ENV=niri      # 交互式进入环境容器调试
 
 ```bash
 bash scripts/fetch-sherpa-runtime.sh     # sherpa-onnx 运行时（版本锁定）
-bash scripts/fetch-sherpa-models.sh      # 流式模型 → ~/.local/share/fcitx5-voiceinput/models/
+bash scripts/fetch-sherpa-models.sh      # 流式模型 → ~/.local/share/fcitx5-aiinput/models/
 ```
 
 前置：Linux + rootless podman；`podman images` 应无残留同名镜像冲突。语音样本见下文「测试资产」。
@@ -26,7 +26,7 @@ bash scripts/fetch-sherpa-models.sh      # 流式模型 → ~/.local/share/fcitx
 ```
 make test ENV=niri
   └─ scripts/run-test.sh                 # 宿主侧编排
-       └─ podman run voiceinput-niri     # 挂载 /scripts /opt/dist /tests /samples [/models]
+       └─ podman run aiinput-niri     # 挂载 /scripts /opt/dist /tests /samples [/models]
             └─ start-niri.sh MODE=case   # 无头桌面拉起（cage 托管 niri + 录屏器）
                  └─ case-driver.sh       # 用例执行（本套件核心）
                       ├─ record <id> <pass|fail> <msg>   # 每例一行 → case-results.jsonl
@@ -35,8 +35,8 @@ make test ENV=niri
        └─ scripts/report.py              # 汇总 report.json/html（失败用例并排播放本次 vs 基准录屏）
 ```
 
-- **一个桌面 = 一个容器**：niri（cage 托管）/ kde（kwin_wayland + sway 托管）/ gnome（mutter 嵌套 + sway 托管）；镜像层级 base → host → 各桌面，`voiceinput-build` 为编译镜像，`voiceinput-funasr` 为 FunASR 服务镜像
-- **确定性触发**：测试经 D-Bus 测试钩子（`org.fcitx.VoiceInput.Test` 的 `SimulateKey` / `InjectKey` / `State` / `Candidates` / `Trigger`）直达 addon 状态机，不依赖真实 ASR；真实音频用例经虚拟麦（`play_to_mic`）喂 wav
+- **一个桌面 = 一个容器**：niri（cage 托管）/ kde（kwin_wayland + sway 托管）/ gnome（mutter 嵌套 + sway 托管）；镜像层级 base → host → 各桌面，`aiinput-build` 为编译镜像，`aiinput-funasr` 为 FunASR 服务镜像
+- **确定性触发**：测试经 D-Bus 测试钩子（`org.fcitx.AiInput.Test` 的 `SimulateKey` / `InjectKey` / `State` / `Candidates` / `Trigger`）直达 addon 状态机，不依赖真实 ASR；真实音频用例经虚拟麦（`play_to_mic`）喂 wav
 - `SimulateKey` 只喂状态机；`InjectKey` 走真实事件管线（验证拦截/透传语义）；裸字母键在 keyboard-us 下不会到达应用文本框（只有组合文本会）——需要应用侧文本变化时用触发键/候选上屏或拼音组合
 - **完整 33 例仅在 niri 达成**：kde/gnome 镜像缺 chromium/virtpoint 的用例自动记"pass（跳过）"
 - 性能采样：容器内 `/proc` 轻量采样器（自身开销 <1%）随套件全程运行 → `perf.csv`
@@ -110,7 +110,7 @@ fi
 
   用例编号、实验编号、实测数据属于 git 提交信息与实验记录，不属于代码
 - Dart：单文件 `flutter/lib/main.dart`，协议注释在文件头；C++ 侧宿主是 `flutter_engine.{h,cpp}`
-- 命名与日志风格跟随现有代码（日志中文、`VoicePopup:` / `VoiceInput:` 前缀）
+- 命名与日志风格跟随现有代码（日志中文、`VoicePopup:` / `AiInput:` 前缀）
 
 ## 提交与分支
 

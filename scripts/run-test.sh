@@ -5,7 +5,7 @@ set -euo pipefail
 
 ENV_NAME="${1:?用法: run-test.sh niri|kde|gnome}"
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
-IMAGE="localhost/voiceinput-${ENV_NAME}:latest"
+IMAGE="localhost/aiinput-${ENV_NAME}:latest"
 RUN_ID="$(date +%Y%m%d-%H%M%S)-${ENV_NAME}"
 OUT="$ROOT/artifacts/reports/$RUN_ID"
 mkdir -p "$OUT"
@@ -16,10 +16,16 @@ if [ ! -d "$ROOT/artifacts/dist/lib/fcitx5" ]; then
     exit 1
 fi
 
-# sherpa 模型挂载（存在才挂；r15 用例无模型时自动跳过）
+# sherpa 模型挂载（存在才挂；r15 用例无模型时自动跳过）。模型源目录
+# 兼容新旧两代 fetch 脚本的下载位置（voiceinput 时代 → aiinput）
 MODEL_ARGS=()
-if [ -d "$HOME/.local/share/fcitx5-voiceinput/models/sherpa-paraformer" ]; then
-    MODEL_ARGS=(-v "$HOME/.local/share/fcitx5-voiceinput/models:/models:ro")
+MODELS_SRC=""
+for _d in "$HOME/.local/share/fcitx5-aiinput/models" \
+          "$HOME/.local/share/fcitx5-voiceinput/models"; do
+    if [ -d "$_d/sherpa-paraformer" ]; then MODELS_SRC="$_d"; break; fi
+done
+if [ -n "$MODELS_SRC" ]; then
+    MODEL_ARGS=(-v "$MODELS_SRC:/models:ro")
 fi
 
 DEV_ARGS=()
@@ -45,12 +51,12 @@ podman run --rm \
     -e LOG_DIR=/out/logs \
     -e OUT_DIR=/out \
     -e CASES_DIR=/tests/cases \
-    -e VOICEINPUT_SHERPA_MODEL_DIR=/models/sherpa-paraformer \
+    -e AIINPUT_SHERPA_MODEL_DIR=/models/sherpa-paraformer \
     "$IMAGE" \
     bash -c '
         set -e
         cp -r /opt/dist/* /usr/
-        # 共存场景：普通输入法（keyboard-us）为默认 IM，voiceinput 是
+        # 共存场景：普通输入法（keyboard-us）为默认 IM，aiinput 是
         # Module（全局热键），全程不切换输入法；pinyin 挂在组内供 r25
         # 切换（classicui 候选窗与我们的 popup 抢 smithay 定位槽的复现）
         mkdir -p /home/testuser/.config/fcitx5

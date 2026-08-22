@@ -49,22 +49,36 @@ std::string findModelFile(const std::string &dir, const char *prefix,
     return !bestInt8.empty() ? dir + "/" + bestInt8 : "";
 }
 
-std::string resolveSherpaModelDir(const VoiceInputConfig *config) {
+std::string resolveSherpaModelDir(const AiInputConfig *config) {
     const auto &cfgDir = config->sherpaModelDir.value();
     if (!cfgDir.empty()) {
         return cfgDir;
     }
-    if (const char *env = getenv("VOICEINPUT_SHERPA_MODEL_DIR"); env && *env) {
+    if (const char *env = getenv("AIINPUT_SHERPA_MODEL_DIR"); env && *env) {
         return env;
     }
-    if (const char *home = getenv("HOME"); home && *home) {
-        return std::string(home) +
-               "/.local/share/fcitx5-voiceinput/models/sherpa-paraformer";
+    if (const char *env = getenv("VOICEINPUT_SHERPA_MODEL_DIR"); env && *env) {
+        return env; // 旧名环境变量（voiceinput 时代）
     }
-    return "/usr/share/fcitx5-voiceinput/models/sherpa-paraformer";
+    if (const char *home = getenv("HOME"); home && *home) {
+        const std::string dir = std::string(home) +
+                                "/.local/share/fcitx5-aiinput/models/"
+                                "sherpa-paraformer";
+        // 旧目录（voiceinput 时代 fetch 脚本下载的模型）仍在则直接沿用，
+        // 免重新下载
+        const std::string legacy =
+            std::string(home) +
+            "/.local/share/fcitx5-voiceinput/models/sherpa-paraformer";
+        if (access(dir.c_str(), F_OK) != 0 &&
+            access(legacy.c_str(), F_OK) == 0) {
+            return legacy;
+        }
+        return dir;
+    }
+    return "/usr/share/fcitx5-aiinput/models/sherpa-paraformer";
 }
 
-void SherpaOnnxEngine::initOfflineRecognizer(const VoiceInputConfig *config) {
+void SherpaOnnxEngine::initOfflineRecognizer(const AiInputConfig *config) {
     const std::string dir = config->senseVoiceDir.value();
     // 进程级缓存（与流式 recognizer 同纪律）：键 = 目录；失败不缓存
     static SherpaOnnxOfflineRecognizer *cachedOff = nullptr;
@@ -117,7 +131,7 @@ void SherpaOnnxEngine::initOfflineRecognizer(const VoiceInputConfig *config) {
     offlineRec_ = cachedOff;
 }
 
-void SherpaOnnxEngine::start(EventLoop *loop, const VoiceInputConfig *config,
+void SherpaOnnxEngine::start(EventLoop *loop, const AiInputConfig *config,
                              Callbacks cbs) {
     loop_ = loop;
     config_ = config;

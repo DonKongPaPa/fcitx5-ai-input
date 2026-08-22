@@ -1,8 +1,8 @@
-#ifndef _FCITX5_VOICEINPUT_VOICEINPUT_H_
-#define _FCITX5_VOICEINPUT_VOICEINPUT_H_
+#ifndef _FCITX5_AIINPUT_AIINPUT_H_
+#define _FCITX5_AIINPUT_AIINPUT_H_
 
 #include "asr_engine.h"
-#include "voiceinput_config.h"
+#include "aiinput_config.h"
 
 #include <fcitx-config/rawconfig.h>
 #include <fcitx-utils/dbus/objectvtable.h>
@@ -20,7 +20,7 @@ namespace fcitx {
 
 class VoicePopup;
 class FlutterEngineHost;
-class VoiceInputEngine;
+class AiInputEngine;
 
 /**
  * 测试钩子（管线用，免容器键盘合成）：
@@ -33,7 +33,7 @@ class VoiceInputEngine;
  */
 class TestService : public dbus::ObjectVTable<TestService> {
 public:
-    TestService(VoiceInputEngine *engine) : engine_(engine) {}
+    TestService(AiInputEngine *engine) : engine_(engine) {}
 
     std::string Trigger(std::string text);
     std::string SimulateKey(std::string key, bool pressed);
@@ -43,10 +43,10 @@ public:
     std::string HealthCheck(std::string mode);
     std::vector<std::string> Candidates();
 
-    static const char *interface() { return "org.fcitx.VoiceInput.Test"; }
+    static const char *interface() { return "org.fcitx.AiInput.Test"; }
 
 private:
-    VoiceInputEngine *engine_;
+    AiInputEngine *engine_;
     FCITX_OBJECT_VTABLE_METHOD(Trigger, "Trigger", "s", "s");
     FCITX_OBJECT_VTABLE_METHOD(SimulateKey, "SimulateKey", "sb", "s");
     FCITX_OBJECT_VTABLE_METHOD(InjectKey, "InjectKey", "sb", "s");
@@ -83,10 +83,10 @@ private:
  *   Result（LLM 关）：展示 popupTimeoutMs 后自动 commit
  *   Candidates（LLM 开）：润色/原始候选，数字1-9/Enter/Esc/方向键/空格选择
  */
-class VoiceInputEngine : public AddonInstance {
+class AiInputEngine : public AddonInstance {
 public:
-    VoiceInputEngine(Instance *instance);
-    ~VoiceInputEngine() override;
+    AiInputEngine(Instance *instance);
+    ~AiInputEngine() override;
 
     // configtool 设置页：Configuration 自动生成 UI。注意保存链路是
     // D-Bus SetConfig → setConfig()（基类默认 no-op，不实现则 configtool
@@ -148,7 +148,8 @@ private:
 
     // —— Flutter（进程内嵌入引擎）——
     void startFlutterEngine();
-    void pushUiState();                  // 状态机 → Dart update 推送
+    void pushUiState();
+    std::string animField() const; // 动画速率字段（update/font 消息共用）                  // 状态机 → Dart update 推送
     void onFlutterMessage(const std::string &method,
                           const std::string &argsJson);
 
@@ -156,7 +157,7 @@ private:
     void uiNotify(const std::string &what, const std::string &detail = "");
 
     Instance *instance_;
-    VoiceInputConfig config_;
+    AiInputConfig config_;
     std::unique_ptr<VoicePopup> popup_;
     std::unique_ptr<FlutterEngineHost> flutter_;
     dbus::Bus *bus_ = nullptr;
@@ -185,11 +186,11 @@ private:
     int keyboardRow_ = 0;                 // 候选态键盘方向键选择行
 };
 
-class VoiceInputEngineFactory : public AddonFactory {
+class AiInputEngineFactory : public AddonFactory {
 public:
     AddonInstance *create(AddonManager *manager) override;
 };
 
 } // namespace fcitx
 
-#endif // _FCITX5_VOICEINPUT_VOICEINPUT_H_
+#endif // _FCITX5_AIINPUT_AIINPUT_H_

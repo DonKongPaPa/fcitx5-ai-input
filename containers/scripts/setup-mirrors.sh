@@ -4,7 +4,7 @@ set -eu
 
 # 1) 中国镜像源（TUNA 主、USTC 备）
 cat > /etc/pacman.d/mirrorlist <<'EOF'
-# Managed by fcitx5-voice-input build
+# Managed by fcitx5-ai-input build
 Server = https://mirrors.tuna.tsinghua.edu.cn/archlinux/$repo/os/$arch
 Server = https://mirrors.ustc.edu.cn/archlinux/$repo/os/$arch
 EOF

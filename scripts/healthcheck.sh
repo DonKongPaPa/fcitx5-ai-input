@@ -4,8 +4,8 @@
 set -euo pipefail
 MODE="${1:-}"
 out=$(gdbus call --session --dest org.fcitx.Fcitx5 \
-    --object-path /org/fcitx/VoiceInput \
-    --method org.fcitx.VoiceInput.Test.HealthCheck "$MODE" 2>&1)
+    --object-path /org/fcitx/AiInput \
+    --method org.fcitx.AiInput.Test.HealthCheck "$MODE" 2>&1)
 # gdbus 返回 ('<json>')——剥壳后美化
 json=$(echo "$out" | sed "s/^('//; s/',)$//; s/\\\\\"/\"/g")
 if command -v python3 >/dev/null; then

@@ -1,5 +1,5 @@
-#ifndef _FCITX5_VOICEINPUT_FUNASR_WS_ENGINE_H_
-#define _FCITX5_VOICEINPUT_FUNASR_WS_ENGINE_H_
+#ifndef _FCITX5_AIINPUT_FUNASR_WS_ENGINE_H_
+#define _FCITX5_AIINPUT_FUNASR_WS_ENGINE_H_
 
 #include "asr_engine.h"
 #include "audio_capture.h"
@@ -26,7 +26,7 @@ namespace fcitx {
 class FunAsrWsEngine : public AsrEngine {
 public:
     bool streamingCapable() const override { return true; }
-    void start(EventLoop *loop, const VoiceInputConfig *config,
+    void start(EventLoop *loop, const AiInputConfig *config,
                Callbacks cbs) override;
     void stop() override;    // 正常收尾 → onFinish
     void cancel() override;  // 全部丢弃
@@ -51,7 +51,7 @@ private:
     void onConnected(); // 握手完成后的公共初始化（配置帧+IO+采集）
 
     EventLoop *loop_ = nullptr;
-    const VoiceInputConfig *config_ = nullptr;
+    const AiInputConfig *config_ = nullptr;
     Callbacks cbs_;
     bool finished_ = false;
 
@@ -81,4 +81,4 @@ private:
 
 } // namespace fcitx
 
-#endif // _FCITX5_VOICEINPUT_FUNASR_WS_ENGINE_H_
+#endif // _FCITX5_AIINPUT_FUNASR_WS_ENGINE_H_

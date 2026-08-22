@@ -33,6 +33,12 @@ extern "C" const wl_interface xdg_popup_interface = {};
 
 namespace fcitx {
 
+static uint64_t nowUsSafe() {
+    return std::chrono::duration_cast<std::chrono::microseconds>(
+               std::chrono::steady_clock::now().time_since_epoch())
+        .count();
+}
+
 static constexpr int kDefaultWidth = 360;
 static constexpr int kDefaultHeight = 200;
 
@@ -167,12 +173,12 @@ void VoicePopup::preferredScale(void *data, wp_fractional_scale_v1 *,
     s->scaleNum_ = scale;
     FCITX_INFO() << "VoicePopup: fractional scale → " << (scale / 120.0);
     if (s->logicalW_ > 0 && s->viewport_) {
-        // 物理池按新 scale 重建，viewport 保持逻辑尺寸
+        // 物理池按新 scale 重建；viewport destination 不在此急切下发——
+        // 需与匹配尺寸的 buffer 同一 commit（见 syncViewport 注释）
         double sc = s->scale();
         int pw = static_cast<int>(s->logicalW_ * sc + 0.5);
         int ph = static_cast<int>(s->logicalH_ * sc + 0.5);
         s->resizeLocked(pw, ph);
-        wp_viewport_set_destination(s->viewport_, s->logicalW_, s->logicalH_);
     }
     if (s->scaleHandler_) {
         s->scaleHandler_(s->scaleNum_ / 120.0); // 出锁后调用更稳，这里同线程
@@ -194,8 +200,6 @@ void VoicePopup::outputScale(void *data, wl_output *, int32_t factor) {
         if (s->logicalW_ > 0 && s->viewport_) {
             int pw = s->logicalW_ * factor, ph = s->logicalH_ * factor;
             s->resizeLocked(pw, ph);
-            wp_viewport_set_destination(s->viewport_, s->logicalW_,
-                                        s->logicalH_);
         }
         if (s->scaleHandler_) {
             s->scaleHandler_(s->scale());
@@ -265,42 +269,68 @@ void VoicePopup::pointerButton(void *data, wl_pointer *, uint32_t,
     }
 }
 
+// wayland 模块监听注册（可重试）：addon 加载顺序不保证 wayland 先于本
+// 模块——构造时拿不到就在 prepare()（首个焦点事件，彼时全部 addon 已
+// 加载）再试。注意必须在不持 mutex_ 的上下文调用：对已建立的连接，
+// 注册回调会立即同步触发 onConnectionCreated（它自己要拿锁）
+void VoicePopup::ensureWaylandWatcher() {
+    if (connHandler_) {
+        return;
+    }
+    auto *wayland = instance_->addonManager().addon("wayland", true);
+    if (!wayland) {
+        return; // 仍未加载，下次 prepare 再试
+    }
+    connHandler_ = wayland->call<IWaylandModule::addConnectionCreatedCallback>(
+        [this](const std::string &name, wl_display *display, FocusGroup *) {
+            onConnectionCreated(name, display);
+        });
+    closeHandler_ = wayland->call<IWaylandModule::addConnectionClosedCallback>(
+        [this](const std::string &, wl_display *) {
+            // 连接已死：只清指针，不 destroy（对象已随 display 失效）
+            std::lock_guard<std::mutex> lock(mutex_);
+            surface_ = nullptr;
+            surfaceCompat_ = nullptr;
+            viewport_ = nullptr;
+            fscale_ = nullptr;
+            popup_ = nullptr;
+            im_ = nullptr;
+            layerSurface_ = nullptr;
+            layerShell_ = nullptr;
+            layerConfigured_ = false;
+            emptyRegion_ = nullptr;
+            pool_ = nullptr;
+            for (auto &b : buffers_) {
+                b = nullptr;
+            }
+            pixels_ = nullptr;
+            compositor_ = nullptr;
+            shm_ = nullptr;
+            seat_ = nullptr;
+            pointer_ = nullptr;
+            output_ = nullptr;
+            hasCursorRect_ = false;
+            display_ = nullptr;
+        });
+    FCITX_INFO() << "VoicePopup: wayland connection watcher registered";
+}
+
+// 构造时 wayland 可能尚未加载（addon 加载顺序不保证）：1s 重试，30 次
+// 仍不成功则放弃（prepare() 每次焦点事件的重试仍是兜底）。回调返回
+// false 即源自动移除——不要在回调内 reset 自身源（破坏分发）
+void VoicePopup::scheduleWatcherRetry() {
+    watcherRetry_ = instance_->eventLoop().addTimeEvent(
+        CLOCK_MONOTONIC, nowUsSafe() + 1'000'000ull, 0,
+        [this](EventSourceTime *, uint64_t) {
+            ensureWaylandWatcher();
+            return connHandler_ == nullptr && ++watcherTries_ < 30;
+        });
+}
+
 VoicePopup::VoicePopup(Instance *instance) : instance_(instance) {
-    if (auto *wayland = instance_->addonManager().addon("wayland", true)) {
-        connHandler_ = wayland->call<IWaylandModule::addConnectionCreatedCallback>(
-            [this](const std::string &name, wl_display *display, FocusGroup *) {
-                onConnectionCreated(name, display);
-            });
-        closeHandler_ = wayland->call<IWaylandModule::addConnectionClosedCallback>(
-            [this](const std::string &, wl_display *) {
-                // 连接已死：只清指针，不 destroy（对象已随 display 失效）
-                std::lock_guard<std::mutex> lock(mutex_);
-                surface_ = nullptr;
-                surfaceCompat_ = nullptr;
-                viewport_ = nullptr;
-                fscale_ = nullptr;
-                popup_ = nullptr;
-                im_ = nullptr;
-                layerSurface_ = nullptr;
-                layerShell_ = nullptr;
-                layerConfigured_ = false;
-                emptyRegion_ = nullptr;
-                pool_ = nullptr;
-                for (auto &b : buffers_) {
-                    b = nullptr;
-                }
-                pixels_ = nullptr;
-                compositor_ = nullptr;
-                shm_ = nullptr;
-                seat_ = nullptr;
-                pointer_ = nullptr;
-                output_ = nullptr;
-                hasCursorRect_ = false;
-                display_ = nullptr;
-            });
-        FCITX_INFO() << "VoicePopup: wayland connection watcher registered";
-    } else {
-        FCITX_WARN() << "VoicePopup: wayland module unavailable";
+    ensureWaylandWatcher();
+    if (!connHandler_) {
+        scheduleWatcherRetry();
     }
 }
 
@@ -387,13 +417,15 @@ void VoicePopup::registryGlobalImpl(void *data, wl_registry *reg, uint32_t name,
         size_t stride = self->width_ * 4;
         size_t bufSize = stride * self->height_;
         size_t poolSize = bufSize * 2;
+        self->poolCapacity_ = poolSize + poolSize / 2 + (512 << 10);
         self->poolFd_ =
             memfd_create("vi-popup", MFD_CLOEXEC);
-        ftruncate(self->poolFd_, poolSize);
+        ftruncate(self->poolFd_, self->poolCapacity_);
         self->pixels_ = static_cast<uint8_t *>(
-            mmap(nullptr, poolSize, PROT_READ | PROT_WRITE, MAP_SHARED,
-                 self->poolFd_, 0));
-        self->pool_ = wl_shm_create_pool(self->shm_, self->poolFd_, poolSize);
+            mmap(nullptr, self->poolCapacity_, PROT_READ | PROT_WRITE,
+                 MAP_SHARED, self->poolFd_, 0));
+        self->pool_ = wl_shm_create_pool(self->shm_, self->poolFd_,
+                                         self->poolCapacity_);
         for (int i = 0; i < 2; ++i) {
             self->buffers_[i] = wl_shm_pool_create_buffer(
                 self->pool_, i * bufSize, self->width_, self->height_, stride,
@@ -460,9 +492,9 @@ void VoicePopup::beginPreeditProbe(InputContext *ic) {
     }
     // 可见组合文本「语音输入中」逐字打出：每字一次组合变化=每字一次
     // 报文机会（一次性整串 set 只有一次组合变化，报文可有可无）。
-    // preedit 永不入文；录音中由 updatePreeditText 把流式 partial 灌进
-    // 来——组合增长=打拼音的等价物，应用随文字增长持续重报矩形，卡片
-    // 实时跟随。上屏时 commitString 按协议替换 preedit（自清洁）
+    // preedit 永不入文、且全程恒为这五个字（流式/候选文本只在卡片里
+    // 展示）——组合长度恒定，光标矩形不随识别进度行进，卡片稳定锚在
+    // 开始位置。上屏时 commitString 按协议替换 preedit（自清洁）
     static const char *const kProbe = "\u8bed\u97f3\u8f93\u5165\u4e2d"; // 语音输入中
     Text preedit(std::string(kProbe, 3)); // 首字「语」
     ic->inputPanel().setClientPreedit(preedit);
@@ -476,31 +508,10 @@ void VoicePopup::beginPreeditProbe(InputContext *ic) {
     FCITX_INFO() << "VoicePopup: 预输入探针已置（可见组合文本，逼应用重报光标矩形）";
 }
 
-// 探针逐字未完时排队的 partial，打完放行（持锁）
-void VoicePopup::flushPendingPreeditLocked() {
-    if (!hasPendingPreedit_) {
-        return;
-    }
-    hasPendingPreedit_ = false;
-    if (auto *ic = icRef_.get()) {
-        ic->inputPanel().setClientPreedit(Text(pendingPreedit_));
-        ic->updatePreedit();
-    }
-}
-
-static uint64_t nowUsSafe() {
-    return std::chrono::duration_cast<std::chrono::microseconds>(
-               std::chrono::steady_clock::now().time_since_epoch())
-        .count();
-}
-
 void VoicePopup::typeProbeNext(InputContext *ic) {
     static const char *const kProbe =
         "\u8bed\u97f3\u8f93\u5165\u4e2d"; // 语音输入中（每字 3 字节）
     if (!ic || !preeditProbeActive_ || probeTypingIdx_ >= 5) {
-        if (probeTypingIdx_ >= 5) {
-            flushPendingPreeditLocked(); // 打完：放行排队的 partial
-        }
         probeTypeTimer_.reset();
         return;
     }
@@ -535,7 +546,6 @@ void VoicePopup::endPreeditProbe() {
     }
     preeditProbeActive_ = false;
     probeTypingIdx_ = 5;
-    hasPendingPreedit_ = false;
     if (auto *ic = icRef_.get()) {
         ic->inputPanel().setClientPreedit(Text());
         ic->updatePreedit();
@@ -556,25 +566,6 @@ void VoicePopup::primePreedit(InputContext *ic) {
     beginPreeditProbe(ic);
 }
 
-// 录音中把流式 partial 写入组合文本：文字增长 → 应用重报矩形 →
-// 合成器实时挪卡片（classicui 打拼音的等价机制）。仅在探针挂着时
-void VoicePopup::updatePreeditText(const std::string &text) {
-    std::lock_guard<std::mutex> lock(mutex_);
-    if (!preeditProbeActive_) {
-        return;
-    }
-    if (probeTypingIdx_ < 5) {
-        // 逐字未完：排队等打完（后到覆盖先到，永远显示最新）
-        pendingPreedit_ = text;
-        hasPendingPreedit_ = true;
-        return;
-    }
-    probeTypeTimer_.reset();
-    if (auto *ic = icRef_.get()) {
-        ic->inputPanel().setClientPreedit(Text(text));
-        ic->updatePreedit();
-    }
-}
 
 // 判定挂起结算 → layer 底部（持锁，两个触发点共用：8s 保险丝、录音
 // 结束——结果/候选卡片必须显示，不能再等矩形）
@@ -890,6 +881,9 @@ static void paintTestPattern(uint8_t *argb, int w, int h) {
 }
 
 void VoicePopup::prepare(InputContext *ic) {
+    // 先补注册（若构造时 wayland 未加载）：不得持锁——对已建立连接
+    // 注册回调会立即同步触发 onConnectionCreated（它要拿锁）
+    ensureWaylandWatcher();
     std::lock_guard<std::mutex> lock(mutex_);
     // 光标矩形诊断：fcitx 核心从前端（wayland text-input / XIM spot）汇总。
     // 不打 frontendName()——那是 5.1 API（bookworm 5.0.21 编不过）；前端
@@ -911,6 +905,7 @@ void VoicePopup::prepare(InputContext *ic) {
     memset(dst, 0, bufSize);
     wl_surface_attach(surface_, buffers_[cur_], 0, 0);
     damageSurface(surface_, compositorVersion_, width_, height_);
+    syncViewportLocked();
     wl_surface_commit(surface_);
     cur_ = 1 - cur_;
     wl_display_flush(display_);
@@ -946,6 +941,7 @@ void VoicePopup::show(InputContext *ic) {
         paintTestPattern(dst, width_, height_);
         wl_surface_attach(surface_, buffers_[cur_], 0, 0);
         damageSurface(surface_, compositorVersion_, width_, height_);
+        syncViewportLocked();
         wl_surface_commit(surface_);
         cur_ = 1 - cur_;
         wl_display_flush(display_);
@@ -985,6 +981,7 @@ void VoicePopup::hide() {
             }
             wl_surface_attach(surface_, buffers_[cur_], 0, 0);
             damageSurface(surface_, compositorVersion_, width_, height_);
+            syncViewportLocked();
             wl_surface_commit(surface_);
             cur_ = 1 - cur_;
         }
@@ -1020,6 +1017,28 @@ void VoicePopup::resizeLocked(int w, int h) {
     if (!pool_ || (w == width_ && h == height_)) {
         return;
     }
+    const size_t stride = static_cast<size_t>(w) * 4;
+    const size_t bufSize = stride * h;
+    const size_t needed = bufSize * 2;
+    if (pool_ && needed <= poolCapacity_) {
+        // 容量桶内：只重建 buffer（轻量，compositor 侧仅引用池映射的
+        // 子区间）。整池重建（munmap/memfd/mmap/合成器重导入）曾是
+        // 动画期间逐帧 resize 的掉帧主因，现在只在跨桶时发生
+        for (auto &b : buffers_) {
+            if (b) {
+                wl_buffer_destroy(b);
+                b = nullptr;
+            }
+        }
+        width_ = w;
+        height_ = h;
+        for (int i = 0; i < 2; ++i) {
+            buffers_[i] = wl_shm_pool_create_buffer(
+                pool_, i * bufSize, w, h, stride, WL_SHM_FORMAT_ARGB8888);
+        }
+        cur_ = 0;
+        return;
+    }
     for (auto &b : buffers_) {
         if (b) {
             wl_buffer_destroy(b);
@@ -1027,19 +1046,18 @@ void VoicePopup::resizeLocked(int w, int h) {
         }
     }
     wl_shm_pool_destroy(pool_);
-    munmap(pixels_, static_cast<size_t>(width_) * height_ * 4 * 2);
+    munmap(pixels_, poolCapacity_);
     close(poolFd_);
 
     width_ = w;
     height_ = h;
-    size_t stride = static_cast<size_t>(w) * 4;
-    size_t bufSize = stride * h;
-    size_t poolSize = bufSize * 2;
+    // 预留 1.5× + 512KB 余量：后续增长多数落在桶内
+    poolCapacity_ = needed + needed / 2 + (512 << 10);
     poolFd_ = memfd_create("vi-popup", MFD_CLOEXEC);
-    ftruncate(poolFd_, poolSize);
+    ftruncate(poolFd_, poolCapacity_);
     pixels_ = static_cast<uint8_t *>(
-        mmap(nullptr, poolSize, PROT_READ | PROT_WRITE, MAP_SHARED, poolFd_, 0));
-    pool_ = wl_shm_create_pool(shm_, poolFd_, poolSize);
+        mmap(nullptr, poolCapacity_, PROT_READ | PROT_WRITE, MAP_SHARED, poolFd_, 0));
+    pool_ = wl_shm_create_pool(shm_, poolFd_, poolCapacity_);
     for (int i = 0; i < 2; ++i) {
         buffers_[i] = wl_shm_pool_create_buffer(
             pool_, i * bufSize, w, h, stride, WL_SHM_FORMAT_ARGB8888);
@@ -1061,9 +1079,9 @@ void VoicePopup::setLogicalSize(int w, int h) {
     std::lock_guard<std::mutex> lock(mutex_);
     logicalW_ = w;
     logicalH_ = h;
-    if (viewport_) {
-        wp_viewport_set_destination(viewport_, w, h);
-    }
+    // destination 不急切下发（防拉伸闪烁，见 syncViewport）；物理池先按
+    // 新逻辑重建，committed 的旧 buffer 在下一帧提交前按旧 destination
+    // 显示
     double sc = scale();
     int pw = static_cast<int>(w * sc + 0.5);
     int ph = static_cast<int>(h * sc + 0.5);
@@ -1075,11 +1093,31 @@ void VoicePopup::setLogicalSize(int w, int h) {
     }
 }
 
-void VoicePopup::pushFrameBGRA(const uint8_t *bgra, int w, int h) {
-    if (w != width_ || h != height_) {
-        resize(w, h);
+// viewport destination 必须与「匹配尺寸的 buffer」同一 commit 下发：
+// 提前改 destination 而表面仍是旧 buffer 的 1-2 帧内，合成器会把旧
+// buffer 拉伸到新逻辑尺寸（resize/移动时的跳闪即此）。所有 commit 前
+// 调本函数（池尺寸在 setLogicalSize/scale 变化时已同步重建）
+void VoicePopup::syncViewportLocked() {
+    if (viewport_ && logicalW_ > 0 && logicalH_ > 0) {
+        wp_viewport_set_destination(viewport_, logicalW_, logicalH_);
     }
+}
+
+void VoicePopup::pushFrameBGRA(const uint8_t *bgra, int w, int h) {
     std::lock_guard<std::mutex> lock(mutex_);
+    if (w != width_ || h != height_) {
+        // 池振荡防护：resize 消息已把逻辑/池更新到目标物理尺寸，而引擎
+        // metrics 尚未生效时按**旧尺寸**出帧——此时把池缩回去会让窗口
+        // 抖一下再长回（偶发 UI 截断的另一半根因）。旧尺寸迟到帧直接
+        // 丢弃，等 metrics 更新后的新尺寸帧
+        const double sc = scale();
+        const int pw = static_cast<int>(logicalW_ * sc + 0.5);
+        const int ph = static_cast<int>(logicalH_ * sc + 0.5);
+        if (width_ == pw && height_ == ph && (w != pw || h != ph)) {
+            return; // 池已在目标位，这是迟到帧
+        }
+        resizeLocked(w, h);
+    }
     // 隐藏后丢弃迟到帧（hide 已提交透明帧，idle 态的帧会把它覆盖回来）
     // 判定挂起期同样丢帧：跟随/底部未定，不 map（杜绝中途换 surface）
     if (!visible_ || decisionPending_ || !surface_ || !buffers_[0] ||
@@ -1094,6 +1132,7 @@ void VoicePopup::pushFrameBGRA(const uint8_t *bgra, int w, int h) {
     memcpy(pixels_ + cur_ * bufSize, bgra, bufSize);
     wl_surface_attach(surface_, buffers_[cur_], 0, 0);
     damageSurface(surface_, compositorVersion_, width_, height_);
+    syncViewportLocked();
     wl_surface_commit(surface_);
     cur_ = 1 - cur_;
     visible_ = true;
@@ -1116,13 +1155,14 @@ void VoicePopup::teardown() {
         wl_shm_pool_destroy(pool_);
     }
     if (pixels_) {
-        munmap(pixels_, width_ * height_ * 4 * 2);
+        munmap(pixels_, poolCapacity_);
     }
     if (poolFd_ >= 0) {
         close(poolFd_);
     }
     pool_ = nullptr;
     pixels_ = nullptr;
+    poolCapacity_ = 0;
     display_ = nullptr;
 }
 

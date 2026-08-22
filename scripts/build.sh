@@ -5,7 +5,7 @@
 set -euo pipefail
 
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
-IMAGE="${BUILD_IMAGE:-localhost/voiceinput-build:latest}"
+IMAGE="${BUILD_IMAGE:-localhost/aiinput-build:latest}"
 
 mkdir -p "$ROOT/artifacts/dist"
 
@@ -19,7 +19,7 @@ mkdir -p "$ROOT/artifacts/dist"
     flutter pub get >/dev/null
     flutter build bundle
 )
-FLUTTER_STAGE="$ROOT/artifacts/dist/share/fcitx5-voiceinput/flutter"
+FLUTTER_STAGE="$ROOT/artifacts/dist/share/fcitx5-aiinput/flutter"
 rm -rf "$FLUTTER_STAGE"
 mkdir -p "$FLUTTER_STAGE"
 cp -r "$ROOT/flutter/build/flutter_assets" "$FLUTTER_STAGE/"
@@ -56,11 +56,11 @@ podman run --rm \
 D="$ROOT/artifacts/dist"
 check() { if eval "$2"; then echo "  ✓ $1"; else echo "  ✗ $1"; FAIL=1; fi; }
 FAIL=0
-check "CJK 字体在位（tofu 回归）" '[ -f "$D/share/fcitx5-voiceinput/flutter/flutter_assets/assets/fonts/NotoSansSC-Regular.otf" ]'
-check "popup compat 修复编入（SEGV 回归）" '[ "$(objdump -d "$D/lib/fcitx5/voiceinput.so" | grep -c wl_proxy_set_user_data)" -ge 3 ]'
-check "真实键形匹配编入（触发失效回归）" '[ "$(objdump -d "$D/lib/fcitx5/voiceinput.so" | grep -c isModifier)" -ge 1 ]'
-check "sherpa 引擎编入" '[ "$(objdump -d "$D/lib/fcitx5/voiceinput.so" | grep -c SherpaOnnxCreateOnlineRecognizer)" -ge 1 ]'
-check "引擎三件套在位" 'ls "$D/lib/fcitx5-voiceinput/" | grep -q libsherpa-onnx-c-api.so && ls "$D/lib/fcitx5-voiceinput/" | grep -q libonnxruntime.so && ls "$D/lib/fcitx5-voiceinput/" | grep -q libflutter_engine.so'
+check "CJK 字体在位（tofu 回归）" '[ -f "$D/share/fcitx5-aiinput/flutter/flutter_assets/assets/fonts/NotoSansSC-Regular.otf" ]'
+check "popup compat 修复编入（SEGV 回归）" '[ "$(objdump -d "$D/lib/fcitx5/aiinput.so" | grep -c wl_proxy_set_user_data)" -ge 3 ]'
+check "真实键形匹配编入（触发失效回归）" '[ "$(objdump -d "$D/lib/fcitx5/aiinput.so" | grep -c isModifier)" -ge 1 ]'
+check "sherpa 引擎编入" '[ "$(objdump -d "$D/lib/fcitx5/aiinput.so" | grep -c SherpaOnnxCreateOnlineRecognizer)" -ge 1 ]'
+check "引擎三件套在位" 'ls "$D/lib/fcitx5-aiinput/" | grep -q libsherpa-onnx-c-api.so && ls "$D/lib/fcitx5-aiinput/" | grep -q libonnxruntime.so && ls "$D/lib/fcitx5-aiinput/" | grep -q libflutter_engine.so'
 [ "$FAIL" = 0 ] && echo ">> 构建自检全过" || { echo "!! 构建自检失败"; exit 1; }
 
 echo ">> 产物："

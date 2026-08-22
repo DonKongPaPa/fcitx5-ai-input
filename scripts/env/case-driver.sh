@@ -70,8 +70,8 @@ for case_file in "$CASES_DIR"/*.yaml; do
     t0=$(now_ms)
     trigger_reply="$(gdbus call --session \
         --dest org.fcitx.Fcitx5 \
-        --object-path /org/fcitx/VoiceInput \
-        --method org.fcitx.VoiceInput.Test.Trigger "$text" 2>&1 || true)"
+        --object-path /org/fcitx/AiInput \
+        --method org.fcitx.AiInput.Test.Trigger "$text" 2>&1 || true)"
     t1=$(now_ms)
 
     # 等待 testapp 报告 changed（最长 5s）
@@ -122,20 +122,20 @@ record() {  # record <id> <status> <note>
 
 FCITX_LOG="$LOG_DIR/fcitx5.log"
 call() { gdbus call --session --dest org.fcitx.Fcitx5 \
-    --object-path /org/fcitx/VoiceInput \
-    --method org.fcitx.VoiceInput.Test."$1" "${@:2}" 2>&1; }
+    --object-path /org/fcitx/AiInput \
+    --method org.fcitx.AiInput.Test."$1" "${@:2}" 2>&1; }
 
 echo "== R. addon 模块化 + 引擎嵌入"
 
 # R1 模块加载（不再是输入法条目）
-if grep -aq "VoiceInput module loaded" "$FCITX_LOG"; then
+if grep -aq "AiInput module loaded" "$FCITX_LOG"; then
     record r1-module-load pass "Module 加载（全局热键，无 IM 条目）"
 else
     record r1-module-load fail "未见 module loaded 日志"
 fi
-# IM 条目已删：输入法列表里不应出现 voiceinput
-if [ -e /usr/share/fcitx5/inputmethod/voiceinput.conf ]; then
-    record r2-no-im-entry fail "inputmethod/voiceinput.conf 仍存在"
+# IM 条目已删：输入法列表里不应出现 aiinput
+if [ -e /usr/share/fcitx5/inputmethod/aiinput.conf ]; then
+    record r2-no-im-entry fail "inputmethod/aiinput.conf 仍存在"
 else
     record r2-no-im-entry pass "无 IM 条目"
 fi
@@ -161,7 +161,7 @@ sleep 2
 # 同时顺带覆盖 configtool SetConfig 链路
 gdbus call --session --dest org.fcitx.Fcitx5 --object-path /controller \
     --method org.fcitx.Fcitx.Controller1.SetConfig \
-    "fcitx://config/addon/voiceinput" "<{'LLMEnabled': <'False'>}>" >/dev/null 2>&1 || true
+    "fcitx://config/addon/aiinput" "<{'LLMEnabled': <'False'>}>" >/dev/null 2>&1 || true
 sleep 0.5
 im_before="$(fcitx5-remote -n 2>/dev/null || true)"
 # 录屏取证（popup 卡片渲染）
@@ -193,7 +193,7 @@ im_after="$(fcitx5-remote -n 2>/dev/null || true)"
 # 恢复 LLM 开；确保回 idle（不把 Result/Candidates 残留给 r5）
 gdbus call --session --dest org.fcitx.Fcitx5 --object-path /controller \
     --method org.fcitx.Fcitx.Controller1.SetConfig \
-    "fcitx://config/addon/voiceinput" "<{'LLMEnabled': <'True'>}>" >/dev/null 2>&1 || true
+    "fcitx://config/addon/aiinput" "<{'LLMEnabled': <'True'>}>" >/dev/null 2>&1 || true
 case "$(call State 2>/dev/null || true)" in *idle*) ;; *)
     call SimulateKey Control_R true >/dev/null 2>&1 || true
     call SimulateKey Control_R false >/dev/null 2>&1 || true;; esac
@@ -368,7 +368,7 @@ fi
 kill "$R12_PID" 2>/dev/null || true
 
 # R14 加载的二进制版本与安装包一致（宿主机：陈旧 dist/~/.local 不生效）
-pkg_ver="$(grep -a "^Version=" /usr/share/fcitx5/addon/voiceinput.conf 2>/dev/null | cut -d= -f2 || true)"
+pkg_ver="$(grep -a "^Version=" /usr/share/fcitx5/addon/aiinput.conf 2>/dev/null | cut -d= -f2 || true)"
 bin_ver="$(call Version 2>/dev/null | grep -oE "[0-9]+\.[0-9]+\.[0-9]+" || true)"
 if [ -n "$pkg_ver" ] && echo "$bin_ver" | grep -q "$pkg_ver"; then
     record r14-binary-version pass "运行版本 $bin_ver == 包版本 $pkg_ver"
@@ -377,10 +377,10 @@ else
 fi
 
 # R15 Sherpa CPU 流式引擎（模型存在才跑；虚拟麦喂 wav）
-if [ -d "${VOICEINPUT_SHERPA_MODEL_DIR:-/nonexistent}" ]; then
+if [ -d "${AIINPUT_SHERPA_MODEL_DIR:-/nonexistent}" ]; then
     gdbus call --session --dest org.fcitx.Fcitx5 --object-path /controller \
         --method org.fcitx.Fcitx.Controller1.SetConfig \
-        "fcitx://config/addon/voiceinput" "<{'AsrEngine': <'Sherpa'>}>" >/dev/null 2>&1 || true
+        "fcitx://config/addon/aiinput" "<{'AsrEngine': <'Sherpa'>}>" >/dev/null 2>&1 || true
     sleep 0.5
     "$DIST_BIN/$TESTAPP" >"$LOG_DIR/testapp-r15.log" 2>&1 &
     R15_PID=$!
@@ -408,7 +408,7 @@ if [ -d "${VOICEINPUT_SHERPA_MODEL_DIR:-/nonexistent}" ]; then
     kill "$R15_PID" 2>/dev/null || true
     gdbus call --session --dest org.fcitx.Fcitx5 --object-path /controller \
         --method org.fcitx.Fcitx.Controller1.SetConfig \
-        "fcitx://config/addon/voiceinput" "<{'AsrEngine': <'Dummy'>}>" >/dev/null 2>&1 || true
+        "fcitx://config/addon/aiinput" "<{'AsrEngine': <'Dummy'>}>" >/dev/null 2>&1 || true
     # 收尾回 idle（Candidates 残留会把 r16 的触发键当选词吃掉——r16 会话整个不跑）
     case "$(call State 2>/dev/null || true)" in *idle*) ;; *)
         call SimulateKey "Control+Control_R" true >/dev/null 2>&1 || true
@@ -420,10 +420,10 @@ else
 fi
 
 # R16 尾音完整（drain：松键瞬间管道尾音不再丢弃）
-if [ -d "${VOICEINPUT_SHERPA_MODEL_DIR:-/nonexistent}" ] && [ -n "${CAGE_SOCK:-}" ]; then
+if [ -d "${AIINPUT_SHERPA_MODEL_DIR:-/nonexistent}" ] && [ -n "${CAGE_SOCK:-}" ]; then
     gdbus call --session --dest org.fcitx.Fcitx5 --object-path /controller \
         --method org.fcitx.Fcitx.Controller1.SetConfig \
-        "fcitx://config/addon/voiceinput" "<{'AsrEngine': <'Sherpa'>}>" >/dev/null 2>&1 || true
+        "fcitx://config/addon/aiinput" "<{'AsrEngine': <'Sherpa'>}>" >/dev/null 2>&1 || true
     sleep 0.5
     "$DIST_BIN/$TESTAPP" >"$LOG_DIR/testapp-r16.log" 2>&1 &
     R16_PID=$!
@@ -450,7 +450,7 @@ if [ -d "${VOICEINPUT_SHERPA_MODEL_DIR:-/nonexistent}" ] && [ -n "${CAGE_SOCK:-}
     fi
     gdbus call --session --dest org.fcitx.Fcitx5 --object-path /controller \
         --method org.fcitx.Fcitx.Controller1.SetConfig \
-        "fcitx://config/addon/voiceinput" "<{'AsrEngine': <'Dummy'>}>" >/dev/null 2>&1 || true
+        "fcitx://config/addon/aiinput" "<{'AsrEngine': <'Dummy'>}>" >/dev/null 2>&1 || true
     # 收尾回 idle（Candidates 残留会跳过 r19 的 deep 检查）
     case "$(call State 2>/dev/null || true)" in *idle*) ;; *)
         call SimulateKey "Control+Control_R" true >/dev/null 2>&1 || true
@@ -476,7 +476,7 @@ fi
 printf 'Font="Noto Sans CJK SC 12"\n' >> /home/testuser/.config/fcitx5/conf/classicui.conf 2>/dev/null || true
 gdbus call --session --dest org.fcitx.Fcitx5 --object-path /controller \
     --method org.fcitx.Fcitx.Controller1.SetConfig \
-    "fcitx://config/addon/voiceinput" "<{'StreamingEnabled': <'True'>}>" >/dev/null 2>&1 || true
+    "fcitx://config/addon/aiinput" "<{'StreamingEnabled': <'True'>}>" >/dev/null 2>&1 || true
 sleep 2
 if grep -aq "UI 字体 →" "$FCITX_LOG" && grep -aq "ui-font:" "$FCITX_LOG"; then
     record r18-font-follow pass "classicui 字体已解析并加载（$(grep -a 'ui-font:' "$FCITX_LOG" | tail -1 | sed 's/.*ui-font: //')）"
@@ -495,8 +495,10 @@ fi
 hcd="$(call HealthCheck deep 2>/dev/null || true)"
 if echo "$hcd" | grep -q "load_ms"; then
     record r19-healthcheck-deep pass "deep 试加载返回耗时"
+elif [ ! -d "${AIINPUT_SHERPA_MODEL_DIR:-/nonexistent}" ]; then
+    record r19-healthcheck-deep pass "（跳过：模型未挂载）"
 else
-    record r19-healthcheck-deep fail "deep 缺 load_ms：${hcd:0:80}"
+    record r19-healthcheck-deep fail "deep 缺 load_ms：${hcd:0:120}"
 fi
 
 # R20 zipformer 双架构启动（宿主机回归：启动前置检查曾只认 paraformer
@@ -505,7 +507,7 @@ fi
 if [ -d "/models/sherpa-zipformer" ]; then
     gdbus call --session --dest org.fcitx.Fcitx5 --object-path /controller \
         --method org.fcitx.Fcitx.Controller1.SetConfig \
-        "fcitx://config/addon/voiceinput" "<{'AsrEngine': <'Sherpa'>, 'SherpaModelDir': <'/models/sherpa-zipformer'>}>" >/dev/null 2>&1 || true
+        "fcitx://config/addon/aiinput" "<{'AsrEngine': <'Sherpa'>, 'SherpaModelDir': <'/models/sherpa-zipformer'>}>" >/dev/null 2>&1 || true
     sleep 0.5
     "$DIST_BIN/$TESTAPP" >"$LOG_DIR/testapp-r20.log" 2>&1 &
     R20_PID=$!
@@ -533,7 +535,7 @@ if [ -d "/models/sherpa-zipformer" ]; then
     # 还原：引擎回 Dummy、目录回空（回落 env 默认），收尾回 idle
     gdbus call --session --dest org.fcitx.Fcitx5 --object-path /controller \
         --method org.fcitx.Fcitx.Controller1.SetConfig \
-        "fcitx://config/addon/voiceinput" "<{'AsrEngine': <'Dummy'>, 'SherpaModelDir': <''}>" >/dev/null 2>&1 || true
+        "fcitx://config/addon/aiinput" "<{'AsrEngine': <'Dummy'>, 'SherpaModelDir': <''}>" >/dev/null 2>&1 || true
     case "$(call State 2>/dev/null || true)" in *idle*) ;; *)
         call SimulateKey "Control+Control_R" true >/dev/null 2>&1 || true
         sleep 0.3
@@ -547,7 +549,7 @@ fi
 if [ -d "/models/sensevoice" ] && [ -d "/models/sherpa-zipformer" ]; then
     gdbus call --session --dest org.fcitx.Fcitx5 --object-path /controller \
         --method org.fcitx.Fcitx.Controller1.SetConfig \
-        "fcitx://config/addon/voiceinput" "<{'AsrEngine': <'Sherpa'>, 'SherpaModelDir': <'/models/sherpa-zipformer'>, 'SenseVoiceDir': <'/models/sensevoice'>}>" >/dev/null 2>&1 || true
+        "fcitx://config/addon/aiinput" "<{'AsrEngine': <'Sherpa'>, 'SherpaModelDir': <'/models/sherpa-zipformer'>, 'SenseVoiceDir': <'/models/sensevoice'>}>" >/dev/null 2>&1 || true
     sleep 0.5
     "$DIST_BIN/$TESTAPP" >"$LOG_DIR/testapp-r21.log" 2>&1 &
     R21_PID=$!
@@ -573,7 +575,7 @@ if [ -d "/models/sensevoice" ] && [ -d "/models/sherpa-zipformer" ]; then
     fi
     gdbus call --session --dest org.fcitx.Fcitx5 --object-path /controller \
         --method org.fcitx.Fcitx.Controller1.SetConfig \
-        "fcitx://config/addon/voiceinput" "<{'AsrEngine': <'Dummy'>, 'SherpaModelDir': <''>, 'SenseVoiceDir': <''>}>" >/dev/null 2>&1 || true
+        "fcitx://config/addon/aiinput" "<{'AsrEngine': <'Dummy'>, 'SherpaModelDir': <''>, 'SenseVoiceDir': <''>}>" >/dev/null 2>&1 || true
     case "$(call State 2>/dev/null || true)" in *idle*) ;; *)
         call SimulateKey "Control+Control_R" true >/dev/null 2>&1 || true
         sleep 0.3
@@ -590,7 +592,7 @@ fi
 if [ -n "${CAGE_SOCK:-}" ] && command -v grim >/dev/null 2>&1; then
     gdbus call --session --dest org.fcitx.Fcitx5 --object-path /controller \
         --method org.fcitx.Fcitx.Controller1.SetConfig \
-        "fcitx://config/addon/voiceinput" "<{'PositionMode': <'top'>}>" >/dev/null 2>&1 || true
+        "fcitx://config/addon/aiinput" "<{'PositionMode': <'top'>}>" >/dev/null 2>&1 || true
     sleep 0.5
     # mark 放在 testapp 启动前：prepare（FocusIn）时就创建 layer surface
     r22_mark=$(wc -l < "$FCITX_LOG")
@@ -629,7 +631,7 @@ if [ -n "${CAGE_SOCK:-}" ] && command -v grim >/dev/null 2>&1; then
     fi
     gdbus call --session --dest org.fcitx.Fcitx5 --object-path /controller \
         --method org.fcitx.Fcitx.Controller1.SetConfig \
-        "fcitx://config/addon/voiceinput" "<{'PositionMode': <'auto'>, 'UIFont': <''>}>" >/dev/null 2>&1 || true
+        "fcitx://config/addon/aiinput" "<{'PositionMode': <'auto'>, 'UIFont': <''>}>" >/dev/null 2>&1 || true
     case "$(call State 2>/dev/null || true)" in *idle*) ;; *)
         call SimulateKey "Control+Control_R" true >/dev/null 2>&1 || true
         sleep 0.3
@@ -646,7 +648,7 @@ if [ -n "${CAGE_SOCK:-}" ] && command -v virtpoint >/dev/null 2>&1 && \
    [ -x "$DIST_BIN/virtpoint" ]; then
     gdbus call --session --dest org.fcitx.Fcitx5 --object-path /controller \
         --method org.fcitx.Fcitx.Controller1.SetConfig \
-        "fcitx://config/addon/voiceinput" "<{'PositionMode': <'top'>, 'UIFont': <'Noto Sans CJK SC 16'>}>" >/dev/null 2>&1 || true
+        "fcitx://config/addon/aiinput" "<{'PositionMode': <'top'>, 'UIFont': <'Noto Sans CJK SC 16'>}>" >/dev/null 2>&1 || true
     sleep 1
     "$DIST_BIN/$TESTAPP" >"$LOG_DIR/testapp-r23.log" 2>&1 &
     R23_PID=$!
@@ -680,7 +682,7 @@ if [ -n "${CAGE_SOCK:-}" ] && command -v virtpoint >/dev/null 2>&1 && \
     fi
     gdbus call --session --dest org.fcitx.Fcitx5 --object-path /controller \
         --method org.fcitx.Fcitx.Controller1.SetConfig \
-        "fcitx://config/addon/voiceinput" "<{'PositionMode': <'auto'>}>" >/dev/null 2>&1 || true
+        "fcitx://config/addon/aiinput" "<{'PositionMode': <'auto'>}>" >/dev/null 2>&1 || true
     case "$(call State 2>/dev/null || true)" in *idle*) ;; *)
         call SimulateKey "Control+Control_R" true >/dev/null 2>&1 || true
         sleep 0.3
@@ -698,7 +700,7 @@ fi
 if [ -n "${CAGE_SOCK:-}" ] && command -v chromium >/dev/null 2>&1; then
     gdbus call --session --dest org.fcitx.Fcitx5 --object-path /controller \
         --method org.fcitx.Fcitx.Controller1.SetConfig \
-        "fcitx://config/addon/voiceinput" "<{'PositionMode': <'auto'>}>" >/dev/null 2>&1 || true
+        "fcitx://config/addon/aiinput" "<{'PositionMode': <'auto'>}>" >/dev/null 2>&1 || true
     sleep 0.5
     CHROME_PAGE='data:text/html,<body style="background:%23fff;margin:0"><div style="position:absolute;top:40%%;left:50%%;transform:translate(-50%%,-50%%)"><input id="q" autofocus style="width:420px;height:56px;font-size:28px;padding:8px" placeholder="type here"></div></body>'
     # 单变体（--enable-wayland-ime）：无 flag 变体在容器里同样走
@@ -753,7 +755,7 @@ fi
 if [ -n "${CAGE_SOCK:-}" ] && [ -x "$DIST_BIN/$TESTAPP" ] && [ -x "$DIST_BIN/virtpoint" ]; then
     gdbus call --session --dest org.fcitx.Fcitx5 --object-path /controller \
         --method org.fcitx.Fcitx.Controller1.SetConfig \
-        "fcitx://config/addon/voiceinput" "<{'PositionMode': <'auto'>}>" >/dev/null 2>&1 || true
+        "fcitx://config/addon/aiinput" "<{'PositionMode': <'auto'>}>" >/dev/null 2>&1 || true
     sleep 0.5
     r25_mark=$(wc -l < "$FCITX_LOG")
     "$DIST_BIN/$TESTAPP" >"$LOG_DIR/testapp-r25.log" 2>&1 &
@@ -829,7 +831,7 @@ fi
 if [ -n "${CAGE_SOCK:-}" ] && command -v chromium >/dev/null 2>&1; then
     gdbus call --session --dest org.fcitx.Fcitx5 --object-path /controller \
         --method org.fcitx.Fcitx.Controller1.SetConfig \
-        "fcitx://config/addon/voiceinput" "<{'PositionMode': <'caret'>}>" >/dev/null 2>&1 || true
+        "fcitx://config/addon/aiinput" "<{'PositionMode': <'caret'>}>" >/dev/null 2>&1 || true
     sleep 0.5
     r26_mark=$(wc -l < "$FCITX_LOG")
     cat >/tmp/r26.html <<'HTML'
@@ -898,7 +900,7 @@ HTML
     fi
     gdbus call --session --dest org.fcitx.Fcitx5 --object-path /controller \
         --method org.fcitx.Fcitx.Controller1.SetConfig \
-        "fcitx://config/addon/voiceinput" "<{'PositionMode': <'auto'>}>" >/dev/null 2>&1 || true
+        "fcitx://config/addon/aiinput" "<{'PositionMode': <'auto'>}>" >/dev/null 2>&1 || true
 else
     record r26-chromium-rect-timing pass "（跳过：无 chromium/录屏）"
 fi
@@ -911,7 +913,7 @@ fi
 if [ -n "${CAGE_SOCK:-}" ] && command -v chromium >/dev/null 2>&1; then
     gdbus call --session --dest org.fcitx.Fcitx5 --object-path /controller \
         --method org.fcitx.Fcitx.Controller1.SetConfig \
-        "fcitx://config/addon/voiceinput" "<{'PositionMode': <'auto'>}>" >/dev/null 2>&1 || true
+        "fcitx://config/addon/aiinput" "<{'PositionMode': <'auto'>}>" >/dev/null 2>&1 || true
     sleep 0.5
     pkill -f "chrome-r27" 2>/dev/null || true
     chromium --ozone-platform=wayland --class=webapp-e2e --enable-wayland-ime \
@@ -970,7 +972,7 @@ fi
 if [ -n "${CAGE_SOCK:-}" ] && [ -x "$DIST_BIN/$TESTAPP" ] && [ -x "$DIST_BIN/virtpoint" ]; then
     gdbus call --session --dest org.fcitx.Fcitx5 --object-path /controller \
         --method org.fcitx.Fcitx.Controller1.SetConfig \
-        "fcitx://config/addon/voiceinput" "<{'PositionMode': <'auto'>}>" >/dev/null 2>&1 || true
+        "fcitx://config/addon/aiinput" "<{'PositionMode': <'auto'>}>" >/dev/null 2>&1 || true
     sleep 0.5
     r28_mark=$(wc -l < "$FCITX_LOG")
     "$DIST_BIN/$TESTAPP" >"$LOG_DIR/testapp-r28.log" 2>&1 &
@@ -1013,7 +1015,7 @@ if [ -n "${CAGE_SOCK:-}" ] && [ -x "$DIST_BIN/$TESTAPP" ] && [ -x "$DIST_BIN/vir
    command -v weston-flower >/dev/null 2>&1; then
     gdbus call --session --dest org.fcitx.Fcitx5 --object-path /controller \
         --method org.fcitx.Fcitx.Controller1.SetConfig \
-        "fcitx://config/addon/voiceinput" "<{'PositionMode': <'auto'>}>" >/dev/null 2>&1 || true
+        "fcitx://config/addon/aiinput" "<{'PositionMode': <'auto'>}>" >/dev/null 2>&1 || true
     sleep 0.5
     r29_mark=$(wc -l < "$FCITX_LOG")
     "$DIST_BIN/$TESTAPP" >"$LOG_DIR/testapp-r29.log" 2>&1 &
@@ -1071,7 +1073,7 @@ fi
 if [ -n "${CAGE_SOCK:-}" ] && [ -x "$DIST_BIN/$TESTAPP" ] && [ -x "$DIST_BIN/virtpoint" ]; then
     gdbus call --session --dest org.fcitx.Fcitx5 --object-path /controller \
         --method org.fcitx.Fcitx.Controller1.SetConfig \
-        "fcitx://config/addon/voiceinput" "<{'PositionMode': <'auto'>}>" >/dev/null 2>&1 || true
+        "fcitx://config/addon/aiinput" "<{'PositionMode': <'auto'>}>" >/dev/null 2>&1 || true
     sleep 0.5
     r30_mark=$(wc -l < "$FCITX_LOG")
     "$DIST_BIN/$TESTAPP" >"$LOG_DIR/testapp-r30.log" 2>&1 &
@@ -1113,7 +1115,7 @@ fi
 # 没到 → 定时器切 layer。断言：暂缓日志 + （矩形到 OR 500ms 切换日志）；
 # B 第二个会话必须跟随
 if [ -n "${CAGE_SOCK:-}" ] && command -v chromium >/dev/null 2>&1 && [ -x "$DIST_BIN/$TESTAPP" ]; then
-    gdbus call --session --dest org.fcitx.Fcitx5 --object-path /controller         --method org.fcitx.Fcitx.Controller1.SetConfig         "fcitx://config/addon/voiceinput" "<{'PositionMode': <'auto'>}>" >/dev/null 2>&1 || true
+    gdbus call --session --dest org.fcitx.Fcitx5 --object-path /controller         --method org.fcitx.Fcitx.Controller1.SetConfig         "fcitx://config/addon/aiinput" "<{'PositionMode': <'auto'>}>" >/dev/null 2>&1 || true
     sleep 0.5
     # A（GTK testapp）：一个会话建立跟随史
     "$DIST_BIN/$TESTAPP" >"$LOG_DIR/testapp-r31.log" 2>&1 &

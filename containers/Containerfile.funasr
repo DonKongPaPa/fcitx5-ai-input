@@ -16,7 +16,7 @@ RUN pip config set global.index-url https://pypi.tuna.tsinghua.edu.cn/simple \
     && pip install --no-cache-dir --break-system-packages \
         funasr modelscope torch torchaudio websockets
 
-COPY scripts/funasr-server/server.py /opt/voiceinput/server.py
+COPY scripts/funasr-server/server.py /opt/aiinput/server.py
 
 RUN useradd -m -u 1000 testuser
 USER testuser

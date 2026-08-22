@@ -2,7 +2,7 @@
 #include "funasr_ws_engine.h"
 
 #include "audio_capture.h"
-#include "voiceinput_config.h"
+#include "aiinput_config.h"
 
 #include <fcitx-utils/log.h>
 
@@ -60,7 +60,7 @@ static void b64(const uint8_t *in, size_t n, char *out) {
     out[o] = 0;
 }
 
-void FunAsrWsEngine::start(EventLoop *loop, const VoiceInputConfig *config,
+void FunAsrWsEngine::start(EventLoop *loop, const AiInputConfig *config,
                            Callbacks cbs) {
     loop_ = loop;
     config_ = config;
