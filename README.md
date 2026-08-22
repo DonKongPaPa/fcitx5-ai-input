@@ -61,7 +61,7 @@ bash /usr/lib/fcitx5-aiinput/scripts/fetch-sherpa-models.sh --model sensevoice
 4. 松开：直接上屏（默认），或进候选框选择（LLM 候选开启时）
    - 候选态：`1-9` 选对应项 / `↑↓←→` 换行 / `Enter` 选首项 / `Esc` 取消
    - 鼠标：hover 高亮 + 点击选择
-5. 录音中 `Esc` 取消整轮
+5. 录音中 `Esc` / `Backspace` 取消整轮（候选/结果态同义）
 
 所有行为可在 `fcitx5-configtool → 插件 → Voice Input` 中配置，保存即生效（无需重启）。
 
@@ -77,6 +77,7 @@ bash /usr/lib/fcitx5-aiinput/scripts/fetch-sherpa-models.sh --model sensevoice
 | PositionFallbackApps | （空） | 强制底部居中的应用名单（程序名子串匹配） |
 | UIFont | （空） | 卡片字体（Pango 串；空=跟随 classicui 字体） |
 | LLMEnabled | true | 开启时结果先入候选框（当前润色为规则版，LLM 后端开发中） |
+| UiAnimSpeed | 慢速 | 卡片动画速率挡位（慢速/标准/快速，缩放全部过渡动画时长） |
 | PopupTimeoutMs | 1500 | 无候选时结果停留时长 |
 
 FunASR 服务档：configtool「模型部署」组配置 `FunASRAutoStart` + `FunASRServerCmd`（指向 `funasr-serve.sh`），连接失败自动拉起；或手动 `scripts/funasr-serve.sh start`。
