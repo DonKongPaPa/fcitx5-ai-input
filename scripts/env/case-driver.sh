@@ -666,8 +666,9 @@ if [ -n "${CAGE_SOCK:-}" ] && command -v virtpoint >/dev/null 2>&1 && \
         call InjectKey "$r23k" false >/dev/null 2>&1 || true
         sleep 0.3
     done
-    # hover+点击候选行 1（16pt 字体布局更高：行 1 中心 ≈640,130）
-    "$DIST_BIN/virtpoint" move 640 130 1280 720 2>/dev/null || true
+    # hover+点击候选行 1（坐标按 scale=2 的逻辑 (320,120)×2 换算物理——
+    # 行区深处，字体高度波动不影响；历史假 1.0 时代的 640,130 落在头部）
+    "$DIST_BIN/virtpoint" move 640 240 1280 720 2>/dev/null || true
     sleep 0.6
     "$DIST_BIN/virtpoint" click left 2>/dev/null || true
     sleep 1.5
