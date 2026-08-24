@@ -253,6 +253,9 @@ void VoicePopup::pointerEnter(void *data, wl_pointer *, uint32_t serial,
                 WP_CURSOR_SHAPE_DEVICE_V1_SHAPE_DEFAULT);
         }
         s->pointerOnPopup_ = true;
+        s->motionLogLeft_ = 5; // 诊断：每次命中后采样前几笔 motion
+        FCITX_INFO() << "VoicePopup: [diag] enter 命中 " << s->ptrX_ << ","
+                     << s->ptrY_;
         if (s->pointerSink_) {
             s->pointerSink_(PointerEvent::Enter, s->ptrX_, s->ptrY_);
         }
@@ -264,6 +267,8 @@ void VoicePopup::pointerEnter(void *data, wl_pointer *, uint32_t serial,
 void VoicePopup::pointerLeave(void *data, wl_pointer *, uint32_t,
                               wl_surface *surface) {
     auto *s = static_cast<VoicePopup *>(data);
+    FCITX_INFO() << "VoicePopup: [diag] leave"
+                 << (surface == s->surface_ ? "（本卡片）" : "（非本卡）");
     if (surface == s->surface_) {
         s->pointerOnPopup_ = false;
         if (s->pointerSink_) {
@@ -279,6 +284,12 @@ void VoicePopup::pointerMotion(void *data, wl_pointer *, uint32_t,
     auto *s = static_cast<VoicePopup *>(data);
     s->ptrX_ = wl_fixed_to_int(sx);
     s->ptrY_ = wl_fixed_to_int(sy);
+    if (s->motionLogLeft_ > 0) {
+        s->motionLogLeft_--;
+        FCITX_INFO() << "VoicePopup: [diag] motion " << s->ptrX_ << ","
+                     << s->ptrY_
+                     << (s->pointerOnPopup_ ? " [命中]" : " [非命中]");
+    }
     if (s->pointerOnPopup_ && s->pointerSink_) {
         s->pointerSink_(PointerEvent::Motion, s->ptrX_, s->ptrY_);
     }

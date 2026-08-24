@@ -273,6 +273,7 @@ private:
     bool pointerOnPopup_ = false; // 指针焦点在我们 popup 表面（直达模式）
     std::function<void(PointerEvent, int, int)> pointerSink_;
     int ptrX_ = -10000, ptrY_ = -10000; // 最近指针位置（表面局部）
+    int motionLogLeft_ = 0; // 诊断采样：每次命中后记录前几笔 motion
 
     // shm 双缓冲
     wl_shm_pool *pool_ = nullptr;
