@@ -473,7 +473,11 @@ void FlutterEngineHost::onPointer(PointerKind kind, double x, double y) {
             ptrAdded_ = true;
             send(kAdd, x, y, 0);
         }
-        send(ptrDown_ ? kMove : kHover, x, y, ptrDown_ ? kPrimaryButton : 0);
+        // Enter 不补发 kHover：Enter 常是「表面在静止指针下方弹出」，
+        // 合成 hover 会立即抢走方向键选择；真实移动走 Motion 的 kHover
+        if (ptrDown_) {
+            send(kMove, x, y, kPrimaryButton);
+        }
         break;
     case PointerKind::Leave:
         if (ptrAdded_) {

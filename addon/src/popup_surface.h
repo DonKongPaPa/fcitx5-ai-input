@@ -188,6 +188,9 @@ private:
     void syncViewportLocked(); // destination 与匹配 buffer 同 commit 下发
     void teardown();
     bool wantTopMode(InputContext *ic, bool atShow = false); // 定位模式决策（policy × 名单 × 矩形上报能力）
+    // overlay 兜底的贴光标定位（classicui-X11 近似：cursorRect 当输出
+    // 坐标，TOP|LEFT 锚 + margin；下方放不下翻上、水平钳内）
+    void applyOverlayAnchorLocked(InputContext *ic);
     std::string toLower(std::string s);
 
     Instance *instance_;
@@ -212,6 +215,7 @@ private:
     // scale 双屏上会放大 33-60%）→ 用上次 fractional 兜底永远更准
     uint32_t lastFscaleNum_ = 0;
     int outputScale_ = 1;     // wl_output 整数 scale 兜底
+    int32_t outputPhysW_ = 0, outputPhysH_ = 0; // mode 事件物理尺寸（overlay 钳制用）
     wl_output *output_ = nullptr;
     int logicalW_ = 0, logicalH_ = 0;
     std::function<void(double)> scaleHandler_;

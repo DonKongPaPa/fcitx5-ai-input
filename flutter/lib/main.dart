@@ -203,12 +203,15 @@ class _VoiceUiHomeState extends State<VoiceUiHome> {
         break;
       case 'candidates':
         _ticker?.cancel();
-        _mouseHover = -1;
+        final int msgHover = (msg['hover'] as num?)?.toInt() ?? -1;
+        // hover 值 ≠ 本地悬停 = 键盘改了选择（或新会话）→ 悬停让位，
+        // 方向键接管显示；鼠标再次移动经 onHover 重新接管
+        _mouseHover = msgHover == _mouseHover ? _mouseHover : -1;
         _update(SessionData(
           state: UiState.candidates,
           resultText: msg['final'] as String? ?? '',
           candidates: (msg['candidates'] as List?)?.cast<String>() ?? const [],
-          hover: (msg['hover'] as num?)?.toInt() ?? -1,
+          hover: msgHover,
         ));
         break;
       default:
@@ -691,7 +694,9 @@ class _SessionBodyState extends State<_SessionBody> {
     }
     return MouseRegion(
       cursor: SystemMouseCursors.click,
-      onEnter: (_) => widget.onHover(index),
+      // 只挂 onHover（真实移动事件）：静止指针下弹出/布局变化合成的
+      // onEnter 不选择——否则静止鼠标压住方向键选择
+      onHover: (_) => widget.onHover(index),
       onExit: (_) => widget.onHover(-1),
       child: GestureDetector(
         behavior: HitTestBehavior.opaque,

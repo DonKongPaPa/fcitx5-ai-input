@@ -924,6 +924,7 @@ bool AiInputEngine::handleKey(const Key &key, bool pressed,
                         : -1;
                 keyboardRow_ = static_cast<int>(
                     (keyboardRow_ + n + delta) % n);
+                uiHoverRow_ = -1; // 键盘接管选择：静止悬停让位（动鼠标再接管）
                 uiNotify("arrow-select", std::to_string(keyboardRow_));
                 pushUiState(); // 内联 preedit 同步到新选中行
                 return true;
@@ -1144,6 +1145,7 @@ void AiInputEngine::onAsrFinish(const std::string &text) {
         candidates_ = {polish(finalText_), finalText_};
         state_ = State::Candidates;
         keyboardRow_ = 0;
+        uiHoverRow_ = -1; // 上会话悬停残留不清会盖住首行选中显示
         pushUiState();
         uiNotify("candidates", joinCandidates());
     } else {

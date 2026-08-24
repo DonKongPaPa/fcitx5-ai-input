@@ -20,6 +20,7 @@ extern "C" const wl_interface xdg_popup_interface = {};
 
 #include <fcntl.h>
 
+#include <algorithm>
 #include <cctype>
 #include <chrono>
 #include <cstring>
@@ -189,8 +190,14 @@ void VoicePopup::preferredScale(void *data, wp_fractional_scale_v1 *,
 void VoicePopup::outputGeometry(void *, wl_output *, int32_t, int32_t,
                                 int32_t, int32_t, int32_t, const char *,
                                 const char *, int32_t) {}
-void VoicePopup::outputMode(void *, wl_output *, uint32_t, int32_t, int32_t,
-                            int32_t) {}
+void VoicePopup::outputMode(void *data, wl_output *, uint32_t, int32_t w,
+                            int32_t h, int32_t) {
+    // overlay 贴光标定位的钳制需要输出逻辑尺寸（物理 mode/scale）
+    auto *s = static_cast<VoicePopup *>(data);
+    std::lock_guard<std::mutex> lock(s->mutex_);
+    s->outputPhysW_ = w;
+    s->outputPhysH_ = h;
+}
 void VoicePopup::outputDone(void *, wl_output *) {}
 void VoicePopup::outputScale(void *data, wl_output *, int32_t factor) {
     auto *s = static_cast<VoicePopup *>(data);
@@ -796,14 +803,21 @@ bool VoicePopup::ensurePopup(InputContext *ic, bool atShow) {
             "input-method");
         zwlr_layer_surface_v1_add_listener(layerSurface_, &kLayerListener,
                                            this);
-        zwlr_layer_surface_v1_set_anchor(
-            layerSurface_, anchorBottom_
-                               ? ZWLR_LAYER_SURFACE_V1_ANCHOR_BOTTOM
-                               : ZWLR_LAYER_SURFACE_V1_ANCHOR_TOP);
+        if (overlayFallback_) {
+            // classicui-X11 同款近似：DBus IC 的 cursorRect 是窗口局部
+            // 坐标，全屏启动器（DMS）场景≈输出坐标——锚 TOP|LEFT+margin
+            // 贴光标摆放，放不下翻上/钳内
+            applyOverlayAnchorLocked(ic);
+        } else {
+            zwlr_layer_surface_v1_set_anchor(
+                layerSurface_, anchorBottom_
+                                   ? ZWLR_LAYER_SURFACE_V1_ANCHOR_BOTTOM
+                                   : ZWLR_LAYER_SURFACE_V1_ANCHOR_TOP);
+            zwlr_layer_surface_v1_set_margin(
+                layerSurface_, anchorBottom_ ? 0 : 16, 0,
+                anchorBottom_ ? 16 : 0, 0);
+        }
         zwlr_layer_surface_v1_set_exclusive_zone(layerSurface_, -1);
-        zwlr_layer_surface_v1_set_margin(
-            layerSurface_, anchorBottom_ ? 0 : 16, 0, anchorBottom_ ? 16 : 0,
-            0);
         zwlr_layer_surface_v1_set_keyboard_interactivity(
             layerSurface_,
             ZWLR_LAYER_SURFACE_V1_KEYBOARD_INTERACTIVITY_NONE);
@@ -816,7 +830,10 @@ bool VoicePopup::ensurePopup(InputContext *ic, bool atShow) {
         wl_surface_commit(surface_); // 空 commit：请求首个 configure
         icRef_ = ic->watch();
         FCITX_INFO() << "VoicePopup: layer surface created（"
-                     << (anchorBottom_ ? "底部" : "顶部") << "居中模式）";
+                     << (overlayFallback_
+                             ? "overlay 贴光标"
+                             : anchorBottom_ ? "底部" : "顶部")
+                     << "居中模式）";
     } else {
         popup_ = zwp_input_method_v2_get_input_popup_surface(im_, surface_);
         zwp_input_popup_surface_v2_add_listener(popup_, &kPopupListener, this);
@@ -932,6 +949,9 @@ void VoicePopup::show(InputContext *ic) {
     if (!ensurePopup(ic, /*atShow=*/true)) {
         FCITX_WARN() << "VoicePopup::show but popup not ready";
         return;
+    }
+    if (overlayFallback_ && layerSurface_) {
+        applyOverlayAnchorLocked(ic); // 光标可能已移动：每次 show 重锚
     }
     if (!topMode_ || overlayFallback_) {
         // overlay 兜底（DBus 前端）也挂：preedit 经 D-Bus 送达应用，
@@ -1081,6 +1101,40 @@ void VoicePopup::resizeLocked(int w, int h) {
     FCITX_INFO() << "VoicePopup: shm pool resized to " << w << "x" << h;
 }
 
+// overlay 贴光标定位（classicui-X11 同款近似）：cursorRect 当输出坐标，
+// 锚 TOP|LEFT + margin 摆到光标下方；放不下翻光标上方、水平钳入屏内。
+// margin 随下一次 commit 生效（候选期帧持续流动，无需专门 commit）
+void VoicePopup::applyOverlayAnchorLocked(InputContext *ic) {
+    if (!layerSurface_) {
+        return;
+    }
+    const auto cr = ic ? ic->cursorRect() : Rect();
+    const int cw = logicalW_ > 0 ? logicalW_ : kDefaultWidth;
+    const int ch = logicalH_ > 0 ? logicalH_ : kDefaultHeight;
+    int x = cr.left();
+    int y = cr.top() + cr.height() + 8;
+    const double sc = scale();
+    const int outW = outputPhysW_ > 0
+                         ? static_cast<int>(outputPhysW_ / sc)
+                         : 0;
+    const int outH = outputPhysH_ > 0
+                         ? static_cast<int>(outputPhysH_ / sc)
+                         : 0;
+    if (outH > 0 && y + ch > outH - 8) {
+        y = cr.top() - ch - 8; // 光标下方放不下 → 翻上方
+        if (y < 8) {
+            y = 8;
+        }
+    }
+    if (outW > 0) {
+        x = std::max(8, std::min(x, outW - cw - 8));
+    }
+    zwlr_layer_surface_v1_set_anchor(
+        layerSurface_, ZWLR_LAYER_SURFACE_V1_ANCHOR_TOP |
+                           ZWLR_LAYER_SURFACE_V1_ANCHOR_LEFT);
+    zwlr_layer_surface_v1_set_margin(layerSurface_, y, 0, 0, x);
+}
+
 // 调用方（Dart resize 消息）上报逻辑尺寸；帧本身是物理尺寸
 //（引擎按 metrics physical=逻辑×ratio 渲染），池随物理建，viewport 收逻辑
 void VoicePopup::setLogicalSize(int w, int h) {
@@ -1093,6 +1147,9 @@ void VoicePopup::setLogicalSize(int w, int h) {
     // 底部会被 surface 边界切掉。set_size 在下一次 commit 生效
     if (topMode_ && layerSurface_ && changed) {
         zwlr_layer_surface_v1_set_size(layerSurface_, w, h);
+        if (overlayFallback_) {
+            applyOverlayAnchorLocked(icRef_.get()); // 尺寸变化影响翻上/钳内
+        }
     }
     // destination 不急切下发（防拉伸闪烁，见 syncViewport）；物理池先按
     // 新逻辑重建，committed 的旧 buffer 在下一帧提交前按旧 destination
