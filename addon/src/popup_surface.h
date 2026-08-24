@@ -226,6 +226,9 @@ private:
     zwlr_layer_surface_v1 *layerSurface_ = nullptr;
     bool layerConfigured_ = false; // 首个 configure 到达前不得 commit buffer
     bool topMode_ = false;         // 当前 surface 用的是 layer 角色
+    bool overlayFallback_ = false; // layer 角色因 DBus 前端 IC（无 IM
+                                   // proxy，跟随不可达）强制——建在
+                                   // overlay 层（高于启动器面板）并挂探针
     std::string positionMode_ = "auto";
     std::vector<std::string> fallbackApps_;
     void *surfaceCompat_ = nullptr; // WlSurface wrapper 布局占位（见 cpp）

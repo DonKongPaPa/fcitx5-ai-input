@@ -77,14 +77,15 @@ static const zwlr_layer_surface_v1_listener kLayerListener = {
 
 // layer-shell 首个 configure 到达：ack 后才允许提交 buffer（协议要求）
 void VoicePopup::layerConfigure(void *data, zwlr_layer_surface_v1 *ls,
-                                uint32_t serial, uint32_t, uint32_t) {
+                                uint32_t serial, uint32_t w, uint32_t h) {
     auto *s = static_cast<VoicePopup *>(data);
     std::lock_guard<std::mutex> lock(s->mutex_);
     zwlr_layer_surface_v1_ack_configure(ls, serial);
     if (!s->layerConfigured_) {
         s->layerConfigured_ = true;
-        FCITX_INFO() << "VoicePopup: layer surface configured（"
-                     << (s->anchorBottom_ ? "底部" : "顶部") << "居中就绪）";
+        FCITX_INFO() << "VoicePopup: layer surface configured " << w << "x"
+                     << h << "（" << (s->anchorBottom_ ? "底部" : "顶部")
+                     << "居中就绪）";
     }
 }
 
@@ -554,16 +555,16 @@ void VoicePopup::endPreeditProbe() {
 
 void VoicePopup::primePreedit(InputContext *ic) {
     std::lock_guard<std::mutex> lock(mutex_);
-    if (!ic || sawRealRect_ || committedInThisIC_ || topMode_) {
+    if (!ic || sawRealRect_ || committedInThisIC_) {
         return;
     }
     if (!surface_ && !ensurePopup(ic, /*atShow=*/false)) {
-        return; // 非 wayland_v2 前端：无 popup 可探
+        return; // 无处可挂（非 wayland 且无 layer-shell）
     }
-    if (topMode_) {
+    if (topMode_ && !overlayFallback_) {
         return; // policy/名单判成 layer：无需矩形
     }
-    beginPreeditProbe(ic);
+    beginPreeditProbe(ic); // overlay 兜底（DBus 前端）为可见指示器而挂
 }
 
 
@@ -634,6 +635,8 @@ void VoicePopup::armProbeFallbackTimer() {
 //   探测矩形；show 阶段（atShow=true）仍未见真实矩形 → 回退 layer。
 //   （在 prepare 就判 !sawRealRect_ 会自锁：popup 都没建过，矩形永远
 //   收不到）
+// - DBus 前端 IC（QT_IM_MODULE=fcitx 的 Qt 应用/启动器）无 IM proxy，
+//   跟随路径整体不可达——ensurePopup 无条件 overlay 层兜底，不进本函数
 bool VoicePopup::wantTopMode(InputContext *ic, bool atShow) {
     lastDecisionWasKnowledgeFallback_ = false;
     anchorBottom_ = true; // "top" 之外全部底部居中
@@ -679,6 +682,20 @@ bool VoicePopup::ensurePopup(InputContext *ic, bool atShow) {
         committedInThisIC_ = false; // 上屏历史同样按 IC
         probeDeferralUsed_ = false; // 新 IC 重新给一次二次探测
     }
+    // IM proxy 可用性一次查清，贯穿本次决策。DBus 前端 IC（QT_IM_MODULE=
+    // fcitx 的 Qt 应用/启动器，如 DMS）：按键/上屏/光标矩形全走 D-Bus，
+    // 永远取不到 waylandim 的 IM proxy——input popup 跟随路径不可达，
+    // 只能 layer 自定位（overlay 层：启动器面板自身在 top 层，TOP 卡片
+    // 会被整块盖住）
+    im_ = nullptr;
+    bool imAvailable = false;
+    if (auto *waylandim = instance_->addonManager().addon("waylandim", true)) {
+        auto *imWrapper =
+            waylandim->call<IWaylandIMModule::getInputMethodV2>(ic);
+        im_ = wayland::rawPointer(imWrapper); // 借用，归 waylandim 所有
+        imAvailable = im_ != nullptr;
+    }
+    const bool overlay = !imAvailable;
     const bool top = [&]() {
         const bool want = wantTopMode(ic, atShow);
         // 知识回退 + 非强制（policy/名单）+ IM proxy 可用：show 时刻先不
@@ -686,51 +703,33 @@ bool VoicePopup::ensurePopup(InputContext *ic, bool atShow) {
         //（首个组合常不出报文）；矩形到即跟随，录音结束仍无矩形由
         // 结算路径切 layer
         if (want && lastDecisionWasKnowledgeFallback_ && atShow &&
-            !topMode_ && !probeDeferralUsed_) {
+            !topMode_ && !probeDeferralUsed_ && imAvailable) {
             probeDeferralUsed_ = true; // 本会话只暂缓一次（定时器重入不暂缓）
-            auto *waylandim = instance_->addonManager().addon("waylandim", true);
-            if (waylandim) {
-                auto *imWrapper =
-                    waylandim->call<IWaylandIMModule::getInputMethodV2>(ic);
-                if (wayland::rawPointer(imWrapper)) {
-                    FCITX_INFO() << "VoicePopup: 知识回退暂缓——popup 模式"
-                                    "二次探测（矩形到则跟随，否则录音结束"
-                                    "结算底部）";
-                    return false;
-                }
-            }
+            FCITX_INFO() << "VoicePopup: 知识回退暂缓——popup 模式"
+                            "二次探测（矩形到则跟随，否则录音结束"
+                            "结算底部）";
+            return false;
         }
-        return want;
+        if (overlay && !topMode_) {
+            FCITX_INFO() << "VoicePopup: IC 无 waylandim IM proxy（DBus "
+                            "前端？）→ overlay 层卡片兜底";
+        }
+        return want || overlay;
     }();
     // layer 模式同 IC 复用（layer 定位权在我们手里，不涉及槽位竞争）；
     // popup 模式每次都重建：smithay 的 input popup 追踪槽是单槽、
     // last-create-wins（classicui 每次显示都重建 popup 重夺槽位）——我们
     // 若长期持有旧 popup，classicui 一旦创建过自己的 popup，合成器就不再
     // 给我们重定位，卡片永远停在旧光标处
-    const bool reuse = surface_ && !icChanged && topMode_ && topMode_ == top;
+    const bool reuse = surface_ && !icChanged && topMode_ && topMode_ == top &&
+                       overlayFallback_ == overlay;
     if (reuse) {
         return true;
     }
     lastProgram_ = toLower(ic->program());
     destroyPopupSurface();
     topMode_ = top;
-
-    if (!top) {
-        auto *waylandim = instance_->addonManager().addon("waylandim", true);
-        if (!waylandim) {
-            FCITX_WARN() << "VoicePopup: waylandim addon unavailable";
-            return false;
-        }
-        auto *imWrapper =
-            waylandim->call<IWaylandIMModule::getInputMethodV2>(ic);
-        im_ = wayland::rawPointer(imWrapper); // 借用，归 waylandim 所有
-        if (!im_) {
-            // frontendName() 是 5.1 API（bookworm 5.0.21 没有）：对非 wayland_v2
-            // 前端的 IC，getInputMethodV2 本身就返回 null，无需前端名判断
-            FCITX_INFO() << "VoicePopup: IC 无 waylandim IM proxy（非 wayland_v2 前端？）";
-            return false;
-        }
-    }
+    overlayFallback_ = overlay;
 
     surface_ = wl_compositor_create_surface(compositor_);
     // 透明/隐藏态的空输入区域：layer surface 的输入区与像素透明度无关，
@@ -778,6 +777,12 @@ bool VoicePopup::ensurePopup(InputContext *ic, bool atShow) {
             wl_display_roundtrip(display_);
         }
         if (!layerShell_) {
+            if (overlayFallback_) {
+                // DBus IC + 无 layer-shell（非 wayland 会话）：无处可挂
+                FCITX_WARN() << "VoicePopup: IM proxy 与 layer-shell 均不可"
+                                "用，无法显示卡片";
+                return false;
+            }
             FCITX_WARN() << "VoicePopup: 合成器无 zwlr_layer_shell_v1，"
                             "回退光标跟随";
             topMode_ = false;
@@ -785,7 +790,9 @@ bool VoicePopup::ensurePopup(InputContext *ic, bool atShow) {
         }
         layerConfigured_ = false;
         layerSurface_ = zwlr_layer_shell_v1_get_layer_surface(
-            layerShell_, surface_, nullptr, ZWLR_LAYER_SHELL_V1_LAYER_TOP,
+            layerShell_, surface_, nullptr,
+            overlayFallback_ ? ZWLR_LAYER_SHELL_V1_LAYER_OVERLAY
+                             : ZWLR_LAYER_SHELL_V1_LAYER_TOP,
             "input-method");
         zwlr_layer_surface_v1_add_listener(layerSurface_, &kLayerListener,
                                            this);
@@ -800,9 +807,12 @@ bool VoicePopup::ensurePopup(InputContext *ic, bool atShow) {
         zwlr_layer_surface_v1_set_keyboard_interactivity(
             layerSurface_,
             ZWLR_LAYER_SURFACE_V1_KEYBOARD_INTERACTIVITY_NONE);
+        // set_size 收逻辑尺寸：width_/height_ 是物理池尺寸（scale=2 下
+        // 720 物理>整屏 640 逻辑，会被合成器钳制）；Dart 尺寸未到前用
+        // 逻辑默认值，到后由 setLogicalSize 持续跟进
         zwlr_layer_surface_v1_set_size(
-            layerSurface_, logicalW_ > 0 ? logicalW_ : width_,
-            logicalH_ > 0 ? logicalH_ : height_);
+            layerSurface_, logicalW_ > 0 ? logicalW_ : kDefaultWidth,
+            logicalH_ > 0 ? logicalH_ : kDefaultHeight);
         wl_surface_commit(surface_); // 空 commit：请求首个 configure
         icRef_ = ic->watch();
         FCITX_INFO() << "VoicePopup: layer surface created（"
@@ -923,9 +933,12 @@ void VoicePopup::show(InputContext *ic) {
         FCITX_WARN() << "VoicePopup::show but popup not ready";
         return;
     }
-    if (!topMode_) {
+    if (!topMode_ || overlayFallback_) {
+        // overlay 兜底（DBus 前端）也挂：preedit 经 D-Bus 送达应用，
+        // 「语音输入中」指示器与其它应用观感一致
         beginPreeditProbe(ic); // 换行/重聚焦/Electron 首句实时跟随
-        if (lastDecisionWasKnowledgeFallback_ && probeDeferralUsed_) {
+        if (!topMode_ && lastDecisionWasKnowledgeFallback_ &&
+            probeDeferralUsed_) {
             // 判定挂起：矩形到（跟随）或录音结束/保险丝（底部结算）前
             // 不 map 任何帧。不"先 popup 后切 layer"——中途换 surface 在
             // scale 发现期（首聚恰是）会放大/消失/位移
@@ -1063,13 +1076,8 @@ void VoicePopup::resizeLocked(int w, int h) {
             pool_, i * bufSize, w, h, stride, WL_SHM_FORMAT_ARGB8888);
     }
     cur_ = 0;
-    if (topMode_ && layerSurface_) {
-        // 物理池是逻辑×scale；layer surface 用逻辑尺寸
-        double sc = scale();
-        zwlr_layer_surface_v1_set_size(
-            layerSurface_, static_cast<int32_t>(w / sc + 0.5),
-            static_cast<int32_t>(h / sc + 0.5));
-    }
+    // layer surface 的 set_size 由 setLogicalSize 单点负责（这里只有物理
+    // 池变化，逻辑尺寸未必变——scale 变化路径 logical 不动）
     FCITX_INFO() << "VoicePopup: shm pool resized to " << w << "x" << h;
 }
 
@@ -1077,8 +1085,15 @@ void VoicePopup::resizeLocked(int w, int h) {
 //（引擎按 metrics physical=逻辑×ratio 渲染），池随物理建，viewport 收逻辑
 void VoicePopup::setLogicalSize(int w, int h) {
     std::lock_guard<std::mutex> lock(mutex_);
+    const bool changed = w != logicalW_ || h != logicalH_;
     logicalW_ = w;
     logicalH_ = h;
+    // layer surface 尺寸必须跟着卡片走（anchor 的合成器摆放按 surface
+    // 尺寸算）：桶内池 resize 不重建 surface，这里不跟进的话卡片长高后
+    // 底部会被 surface 边界切掉。set_size 在下一次 commit 生效
+    if (topMode_ && layerSurface_ && changed) {
+        zwlr_layer_surface_v1_set_size(layerSurface_, w, h);
+    }
     // destination 不急切下发（防拉伸闪烁，见 syncViewport）；物理池先按
     // 新逻辑重建，committed 的旧 buffer 在下一帧提交前按旧 destination
     // 显示
