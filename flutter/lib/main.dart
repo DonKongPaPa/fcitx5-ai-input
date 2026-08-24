@@ -30,8 +30,9 @@ const double kMaxW = 420;
 // 卡片阴影余量：快照区比卡片四周各大这么多（BoxShadow blur10+spread1
 // 超出边界 ~11px）；指针坐标是含余量的表面局部坐标，Padding 天然吸收
 const double kShadowPad = 12;
-// 增长余量：内容自然长高的当前帧先落在透明余量里，resize 下一帧跟上
-const double kGrowthSlack = 20;
+// 增长余量（曾为 20：吸收 resize 跟进前的过渡帧——窗口改跟内容实
+// 尺寸后无用，只余每侧死边距：卡片被推离光标 + 下方悬停死区）
+const double kGrowthSlack = 0;
 
 // 全局动画时长：基准毫秒 × 挡位系数（与 C++ animScaleOf 对应：快 1.0/
 // 标准 1.6/慢 3.0，默认慢速——挡位由 C++ 随每条 update/font 消息下发）
@@ -153,7 +154,7 @@ class _VoiceUiHomeState extends State<VoiceUiHome> {
     // 上报，C++ 每帧重建 shm 池+metrics 重排——流式期进度条掉帧的主因。
     // 量化后窗口始终 ≥ 卡片（余量吸收差值，透明不可见），重建次数降一个
     // 数量级
-    const q = 32.0;
+    const q = 16.0;
     final win = Size(
       ((card.width + (kShadowPad + kGrowthSlack) * 2) / q).ceilToDouble() * q,
       ((card.height + (kShadowPad + kGrowthSlack) * 2) / q).ceilToDouble() * q,
@@ -345,7 +346,9 @@ class _VoiceUiHomeState extends State<VoiceUiHome> {
             // 曾把尺寸回读环死锁在初始 56×56）；超出窗口的部分由 surface
             // 裁掉，kGrowthSlack 余量兜住 resize 跟进前的过渡帧
             child: OverflowBox(
-              alignment: Alignment.center,
+              // 顶部对齐：卡片贴住表面顶（= 光标下方），量化余量全部
+              // 沉到底部——居中对齐会把卡推离光标形成视觉空隙
+              alignment: Alignment.topCenter,
               minWidth: 0,
               maxWidth: double.infinity,
               minHeight: 0,
