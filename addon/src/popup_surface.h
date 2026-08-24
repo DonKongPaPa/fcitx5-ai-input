@@ -34,6 +34,7 @@ struct zwlr_layer_surface_v1;
 struct wp_cursor_shape_manager_v1;
 struct wp_cursor_shape_device_v1;
 struct zxdg_output_manager_v1;
+struct zxdg_output_v1;
 
 namespace fcitx {
 class InputContext;
