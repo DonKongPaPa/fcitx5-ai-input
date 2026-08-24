@@ -327,7 +327,9 @@ class _VoiceUiHomeState extends State<VoiceUiHome> {
     return Theme(
       data: theme,
       child: Scaffold(
-        backgroundColor: Colors.transparent,
+        // 诊断：窗口（surface）边界可视化——半透明红。表面范围 vs 卡片
+        // 绘制 vs 命中区三者关系一眼可见。正式版恢复 transparent
+        backgroundColor: const Color(0x26FF0000),
         body: Listener(
           onPointerHover: (e) {
             // ignore: avoid_print

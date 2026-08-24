@@ -33,6 +33,7 @@ struct zwlr_layer_shell_v1;
 struct zwlr_layer_surface_v1;
 struct wp_cursor_shape_manager_v1;
 struct wp_cursor_shape_device_v1;
+struct zxdg_output_manager_v1;
 
 namespace fcitx {
 class InputContext;
@@ -173,6 +174,8 @@ public:
                               uint32_t time, uint32_t button, uint32_t state);
     static void preferredScale(void *data, wp_fractional_scale_v1 *fs,
                                uint32_t scale);
+    static void xdgLogicalSize(void *data, zxdg_output_v1 *xo, int32_t w,
+                           int32_t h);
     static void layerConfigure(void *data, zwlr_layer_surface_v1 *ls,
                                uint32_t serial, uint32_t w, uint32_t h);
 
@@ -217,6 +220,17 @@ private:
     // scale 双屏上会放大 33-60%）→ 用上次 fractional 兜底永远更准
     uint32_t lastFscaleNum_ = 0;
     int outputScale_ = 1;     // wl_output 整数 scale 兜底
+    zxdg_output_manager_v1 *xdgOutputMgr_ = nullptr;
+    int32_t outputPhysW_ = 0, outputPhysH_ = 0; // mode 事件物理尺寸
+    int xdgLogicalW_ = 0, xdgLogicalH_ = 0; // zxdg 输出逻辑尺寸
+    // 输出真实分数 scale：mode 物理 ÷ zxdg 逻辑（精确）；无 zxdg 时退
+    // scale()（fractional 事件记忆——跨屏可能污染，仅兜底）
+    double derivedOutputScaleLocked() const {
+        if (xdgLogicalW_ > 0 && outputPhysW_ > 0) {
+            return static_cast<double>(outputPhysW_) / xdgLogicalW_;
+        }
+        return scale();
+    }
     wl_output *output_ = nullptr;
     int logicalW_ = 0, logicalH_ = 0;
     std::function<void(double)> scaleHandler_;

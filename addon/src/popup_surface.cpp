@@ -35,6 +35,7 @@ extern "C" const wl_interface zwp_tablet_tool_v2_interface = {};
 #include "wayland-input-method-unstable-v2-client-protocol.h"
 #include "viewporter-client-protocol.h"
 #include "cursor-shape-v1-client-protocol.h"
+#include "xdg-output-unstable-v1-client-protocol.h"
 #include "fractional-scale-v1-client-protocol.h"
 
 namespace fcitx {
@@ -73,6 +74,24 @@ static const wl_seat_listener kSeatListener = {
 
 static const wp_fractional_scale_v1_listener kFscaleListener = {
     /* .preferred_scale = */ &VoicePopup::preferredScale,
+};
+
+void VoicePopup::xdgLogicalSize(void *data, zxdg_output_v1 *, int32_t w,
+                                  int32_t h) {
+    // 输出真实逻辑尺寸（zxdg-output）——与 mode 物理尺寸相除得精确
+    // 分数 scale（wl_output 只有取整值）
+    auto *s = static_cast<VoicePopup *>(data);
+    std::lock_guard<std::mutex> lock(s->mutex_);
+    s->xdgLogicalW_ = w;
+    s->xdgLogicalH_ = h;
+}
+
+static const zxdg_output_v1_listener kXdgOutputListener = {
+    /* .logical = */ [](void *, zxdg_output_v1 *, int32_t, int32_t) {},
+    /* .logical_size = */ &VoicePopup::xdgLogicalSize,
+    /* .done = */ [](void *, zxdg_output_v1 *) {},
+    /* .name = */ [](void *, zxdg_output_v1 *, const char *) {},
+    /* .description = */ [](void *, zxdg_output_v1 *, const char *) {},
 };
 
 static const zwlr_layer_surface_v1_listener kLayerListener = {
@@ -154,6 +173,7 @@ void VoicePopup::popupRectangle(void *data, zwp_input_popup_surface_v2 *,
 // (357.6,132.0)，比值 0.625=1.25/2。校正 ×整数/真实。100% 屏两值相
 // 等无校正；容器 headless wl_output 恒 1 亦不触发。IM popup 表面坐标
 // 正确，不经过本函数
+// 输出真实分数 scale（zxdg 逻辑尺寸推导；拿不到时退 scale() 记忆值）
 static void adjustLayerPointerCoords(bool isLayer, int outputScale,
                                      double realScale, int &x, int &y) {
     if (!isLayer || outputScale <= 1 || realScale >= outputScale ||
@@ -220,8 +240,14 @@ void VoicePopup::preferredScale(void *data, wp_fractional_scale_v1 *,
 void VoicePopup::outputGeometry(void *, wl_output *, int32_t, int32_t,
                                 int32_t, int32_t, int32_t, const char *,
                                 const char *, int32_t) {}
-void VoicePopup::outputMode(void *, wl_output *, uint32_t, int32_t,
-                            int32_t, int32_t) {}
+void VoicePopup::outputMode(void *data, wl_output *, uint32_t, int32_t w,
+                            int32_t h, int32_t) {
+    // mode 物理尺寸：与 zxdg 逻辑尺寸相除得输出精确分数 scale
+    auto *s = static_cast<VoicePopup *>(data);
+    std::lock_guard<std::mutex> lock(s->mutex_);
+    s->outputPhysW_ = w;
+    s->outputPhysH_ = h;
+}
 void VoicePopup::outputDone(void *, wl_output *) {}
 void VoicePopup::outputScale(void *data, wl_output *, int32_t factor) {
     auto *s = static_cast<VoicePopup *>(data);
@@ -247,8 +273,9 @@ void VoicePopup::pointerEnter(void *data, wl_pointer *, uint32_t serial,
     auto *s = static_cast<VoicePopup *>(data);
     s->ptrX_ = wl_fixed_to_int(sx);
     s->ptrY_ = wl_fixed_to_int(sy);
-    adjustLayerPointerCoords(s->topMode_, s->outputScale_, s->scale(),
-                             s->ptrX_, s->ptrY_);
+    adjustLayerPointerCoords(s->topMode_, s->outputScale_,
+                             s->derivedOutputScaleLocked(), s->ptrX_,
+                             s->ptrY_);
     FCITX_INFO() << "VoicePopup: pointer enter surface=" << surface
                  << "（ours=" << s->surface_ << "）at "
                  << s->ptrX_ << "," << s->ptrY_
@@ -292,8 +319,9 @@ void VoicePopup::pointerMotion(void *data, wl_pointer *, uint32_t,
     auto *s = static_cast<VoicePopup *>(data);
     s->ptrX_ = wl_fixed_to_int(sx);
     s->ptrY_ = wl_fixed_to_int(sy);
-    adjustLayerPointerCoords(s->topMode_, s->outputScale_, s->scale(),
-                             s->ptrX_, s->ptrY_);
+    adjustLayerPointerCoords(s->topMode_, s->outputScale_,
+                             s->derivedOutputScaleLocked(), s->ptrX_,
+                             s->ptrY_);
     if (s->pointerOnPopup_ && s->pointerSink_) {
         s->pointerSink_(PointerEvent::Motion, s->ptrX_, s->ptrY_);
     }
@@ -430,6 +458,14 @@ void VoicePopup::registryGlobalImpl(void *data, wl_registry *reg, uint32_t name,
             reg, name, &wl_output_interface, 2)); // v2 起 scale/done 事件
         wl_output_add_listener(self->output_, &kOutputListener, self);
         FCITX_INFO() << "VoicePopup: wl_output bound v2 name=" << name;
+    } else if (strcmp(iface, "zxdg_output_manager_v1") == 0 &&
+               !self->xdgOutputMgr_ && self->output_) {
+        self->xdgOutputMgr_ = static_cast<zxdg_output_manager_v1 *>(
+            wl_registry_bind(reg, name, &zxdg_output_manager_v1_interface,
+                             2));
+        auto *xo = zxdg_output_manager_v1_get_xdg_output(
+            self->xdgOutputMgr_, self->output_);
+        zxdg_output_v1_add_listener(xo, &kXdgOutputListener, self);
     } else if (strcmp(iface, "wp_viewporter") == 0 && !self->viewporter_) {
         FCITX_INFO() << "VoicePopup: global wp_viewporter v" << version;
         self->viewporter_ = static_cast<wp_viewporter *>(wl_registry_bind(

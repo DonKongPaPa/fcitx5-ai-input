@@ -71,7 +71,7 @@ add_custom_command(
 target_sources(aiinput PRIVATE ${GEN_DIR}/imv2-protocol.c)
 
 # —— W3 fractional scale：viewporter + fractional-scale-v1（wayland-protocols 标准件）——
-foreach(proto viewporter fractional-scale-v1 wlr-layer-shell cursor-shape-v1)
+foreach(proto viewporter fractional-scale-v1 wlr-layer-shell cursor-shape-v1 xdg-output-unstable-v1)
     add_custom_command(
         OUTPUT ${GEN_DIR}/${proto}-protocol.c
                ${GEN_DIR}/${proto}-client-protocol.h
