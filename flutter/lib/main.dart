@@ -118,6 +118,10 @@ class _VoiceUiHomeState extends State<VoiceUiHome> {
   int _mouseHover = -1; // 鼠标悬停行（本地状态；键盘选择走 data.hover）
   Size _lastReported = Size.zero;
   final GlobalKey _cardKey = GlobalKey(); // 卡片实际尺寸回读（布局后）
+  // 内容实尺寸（VoicePanel 自然尺寸）：窗口上报的度量源。AnimatedSize
+  // 的盒子是"动画中的视觉裁剪"，会滞留在中间值——曾致窗口比内容小、
+  // 行的命中区伸出可见卡片之外（卡片下方仍能悬停到行）
+  final GlobalKey _panelKey = GlobalKey();
 
   void _invoke(String method, [dynamic args]) {
     _ch.invokeMethod(method, args).catchError((_) => null);
@@ -134,7 +138,8 @@ class _VoiceUiHomeState extends State<VoiceUiHome> {
     // 直到下一次 setState 才"神奇恢复"）
     WidgetsBinding.instance.addPersistentFrameCallback((_) {
       if (!mounted) return;
-      final ro = _cardKey.currentContext?.findRenderObject();
+      var ro = _panelKey.currentContext?.findRenderObject();
+      ro ??= _cardKey.currentContext?.findRenderObject();
       if (ro is RenderBox && ro.hasSize) {
         _reportSize(ro.size);
       }
@@ -318,12 +323,15 @@ class _VoiceUiHomeState extends State<VoiceUiHome> {
                       minWidth: 360 * _fontScale,
                       maxWidth: 420 * _fontScale,
                     ),
-                    child: VoicePanel(
+                    child: KeyedSubtree(
+                      key: _panelKey,
+                      child: VoicePanel(
                       data: _data,
                       mouseHover: _mouseHover,
                       animScale: _animScale,
                       onHover: _onHoverRow,
                       onSelect: _selectCandidate,
+                      ),
                     ),
                   ),
                 ),
