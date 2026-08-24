@@ -88,7 +88,7 @@ FunASR 服务档：configtool「模型部署」组配置 `FunASRAutoStart` + `Fu
 - popup 生命周期照抄 classicui：每次显示销毁重建（重夺合成器的单槽追踪 + 继承最新矩形），隐藏即 unmap+销毁
 - Chromium/Electron 只在**文本变化时**上报光标矩形（焦点时不报）：录音开始即向应用打入可见组合文本探针（「语音输入中」逐字），组合变化逼应用重报矩形，流式识别文本接续灌入组合——卡片全程贴住光标
 - 无人报矩形的应用（或判定到录音结束仍无矩形）：layer-shell 底部居中兜底
-- D-Bus 前端的应用（`QT_IM_MODULE=fcitx` 的 Qt 应用/启动器，如 DMS）：IC 不经 waylandim、跟随路径整体不可达 → overlay 层底部居中卡片兜底，预编辑「语音输入中」经 D-Bus 照常送达应用
+- D-Bus 前端的应用（`QT_IM_MODULE=fcitx` 的 Qt 应用/启动器，如 DMS）：IC 不经 waylandim、跟随路径整体不可达 → overlay 层底部居中卡片兜底，预编辑「语音输入中」经 D-Bus 照常送达应用（cursorRect 是窗口局部坐标，仅全屏窗口≈屏幕坐标——浮动面板下贴光标定位会结构性错位，故不做）
 
 ## 开发与测试
 
