@@ -1185,6 +1185,10 @@ void VoicePopup::applyOverlayAnchorLocked(InputContext *ic) {
 void VoicePopup::setLogicalSize(int w, int h) {
     std::lock_guard<std::mutex> lock(mutex_);
     const bool changed = w != logicalW_ || h != logicalH_;
+    if (changed) {
+        FCITX_INFO() << "VoicePopup: [diag] 逻辑尺寸 " << w << "x" << h
+                     << "（scale=" << scale() << "）";
+    }
     logicalW_ = w;
     logicalH_ = h;
     // layer surface 尺寸必须跟着卡片走（anchor 的合成器摆放按 surface

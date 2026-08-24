@@ -860,6 +860,11 @@ void AiInputEngine::deferredMetrics(int w, int h) {
                 flutter_->updateMetrics(
                     static_cast<int>(pendingMW_ * sc + 0.5),
                     static_cast<int>(pendingMH_ * sc + 0.5), sc);
+                FCITX_LOG(Info) << "AiInput: [diag] metrics "
+                                << static_cast<int>(pendingMW_ * sc + 0.5)
+                                << "x"
+                                << static_cast<int>(pendingMH_ * sc + 0.5)
+                                << " ratio=" << sc;
             }
             return false;
         });
@@ -887,6 +892,7 @@ void AiInputEngine::onFlutterMessage(const std::string &method,
         }
     } else if (method == "hoverChanged") {
         uiHoverRow_ = numOf(args, "row");
+        FCITX_LOG(Info) << "AiInput: [diag] hoverChanged row=" << uiHoverRow_;
     } else if (method == "ready") {
         FCITX_INFO() << "AiInput: Flutter UI ready";
         pushUiState();

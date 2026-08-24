@@ -257,6 +257,8 @@ class _VoiceUiHomeState extends State<VoiceUiHome> {
 
   void _onHoverRow(int row) {
     if (_mouseHover != row) {
+      // ignore: avoid_print
+      print('ui-hover: row=$row');
       setState(() => _mouseHover = row);
       _invoke('hoverChanged', {'row': row});
     }
