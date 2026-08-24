@@ -8,6 +8,10 @@
 // popup），零定义仅为满足链接
 extern "C" const wl_interface xdg_popup_interface = {};
 
+// cursor-shape-v1 的 private-code 引用 tablet-unstable-v2 的接口符号
+//（平板光标路径）；本模块只用 pointer 的 set_shape，零定义满足链接
+extern "C" const wl_interface zwp_tablet_tool_v2_interface = {};
+
 #include "fcitx-wayland/zwp_input_method_v2.h"
 
 #include <fcitx-utils/log.h>
@@ -30,6 +34,7 @@ extern "C" const wl_interface xdg_popup_interface = {};
 
 #include "wayland-input-method-unstable-v2-client-protocol.h"
 #include "viewporter-client-protocol.h"
+#include "cursor-shape-v1-client-protocol.h"
 #include "fractional-scale-v1-client-protocol.h"
 
 namespace fcitx {
@@ -153,8 +158,16 @@ void VoicePopup::seatCapabilities(void *data, wl_seat *seat, uint32_t caps) {
     if ((caps & WL_SEAT_CAPABILITY_POINTER) && !s->pointer_) {
         s->pointer_ = wl_seat_get_pointer(seat);
         wl_pointer_add_listener(s->pointer_, &kPointerListener, s);
+        if (s->cursorShapeMgr_ && !s->cursorShapeDev_) {
+            s->cursorShapeDev_ = wp_cursor_shape_manager_v1_get_pointer(
+                s->cursorShapeMgr_, s->pointer_);
+        }
         FCITX_INFO() << "VoicePopup: seat pointer acquired（鼠标路由就绪）";
     } else if (!(caps & WL_SEAT_CAPABILITY_POINTER) && s->pointer_) {
+        if (s->cursorShapeDev_) {
+            wp_cursor_shape_device_v1_destroy(s->cursorShapeDev_);
+            s->cursorShapeDev_ = nullptr;
+        }
         wl_pointer_release(s->pointer_);
         s->pointer_ = nullptr;
     }
@@ -217,7 +230,7 @@ void VoicePopup::outputScale(void *data, wl_output *, int32_t factor) {
     }
 }
 
-void VoicePopup::pointerEnter(void *data, wl_pointer *, uint32_t,
+void VoicePopup::pointerEnter(void *data, wl_pointer *, uint32_t serial,
                               wl_surface *surface, wl_fixed_t sx,
                               wl_fixed_t sy) {
     auto *s = static_cast<VoicePopup *>(data);
@@ -231,6 +244,14 @@ void VoicePopup::pointerEnter(void *data, wl_pointer *, uint32_t,
         // niri：IM popup 收得到 pointer enter（同 classicui 机制），坐标即
         // 面板局部（含阴影余量）——直接转发给 Flutter 引擎，hover/点击
         // 命中由 Dart 处理
+        if (s->cursorShapeDev_) {
+            // 本表面的 enter：不设光标合成器即隐藏指针（协议把光标交给
+            // 获得指针焦点的客户端）；raw embedder 无光标主题，用
+            // cursor-shape 的 DEFAULT 形状即可
+            wp_cursor_shape_device_v1_set_shape(
+                s->cursorShapeDev_, serial,
+                WP_CURSOR_SHAPE_DEVICE_V1_SHAPE_DEFAULT);
+        }
         s->pointerOnPopup_ = true;
         if (s->pointerSink_) {
             s->pointerSink_(PointerEvent::Enter, s->ptrX_, s->ptrY_);
@@ -316,6 +337,8 @@ void VoicePopup::ensureWaylandWatcher() {
             shm_ = nullptr;
             seat_ = nullptr;
             pointer_ = nullptr;
+            cursorShapeDev_ = nullptr;
+            cursorShapeMgr_ = nullptr;
             output_ = nullptr;
             hasCursorRect_ = false;
             display_ = nullptr;
@@ -403,6 +426,17 @@ void VoicePopup::registryGlobalImpl(void *data, wl_registry *reg, uint32_t name,
         self->fsManager_ =
             static_cast<wp_fractional_scale_manager_v1 *>(wl_registry_bind(
                 reg, name, &wp_fractional_scale_manager_v1_interface, 1));
+    } else if (strcmp(iface, "wp_cursor_shape_manager_v1") == 0 &&
+               !self->cursorShapeMgr_) {
+        // 表面指针可见性：enter 后由客户端负责设光标——不设则合成器
+        // 隐藏指针（卡片上方"没有鼠标指针"的根源）
+        self->cursorShapeMgr_ = static_cast<wp_cursor_shape_manager_v1 *>(
+            wl_registry_bind(reg, name, &wp_cursor_shape_manager_v1_interface,
+                             1));
+        if (self->pointer_) {
+            self->cursorShapeDev_ = wp_cursor_shape_manager_v1_get_pointer(
+                self->cursorShapeMgr_, self->pointer_);
+        }
     } else if (strcmp(iface, "zwlr_layer_shell_v1") == 0 &&
                !self->layerShell_) {
         // chromium 系定位回退用；version ≤3（4 的 bottom/surface 扩展非必需）

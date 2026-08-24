@@ -31,6 +31,8 @@ struct zwp_input_method_v2;
 struct zwp_input_popup_surface_v2;
 struct zwlr_layer_shell_v1;
 struct zwlr_layer_surface_v1;
+struct wp_cursor_shape_manager_v1;
+struct wp_cursor_shape_device_v1;
 
 namespace fcitx {
 class InputContext;
@@ -204,6 +206,9 @@ private:
     wl_shm *shm_ = nullptr;
     wl_seat *seat_ = nullptr;
     wl_pointer *pointer_ = nullptr;
+    // 指针可见性（enter 后须设光标，否则合成器隐藏）
+    wp_cursor_shape_manager_v1 *cursorShapeMgr_ = nullptr;
+    wp_cursor_shape_device_v1 *cursorShapeDev_ = nullptr;
     wp_viewporter *viewporter_ = nullptr;
     wp_viewport *viewport_ = nullptr;
     wp_fractional_scale_manager_v1 *fsManager_ = nullptr;
