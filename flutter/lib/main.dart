@@ -395,18 +395,18 @@ String _fmtMs(int ms) {
 }
 
 // —— 会话卡片（录音/结果/候选同一张卡片，连续形变）——
-// 录音→候选分两拍：先主文本行原位冻结成「识别结果」候选行（徽标+tag
-// 淡入），LLM 润色行延后入场——对应真实 LLM 的异步时序（识别输出完毕
-// 的结果固定在位，优化步骤再排序插入）。行为自绘顶对齐（不用
-// ListTile：其多行内容的垂直居中会让 padding-top 漂移）；头部固定槽，
-// 内容差异不再顶动下方行。
-class _SessionBody extends StatefulWidget {
+// 状态切换内容一次到位（徽标/tag/头部各自淡入淡出），尺寸变化全靠外层
+// 唯一的 AnimatedSize 形变——新尺寸中途到达会重新定向（可打断），卡片
+// 不重建、不分拍增长。行为自绘顶对齐（不用 ListTile：其多行内容的
+// 垂直居中会让 padding-top 漂移）；头部固定槽，内容差异不再顶动下方行。
+class _SessionBody extends StatelessWidget {
   final SessionData data;
   final int mouseHover; // 鼠标悬停行（-1=无）
   final double animScale; // 全局动画速率挡位系数
   final ValueChanged<int> onHover;
   final ValueChanged<int> onSelect;
   const _SessionBody({
+    super.key,
     required this.data,
     required this.mouseHover,
     required this.animScale,
@@ -415,42 +415,10 @@ class _SessionBody extends StatefulWidget {
   });
 
   @override
-  State<_SessionBody> createState() => _SessionBodyState();
-}
-
-class _SessionBodyState extends State<_SessionBody> {
-  bool _showPolish = false; // 润色行是否入场（录音→候选的第二拍）
-  Timer? _polishTimer;
-
-  @override
-  void didUpdateWidget(covariant _SessionBody old) {
-    super.didUpdateWidget(old);
-    final d = widget.data.state;
-    if (d == UiState.candidates && old.data.state == UiState.recording) {
-      // 第一拍立刻生效（徽标+识别结果 tag）；第二拍延后
-      _showPolish = false;
-      _polishTimer?.cancel();
-      _polishTimer = Timer(animDurOf(widget.animScale, 500), () {
-        if (mounted && widget.data.state == UiState.candidates) {
-          setState(() => _showPolish = true);
-        }
-      });
-    } else if (d == UiState.candidates) {
-      _showPolish = true; // 非录音直入候选（如重触发）：无分拍
-    }
-  }
-
-  @override
-  void dispose() {
-    _polishTimer?.cancel();
-    super.dispose();
-  }
-
-  @override
   Widget build(BuildContext context) {
     final theme = Theme.of(context);
     final cs = theme.colorScheme;
-    final d = widget.data;
+    final d = data;
     final isCand = d.state == UiState.candidates;
     final items = d.candidates.take(2).toList();
 
@@ -489,7 +457,7 @@ class _SessionBodyState extends State<_SessionBody> {
             child: Padding(
               padding: const EdgeInsets.fromLTRB(12, 8, 12, 2),
               child: AnimatedSwitcher(
-                duration: animDurOf(widget.animScale, 180),
+                duration: animDurOf(animScale, 180),
                 child: switch (d.state) {
                   UiState.recording => Row(
                       key: const ValueKey('rec'),
@@ -564,36 +532,31 @@ class _SessionBodyState extends State<_SessionBody> {
             ),
           ),
         ),
-        // —— 文本区（AnimatedSize 平滑长高/推入润色行）——
-        AnimatedSize(
-          duration: animDurOf(widget.animScale, 220),
-          curve: Curves.easeOutCubic,
-          alignment: Alignment.topCenter,
-          child: Column(
-            crossAxisAlignment: CrossAxisAlignment.stretch,
-            mainAxisSize: MainAxisSize.min,
-            children: [
-              if (isCand && items.isNotEmpty && _showPolish)
-                TweenAnimationBuilder<double>(
-                  // 润色行入场（第二拍）：淡入，推展由外层 AnimatedSize
-                  tween: Tween(begin: 0, end: 1),
-                  duration: animDurOf(widget.animScale, 220),
-                  builder: (_, v, child) => Opacity(opacity: v, child: child),
-                  child: _row(theme, cs,
-                      index: 0,
-                      text: items[0],
-                      style: theme.textTheme.titleSmall!,
-                      interactive: true,
-                      tag: '润色版'),
-                ),
-              _row(theme, cs,
-                  index: 1,
-                  text: mainText.isEmpty ? ' ' : mainText,
-                  style: mainStyle,
-                  interactive: isCand && items.length > 1,
-                  tag: isCand && items.length > 1 ? '识别结果' : null),
-            ],
-          ),
+        // —— 文本区（尺寸变化统一由外层 AnimatedSize 形变，单一可打断）——
+        Column(
+          crossAxisAlignment: CrossAxisAlignment.stretch,
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            if (isCand && items.isNotEmpty)
+              TweenAnimationBuilder<double>(
+                // 润色行淡入（候选内容一次到位，无分拍）
+                tween: Tween(begin: 0, end: 1),
+                duration: animDurOf(animScale, 220),
+                builder: (_, v, child) => Opacity(opacity: v, child: child),
+                child: _row(theme, cs,
+                    index: 0,
+                    text: items[0],
+                    style: theme.textTheme.titleSmall!,
+                    interactive: true,
+                    tag: '润色版'),
+              ),
+            _row(theme, cs,
+                index: 1,
+                text: mainText.isEmpty ? ' ' : mainText,
+                style: mainStyle,
+                interactive: isCand && items.length > 1,
+                tag: isCand && items.length > 1 ? '识别结果' : null),
+          ],
         ),
         // —— 底部条（SizedBox 固定 6px 槽：minHeight:3 的指示器实际渲染
         // 偏高 ~4.5px，曾在录音态撑出底部溢出）——
@@ -641,10 +604,10 @@ class _SessionBodyState extends State<_SessionBody> {
       required bool interactive,
       String? tag}) {
     final hovered = interactive &&
-        (widget.mouseHover >= 0 ? widget.mouseHover : widget.data.hover) ==
+        (mouseHover >= 0 ? mouseHover : data.hover) ==
             index;
     Widget core = AnimatedContainer(
-      duration: animDurOf(widget.animScale, 100),
+      duration: animDurOf(animScale, 100),
       color: hovered ? cs.surfaceContainerHighest : null,
       child: Padding(
         padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 6),
@@ -652,7 +615,7 @@ class _SessionBodyState extends State<_SessionBody> {
           crossAxisAlignment: CrossAxisAlignment.start,
           children: [
             AnimatedOpacity(
-              duration: animDurOf(widget.animScale, 220),
+              duration: animDurOf(animScale, 220),
               opacity: interactive ? 1 : 0,
               child: _badge(cs, index + 1, primary: index == 0),
             ),
@@ -663,13 +626,13 @@ class _SessionBodyState extends State<_SessionBody> {
                 mainAxisSize: MainAxisSize.min,
                 children: [
                   AnimatedDefaultTextStyle(
-                    duration: animDurOf(widget.animScale, 180),
+                    duration: animDurOf(animScale, 180),
                     style: style,
                     child: Text(text, softWrap: true),
                   ),
                   if (tag != null)
                     AnimatedOpacity(
-                      duration: animDurOf(widget.animScale, 220),
+                      duration: animDurOf(animScale, 220),
                       opacity: interactive ? 1 : 0,
                       child: Padding(
                         padding: const EdgeInsets.only(top: 2),
@@ -696,11 +659,11 @@ class _SessionBodyState extends State<_SessionBody> {
       cursor: SystemMouseCursors.click,
       // 只挂 onHover（真实移动事件）：静止指针下弹出/布局变化合成的
       // onEnter 不选择——否则静止鼠标压住方向键选择
-      onHover: (_) => widget.onHover(index),
-      onExit: (_) => widget.onHover(-1),
+      onHover: (_) => onHover(index),
+      onExit: (_) => onHover(-1),
       child: GestureDetector(
         behavior: HitTestBehavior.opaque,
-        onTap: () => widget.onSelect(index),
+        onTap: () => onSelect(index),
         child: core,
       ),
     );
