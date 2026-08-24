@@ -148,6 +148,23 @@ void VoicePopup::popupRectangle(void *data, zwp_input_popup_surface_v2 *,
                  << w << "x" << h << "（窗口局部）";
 }
 
+// layer 表面的指针坐标校正：niri 按 wl_output 整数 scale（分数屏的
+// 取整值，宿主 1.25 屏报 2）下发 layer 表面的指针坐标，本表面 viewport
+// 是真实分数逻辑空间——宿主实测（0.3.0.17）：真实 (572,211) 到达
+// (357.6,132.0)，比值 0.625=1.25/2。校正 ×整数/真实。100% 屏两值相
+// 等无校正；容器 headless wl_output 恒 1 亦不触发。IM popup 表面坐标
+// 正确，不经过本函数
+static void adjustLayerPointerCoords(bool isLayer, int outputScale,
+                                     double realScale, int &x, int &y) {
+    if (!isLayer || outputScale <= 1 || realScale >= outputScale ||
+        realScale <= 0) {
+        return;
+    }
+    const double f = outputScale / realScale;
+    x = static_cast<int>(x * f + 0.5);
+    y = static_cast<int>(y * f + 0.5);
+}
+
 // ---------------------------------------------------------------------------
 // 鼠标路由：seat 级 wl_pointer
 // niri 的 contents_under 只命中窗口/层 surface 树，IM popup 收不到指针
@@ -230,6 +247,8 @@ void VoicePopup::pointerEnter(void *data, wl_pointer *, uint32_t serial,
     auto *s = static_cast<VoicePopup *>(data);
     s->ptrX_ = wl_fixed_to_int(sx);
     s->ptrY_ = wl_fixed_to_int(sy);
+    adjustLayerPointerCoords(s->topMode_, s->outputScale_, s->scale(),
+                             s->ptrX_, s->ptrY_);
     FCITX_INFO() << "VoicePopup: pointer enter surface=" << surface
                  << "（ours=" << s->surface_ << "）at "
                  << s->ptrX_ << "," << s->ptrY_
@@ -273,6 +292,8 @@ void VoicePopup::pointerMotion(void *data, wl_pointer *, uint32_t,
     auto *s = static_cast<VoicePopup *>(data);
     s->ptrX_ = wl_fixed_to_int(sx);
     s->ptrY_ = wl_fixed_to_int(sy);
+    adjustLayerPointerCoords(s->topMode_, s->outputScale_, s->scale(),
+                             s->ptrX_, s->ptrY_);
     if (s->pointerOnPopup_ && s->pointerSink_) {
         s->pointerSink_(PointerEvent::Motion, s->ptrX_, s->ptrY_);
     }

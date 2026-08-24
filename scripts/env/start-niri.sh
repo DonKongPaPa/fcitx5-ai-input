@@ -12,8 +12,14 @@ MODE="${MODE:-sleep}"   # M2 验证用 sleep；M3+ 换成 case 驱动
 # W3 验证：HiDPI（scale=2）下整轮回归——niri 输出 2x，fractional scale 链路全走
 SCALE="${NIRI_TEST_SCALE:-2.0}"
 mkdir -p "$LOG_DIR/niri-cfg"
+# 坑：winit 后端的输出名（Smithay Winit Unknown）不吃 "*" 通配——
+# 只写 "*" 时 scale 静默不生效（容器分数 scale 测试全程跑在 1.0 的
+# 元凶）。两条都写
 cat > "$LOG_DIR/niri-cfg/config.kdl" <<KDL
 output "*" {
+    scale $SCALE
+}
+output "Winit" {
     scale $SCALE
 }
 KDL

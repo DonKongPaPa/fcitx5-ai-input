@@ -47,6 +47,7 @@ podman run --rm \
     "${MODEL_ARGS[@]}" \
     -v "$OUT:/out" \
     -e ENV_NAME="$ENV_NAME" \
+    -e NIRI_TEST_SCALE="${NIRI_TEST_SCALE:-2.0}" \
     -e MODE=case \
     -e LOG_DIR=/out/logs \
     -e OUT_DIR=/out \
