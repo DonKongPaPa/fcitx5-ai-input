@@ -122,6 +122,8 @@ class _VoiceUiHomeState extends State<VoiceUiHome> {
   // 的盒子是"动画中的视觉裁剪"，会滞留在中间值——曾致窗口比内容小、
   // 行的命中区伸出可见卡片之外（卡片下方仍能悬停到行）
   final GlobalKey _panelKey = GlobalKey();
+  // 诊断：行命中矩形（与 ui-ptr/view 配对，定位命中与视觉偏差）
+  final List<GlobalKey> _rowKeys = [GlobalKey(), GlobalKey()];
 
   void _invoke(String method, [dynamic args]) {
     _ch.invokeMethod(method, args).catchError((_) => null);
@@ -157,6 +159,7 @@ class _VoiceUiHomeState extends State<VoiceUiHome> {
       ((card.height + (kShadowPad + kGrowthSlack) * 2) / q).ceilToDouble() * q,
     );
     if (win != _lastReported) {
+      _logDiag();
       // setState 必须有：SizedBox(_lastReported) 是布局输入，不重建则
       // 卡片钉在旧窗口里不重新居中——命中布局与渲染视图脱时代（量化
       // 余量差几十 px，长文本卡片最明显：hover 整体偏移的根源）
@@ -263,7 +266,40 @@ class _VoiceUiHomeState extends State<VoiceUiHome> {
     setState(() => _fontScale = (size / 12.0).clamp(0.7, 2.5));
   }
 
+  void _logDiag() {
+    final v = WidgetsBinding.instance.platformDispatcher.views.first;
+    // ignore: avoid_print
+    print('ui-view: ${v.physicalSize.width.toStringAsFixed(0)}x'
+        '${v.physicalSize.height.toStringAsFixed(0)} dpr=${v.devicePixelRatio}');
+    for (final e in [('card', _cardKey), ('panel', _panelKey)]) {
+      final ro = e.$2.currentContext?.findRenderObject();
+      if (ro is RenderBox && ro.hasSize) {
+        final pos = ro.localToGlobal(Offset.zero);
+        // ignore: avoid_print
+        print('ui-${e.$1}rect: @${pos.dx.toStringAsFixed(0)},'
+            '${pos.dy.toStringAsFixed(0)} '
+            '${ro.size.width.toStringAsFixed(0)}x'
+            '${ro.size.height.toStringAsFixed(0)}');
+      }
+    }
+    for (var i = 0; i < _rowKeys.length; i++) {
+      final ro = _rowKeys[i].currentContext?.findRenderObject();
+      if (ro is RenderBox && ro.hasSize) {
+        final pos = ro.localToGlobal(Offset.zero);
+        // ignore: avoid_print
+        print('ui-rowrect: row$i @${pos.dx.toStringAsFixed(0)},'
+            '${pos.dy.toStringAsFixed(0)} '
+            '${ro.size.width.toStringAsFixed(0)}x'
+            '${ro.size.height.toStringAsFixed(0)}');
+      }
+    }
+  }
+
   void _onHoverRow(int row) {
+    if (_mouseHover != row) {
+      // ignore: avoid_print
+      print('ui-hover: row=$row');
+    }
     if (_mouseHover != row) {
       setState(() => _mouseHover = row);
       _invoke('hoverChanged', {'row': row});
@@ -291,7 +327,13 @@ class _VoiceUiHomeState extends State<VoiceUiHome> {
       data: theme,
       child: Scaffold(
         backgroundColor: Colors.transparent,
-        body: Center(
+        body: Listener(
+          onPointerHover: (e) {
+            // ignore: avoid_print
+            print('ui-ptr: ${e.position.dx.toStringAsFixed(1)},'
+                '${e.position.dy.toStringAsFixed(1)}');
+          },
+          child: Center(
           // 窗口 = 上次上报尺寸：Align 向下传松约束，内容按自然尺寸布局
           //（增长的一帧内新内容落在透明余量里，下一帧 resize 跟上——
           // 结构上不可能出现 overflow 条纹，与字体测量无关）
@@ -331,12 +373,14 @@ class _VoiceUiHomeState extends State<VoiceUiHome> {
                       animScale: _animScale,
                       onHover: _onHoverRow,
                       onSelect: _selectCandidate,
+                      rowKeys: _rowKeys,
                       ),
                     ),
                   ),
                 ),
               ),
             ),
+          ),
           ),
         ),
       ),
@@ -353,6 +397,7 @@ class VoicePanel extends StatelessWidget {
   final double animScale; // 全局动画速率挡位系数
   final ValueChanged<int> onHover;
   final ValueChanged<int> onSelect;
+  final List<GlobalKey> rowKeys;
   const VoicePanel({
     super.key,
     required this.data,
@@ -360,6 +405,7 @@ class VoicePanel extends StatelessWidget {
     required this.animScale,
     required this.onHover,
     required this.onSelect,
+    required this.rowKeys,
   });
 
   @override
@@ -395,7 +441,8 @@ class VoicePanel extends StatelessWidget {
                     mouseHover: mouseHover,
                     animScale: animScale,
                     onHover: onHover,
-                    onSelect: onSelect),
+                    onSelect: onSelect,
+                    rowKeys: rowKeys),
           ),
         ),
       ),
@@ -419,6 +466,7 @@ class _SessionBody extends StatelessWidget {
   final double animScale; // 全局动画速率挡位系数
   final ValueChanged<int> onHover;
   final ValueChanged<int> onSelect;
+  final List<GlobalKey> rowKeys; // 诊断：行命中矩形
   const _SessionBody({
     super.key,
     required this.data,
@@ -426,6 +474,7 @@ class _SessionBody extends StatelessWidget {
     required this.animScale,
     required this.onHover,
     required this.onSelect,
+    required this.rowKeys,
   });
 
   @override
@@ -562,6 +611,7 @@ class _SessionBody extends StatelessWidget {
                     text: items[0],
                     style: theme.textTheme.titleSmall!,
                     interactive: true,
+                    rowKey: rowKeys[0],
                     tag: data.llmDummy ? 'Dummy 润色' : '润色版'),
               ),
             _row(theme, cs,
@@ -569,6 +619,7 @@ class _SessionBody extends StatelessWidget {
                 text: mainText.isEmpty ? ' ' : mainText,
                 style: mainStyle,
                 interactive: isCand && items.length > 1,
+                rowKey: rowKeys[1],
                 tag: isCand && items.length > 1 ? '识别结果' : null),
           ],
         ),
@@ -618,7 +669,8 @@ class _SessionBody extends StatelessWidget {
       required String text,
       required TextStyle style,
       required bool interactive,
-      String? tag}) {
+      String? tag,
+      Key? rowKey}) {
     final hovered = interactive &&
         (mouseHover >= 0 ? mouseHover : data.hover) ==
             index;
@@ -672,6 +724,7 @@ class _SessionBody extends StatelessWidget {
       return core;
     }
     return MouseRegion(
+      key: rowKey,
       cursor: SystemMouseCursors.click,
       // 只挂 onHover（真实移动事件）：静止指针下弹出/布局变化合成的
       // onEnter 不选择——否则静止鼠标压住方向键选择
