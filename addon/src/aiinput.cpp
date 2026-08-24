@@ -561,8 +561,32 @@ void AiInputEngine::reloadConfig() {
         FCITX_INFO() << "AiInput: 配置已迁移 voiceinput.config → "
                         "aiinput.config";
     }
+    // LLMEnabled(bool，已废弃) → LLMEngine(枚举)：显式关过 LLM 的用户
+    // 保持"直接上屏"（Off）；其余走新默认 Dummy（=原默认开启的行为）。
+    // 读原始 ini 判断——选项已从 Configuration 移除，load 看不见旧键
+    bool llmMigrated = false;
+    {
+        RawConfig raw;
+        readAsIni(raw, "conf/aiinput.config");
+        const auto *oldEnabled = raw.valueByPath("LLMEnabled");
+        if (oldEnabled && !raw.valueByPath("LLMEngine")) {
+            if (*oldEnabled == "False" || *oldEnabled == "false" ||
+                *oldEnabled == "0") {
+                config_.llmEngine.setValue(LlmEngineKind::Off);
+            }
+            llmMigrated = true;
+            FCITX_INFO() << "AiInput: 迁移 LLMEnabled=" << *oldEnabled
+                         << " → LLMEngine="
+                         << (config_.llmEngine.value() == LlmEngineKind::Off
+                                 ? "Off"
+                                 : "Dummy");
+        }
+    }
     readAsIni(config_, "conf/aiinput.config");
     migrateLegacyConfig();
+    if (llmMigrated) {
+        safeSaveAsIni(config_, "conf/aiinput.config"); // 落新键、清旧键
+    }
     if (popup_) { // 定位策略热更新（PositionMode/PositionFallbackApps）
         popup_->setPositionPolicy(config_.positionMode.value(),
                                   config_.positionFallbackApps.value());
@@ -1140,8 +1164,8 @@ void AiInputEngine::onAsrFinish(const std::string &text) {
         popup_->resolvePendingToLayer();
     }
     finalText_ = text;
-    if (config_.llmEnabled.value()) {
-        // Dummy 阶段：候选 = [润色版, 原始版]（润色=保尾标点，真实 LLM 后替换）
+    if (config_.llmEngine.value() == LlmEngineKind::Dummy) {
+        // Dummy 占位阶段：候选 = [润色版, 原始版]（润色=保尾标点，真实 LLM 后替换）
         candidates_ = {polish(finalText_), finalText_};
         state_ = State::Candidates;
         keyboardRow_ = 0;

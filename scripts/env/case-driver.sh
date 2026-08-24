@@ -157,11 +157,11 @@ rm -f "$TEST_RESULT_FILE"
 "$DIST_BIN/$TESTAPP" >"$LOG_DIR/testapp-r4.log" 2>&1 &
 R4_PID=$!
 sleep 2
-# LLM 关 → Result 态自动上屏（Candidates 态不自动提交，r6 再覆盖）；
+# LLM 关（LLMEngine=Off）→ Result 态自动上屏（Candidates 态不自动提交，r6 再覆盖）；
 # 同时顺带覆盖 configtool SetConfig 链路
 gdbus call --session --dest org.fcitx.Fcitx5 --object-path /controller \
     --method org.fcitx.Fcitx.Controller1.SetConfig \
-    "fcitx://config/addon/aiinput" "<{'LLMEnabled': <'False'>}>" >/dev/null 2>&1 || true
+    "fcitx://config/addon/aiinput" "<{'LLMEngine': <'Off'>}>" >/dev/null 2>&1 || true
 sleep 0.5
 im_before="$(fcitx5-remote -n 2>/dev/null || true)"
 # 录屏取证（popup 卡片渲染）
@@ -193,7 +193,7 @@ im_after="$(fcitx5-remote -n 2>/dev/null || true)"
 # 恢复 LLM 开；确保回 idle（不把 Result/Candidates 残留给 r5）
 gdbus call --session --dest org.fcitx.Fcitx5 --object-path /controller \
     --method org.fcitx.Fcitx.Controller1.SetConfig \
-    "fcitx://config/addon/aiinput" "<{'LLMEnabled': <'True'>}>" >/dev/null 2>&1 || true
+    "fcitx://config/addon/aiinput" "<{'LLMEngine': <'Dummy'>}>" >/dev/null 2>&1 || true
 case "$(call State 2>/dev/null || true)" in *idle*) ;; *)
     call SimulateKey Control_R true >/dev/null 2>&1 || true
     call SimulateKey Control_R false >/dev/null 2>&1 || true;; esac

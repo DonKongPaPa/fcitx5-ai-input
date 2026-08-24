@@ -35,6 +35,11 @@ FCITX_CONFIG_ENUM_I18N_ANNOTATION(FunASRQuantKind, "None", "Int8");
 FCITX_CONFIG_ENUM(UiAnimSpeedKind, Slow, Normal, Fast);
 FCITX_CONFIG_ENUM_I18N_ANNOTATION(UiAnimSpeedKind, "Slow", "Normal", "Fast");
 
+// LLM 引擎：Off=关闭（结果单行直接展示自动上屏）；Dummy=规则占位
+//（句末补标点，双行候选）——真实 LLM 双后端接入前的显式占位档
+FCITX_CONFIG_ENUM(LlmEngineKind, Off, Dummy);
+FCITX_CONFIG_ENUM_I18N_ANNOTATION(LlmEngineKind, "Off", "Dummy");
+
 // configtool 由该 Configuration 自动生成设置页；保存后经 D-Bus 触发
 // reloadConfig()，参数即时生效（无需重启 fcitx5）
 FCITX_CONFIGURATION(
@@ -99,8 +104,11 @@ FCITX_CONFIGURATION(
     Option<bool> streamingEnabled{
         this, "StreamingEnabled", "流式识别（实时显示中间结果，引擎支持时）",
         true};
-    Option<bool> llmEnabled{
-        this, "LLMEnabled", "LLM 优化输出（开启时结果先入候选框）", true};
+    Option<LlmEngineKind, NoConstrain<LlmEngineKind>, DefaultMarshaller<LlmEngineKind>, LlmEngineKindI18NAnnotation> llmEngine{
+        this, "LLMEngine", "LLM 引擎（Dummy=占位润色（规则补标点，"
+                           "双行候选，真实后端接入前） / Off=关闭（结果"
+                           "直接上屏））",
+        LlmEngineKind::Dummy};
 
     // —— 组2.1 FunASR 流式（WS 档）——
     Option<std::string> funasrUrl{
