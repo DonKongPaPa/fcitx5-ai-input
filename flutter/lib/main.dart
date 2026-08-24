@@ -63,6 +63,7 @@ class SessionData {
   final int elapsedMs; // 录音计时
   final int timeoutMs; // result 停留时长（倒计时条）
   final int hover; // 键盘方向键选择行（-1=无；鼠标 hover 是本地状态）
+  final bool llmDummy; // LLM 为占位档（润色行打 Dummy 标记）
   const SessionData({
     this.state = UiState.idle,
     this.partial = '',
@@ -71,6 +72,7 @@ class SessionData {
     this.elapsedMs = 0,
     this.timeoutMs = 1500,
     this.hover = -1,
+    this.llmDummy = false,
   });
 }
 
@@ -212,6 +214,7 @@ class _VoiceUiHomeState extends State<VoiceUiHome> {
           resultText: msg['final'] as String? ?? '',
           candidates: (msg['candidates'] as List?)?.cast<String>() ?? const [],
           hover: msgHover,
+          llmDummy: msg['llmDummy'] == true,
         ));
         break;
       default:
@@ -548,7 +551,7 @@ class _SessionBody extends StatelessWidget {
                     text: items[0],
                     style: theme.textTheme.titleSmall!,
                     interactive: true,
-                    tag: '润色版'),
+                    tag: data.llmDummy ? 'Dummy 润色' : '润色版'),
               ),
             _row(theme, cs,
                 index: 1,
@@ -576,20 +579,22 @@ class _SessionBody extends StatelessWidget {
     );
   }
 
-  // 数字徽标（圆形）
-  Widget _badge(ColorScheme cs, int number, {required bool primary}) {
+  // 数字徽标（圆形）：选中=实心主色、未选=描边——徽标编码选中态，
+  // 双行文本几乎一样（占位润色只差句号）也能一眼看出选中了哪行
+  Widget _badge(ColorScheme cs, int number, {required bool selected}) {
     return Container(
       width: 20,
       height: 20,
       alignment: Alignment.center,
       decoration: BoxDecoration(
-        color: primary ? cs.primary : cs.surfaceContainerHighest,
+        color: selected ? cs.primary : null,
         shape: BoxShape.circle,
+        border: selected ? null : Border.all(color: cs.outlineVariant),
       ),
       child: Text('$number',
           style: TextStyle(
             fontSize: 11,
-            color: primary ? cs.onPrimary : cs.onSurfaceVariant,
+            color: selected ? cs.onPrimary : cs.onSurfaceVariant,
           )),
     );
   }
@@ -617,7 +622,7 @@ class _SessionBody extends StatelessWidget {
             AnimatedOpacity(
               duration: animDurOf(animScale, 220),
               opacity: interactive ? 1 : 0,
-              child: _badge(cs, index + 1, primary: index == 0),
+              child: _badge(cs, index + 1, selected: hovered),
             ),
             const SizedBox(width: 8),
             Expanded(

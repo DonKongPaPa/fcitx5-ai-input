@@ -705,12 +705,16 @@ void AiInputEngine::pushUiState() {
             }
             arr += "\"" + flutterJsonEscape(candidates_[i]) + "\"";
         }
-        // hover：鼠标悬停优先，否则键盘方向键选择行
+        // hover：鼠标悬停优先，否则键盘方向键选择行；llmDummy=占位档
+        // 标记（Dart 给润色行打「Dummy 润色」tag，未实装期可辨识）
         const int hover = uiHoverRow_ >= 0 ? uiHoverRow_ : keyboardRow_;
+        const bool llmDummy =
+            config_.llmEngine.value() == LlmEngineKind::Dummy;
         flutter_->sendUpdate(
             "{\"state\":\"candidates\",\"final\":\"" +
             flutterJsonEscape(finalText_) + "\",\"candidates\":[" + arr +
-            "],\"hover\":" + std::to_string(hover) + anim + "}");
+            "],\"hover\":" + std::to_string(hover) +
+            (llmDummy ? ",\"llmDummy\":true" : "") + anim + "}");
         break;
     }
     case State::Idle:
