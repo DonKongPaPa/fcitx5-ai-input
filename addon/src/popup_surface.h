@@ -297,9 +297,9 @@ private:
     std::unique_ptr<EventSourceIO> xEventSrc_;
     void handleX11Events();          // xcb fd 可读：poll 事件队列
     void ensureX11EventSource();     // xconn_ fd → fcitx 事件循环
-    // X 应用判定（xcb 模块主显示为 XWayland + 活动窗 WM_CLASS ↔ program；
-    // 按 program 缓存）。持锁调用，X 查询每应用一次
-    bool isX11AppLocked(const std::string &program);
+    // 聚焦应用是否 X 应用：_NET_ACTIVE_WINDOW 存在（satellite 在 wayland
+    // 聚焦时清空它——FocusIn 的 IC 即聚焦应用，无需 program/WM_CLASS）
+    bool focusedX11WindowLocked();
     // 矩形是否为 X 物理坐标（超出全部输出逻辑范围——X 应用铁证）
     bool rectIsXPhysical(const Rect &rect);
     // program 异步到达的补判：矩形变化时 layer → X OR 窗升级。持锁调用

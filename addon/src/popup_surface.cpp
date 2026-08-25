@@ -589,10 +589,8 @@ void VoicePopup::tryUpgradeToX11Locked(InputContext *ic) {
         return;
     }
     const Rect rect = ic->cursorRect();
-    const auto prog = toLower(ic->program());
-    // 溢出铁证优先；否则 program+WM_CLASS 辅证
-    if (!rectIsXPhysical(rect) &&
-        (prog.empty() || xBroken_ || !isX11AppLocked(prog))) {
+    // 溢出铁证 || 聚焦窗是 X 应用（活动窗存在）
+    if (!rectIsXPhysical(rect) && !focusedX11WindowLocked()) {
         return;
     }
     // 判成 X 应用：拆 layer 表面，改走 X OR 窗（首帧到达时建窗）
@@ -626,18 +624,18 @@ bool VoicePopup::rectIsXPhysical(const Rect &rect) {
     return rect.left() > maxW + 64 || rect.top() > maxH + 64;
 }
 
-bool VoicePopup::isX11AppLocked(const std::string &program) {
-    if (xBroken_ || program.empty()) {
-        FCITX_INFO() << "VoicePopup: [x11diag] 判定早退 program=\"" << program
-                     << "\" xBroken_=" << xBroken_;
-        return false;
-    }
-    if (auto it = xClassCache_.find(program); it != xClassCache_.end()) {
-        return it->second;
+bool VoicePopup::focusedX11WindowLocked() {
+    // 活动窗存在 ⟺ 聚焦应用是 X 应用：FocusIn 的 IC 就是聚焦应用，
+    // 而 satellite 在 wayland 应用聚焦时清空 _NET_ACTIVE_WINDOW（实测
+    // active=0x0）——program/WM_CLASS 都不需要（program 实测会恒空）。
+    // 溢出铁证之外的第二判据；两者任一命中即 X 模式
+    if (xBroken_ || !xconn_ || xroot_ == XCB_WINDOW_NONE) {
+        if (xBroken_) {
+            return false;
+        }
     }
     if (!xTried_) {
         xTried_ = true;
-        // 只认 XWayland 主显示（xcb 模块的判定；无 X 环境直接放弃）
         auto *xcb = instance_->addonManager().addon("xcb", true);
         if (!xcb) {
             FCITX_INFO() << "VoicePopup: [x11diag] xcb addon 不可用";
@@ -672,97 +670,26 @@ bool VoicePopup::isX11AppLocked(const std::string &program) {
     if (!xconn_ || xroot_ == XCB_WINDOW_NONE) {
         return false;
     }
-    // 分类：活动 X 窗口（其次客户端列表）的 WM_CLASS 与 program 互为
-    // 子串——wayland 原生应用聚焦时活动 X 窗是残留的其它应用，类名
-    // 不会撞上 program。satellite 不维护 _NET_CLIENT_LIST（实测空），
-    // 活动窗是唯一可靠入口
-    auto propString = [&](xcb_window_t w, xcb_atom_t prop,
-                          size_t maxLen) -> std::string {
-        auto *r = xcb_get_property_reply(
-            xconn_,
-            xcb_get_property(xconn_, 0, w, prop, XCB_GET_PROPERTY_TYPE_ANY,
-                             0, (maxLen + 3) / 4),
-            nullptr);
-        std::string out;
-        if (r && r->type != XCB_ATOM_NONE && r->bytes_after == 0) {
-            out.assign(static_cast<const char *>(xcb_get_property_value(r)),
-                       xcb_get_property_value_length(r));
-        }
-        free(r);
-        return out;
-    };
-    auto classMatches = [&](xcb_window_t w) -> bool {
-        std::string cls = propString(w, xAtomWmClass_, 128);
-        if (cls.empty()) {
-            return false;
-        }
-        auto prog = toLower(program);
-        // WM_CLASS 是 RESCLASS\0RESINSTANCE\0 双串，逐段比对
-        size_t start = 0;
-        while (true) {
-            auto end = cls.find('\0', start);
-            if (end == std::string::npos) {
-                end = cls.size();
-            }
-            std::string seg = toLower(cls.substr(start, end - start));
-            if (!seg.empty() &&
-                (seg.find(prog) != std::string::npos ||
-                 prog.find(seg) != std::string::npos)) {
-                return true;
-            }
-            if (end == cls.size()) {
-                break;
-            }
-            start = end + 1;
-        }
-        return false;
-    };
-    std::vector<xcb_window_t> actives;
-    {
-        auto *r = xcb_get_property_reply(
-            xconn_,
-            xcb_get_property(xconn_, 0, xroot_, xAtomActiveWindow_,
-                             XCB_ATOM_WINDOW, 0, 1),
-            nullptr);
-        if (r && r->type != XCB_ATOM_NONE &&
-            xcb_get_property_value_length(r) >= 4) {
-            actives.push_back(
-                *static_cast<const xcb_window_t *>(xcb_get_property_value(r)));
-        }
-        free(r);
+    auto *r = xcb_get_property_reply(
+        xconn_,
+        xcb_get_property(xconn_, 0, xroot_, xAtomActiveWindow_,
+                         XCB_ATOM_WINDOW, 0, 1),
+        nullptr);
+    bool active = false;
+    if (r && r->type != XCB_ATOM_NONE &&
+        xcb_get_property_value_length(r) >= 4) {
+        auto w = *static_cast<const xcb_window_t *>(
+            xcb_get_property_value(r));
+        // 有效活动窗：非空、非根、非我们自己的卡片窗
+        active = w != XCB_WINDOW_NONE && w != xroot_ && w != xwin_;
     }
-    bool match = !actives.empty() && classMatches(actives[0]);
-    if (!match) {
-        auto *r = xcb_get_property_reply(
-            xconn_,
-            xcb_get_property(xconn_, 0, xroot_, xAtomClientList_,
-                             XCB_ATOM_WINDOW, 0, 1024),
-            nullptr);
-        if (r && r->type != XCB_ATOM_NONE) {
-            auto *wins = static_cast<const xcb_window_t *>(
-                xcb_get_property_value(r));
-            int n = xcb_get_property_value_length(r) / 4;
-            for (int i = 0; i < n && !match; ++i) {
-                match = classMatches(wins[i]);
-            }
-        }
-        free(r);
-    }
+    free(r);
     if (xcb_connection_has_error(xconn_)) {
         FCITX_INFO() << "VoicePopup: [x11diag] 查询中连接死掉";
-        xBroken_ = true; // X 连接中途死掉：本会话不再尝试
+        xBroken_ = true;
         return false;
     }
-    if (match) {
-        // 只缓存正判定：负判定受活动窗口竞态影响（分类时刻活动窗可能
-        // 尚未切到目标应用），毒化后 X 应用永远回不去
-        xClassCache_[program] = true;
-    }
-    FCITX_INFO() << "VoicePopup: XWayland 判定 " << program << " → "
-                 << (match ? "X 应用（OR 窗口卡片）" : "wayland 原生")
-                 << "（活动窗"
-                 << (actives.empty() ? "无" : "有") << "）";
-    return match;
+    return active;
 }
 
 // ---------------------------------------------------------------------------
@@ -1379,7 +1306,8 @@ bool VoicePopup::ensurePopup(InputContext *ic, bool atShow) {
     // program；②program 非空时 WM_CLASS 匹配（辅证）。program 时序坑：
     // DBus 前端首次 FocusIn（乃至整个会话）program 可能恒为空串
     //（实测 WPS 在新 fcitx5 进程里从不到达）——矩形溢出是唯一可靠信号
-    if (overlay && dbusFollow_ && rectIsXPhysical(ic->cursorRect())) {
+    if (overlay && dbusFollow_ &&
+        (rectIsXPhysical(ic->cursorRect()) || focusedX11WindowLocked())) {
         lastProgram_ = toLower(ic->program());
         if (x11Mode_ && icRef_.get() == ic) {
             return true; // 同 IC 复用
@@ -1395,22 +1323,6 @@ bool VoicePopup::ensurePopup(InputContext *ic, bool atShow) {
         }
         FCITX_INFO() << "VoicePopup: X OR 卡片模式（矩形溢出判定，rect="
                      << ic->cursorRect().left() << "," << ic->cursorRect().top()
-                     << "）";
-        return true;
-    }
-    if (overlay && dbusFollow_ && !ic->program().empty() &&
-        isX11AppLocked(toLower(ic->program()))) {
-        if (x11Mode_ && icRef_.get() == ic) {
-            return true; // 同 IC 复用
-        }
-        lastProgram_ = toLower(ic->program());
-        destroyPopupSurface();
-        destroyX11WindowLocked();
-        topMode_ = false;
-        overlayFallback_ = true;
-        x11Mode_ = true;
-        icRef_ = ic->watch();
-        FCITX_INFO() << "VoicePopup: X OR 卡片模式（" << ic->program()
                      << "）";
         return true;
     }
