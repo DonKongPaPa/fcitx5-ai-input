@@ -136,6 +136,7 @@ private:
     void resetSession(); // 会话 IC 销毁时回收（防触发吞掉）
     void startThresholdTimer();
     void startResultTimer();
+    void armRecordingWatchdog();
     void ensureTestService();
     std::string joinCandidates() const;
 
@@ -167,6 +168,8 @@ private:
     // 全局按键拦截（PreInputMethod：rime 等引擎之前）
     std::unique_ptr<HandlerTableEntry<EventHandler>> keyWatcher_;
     std::unique_ptr<HandlerTableEntry<EventHandler>> focusWatcher_; // popup 预热
+    // 会话 IC 失焦（焦点被抢/窗口关闭）即结束录音，防会话卡死
+    std::unique_ptr<HandlerTableEntry<EventHandler>> focusOutWatcher_;
     std::unique_ptr<EventSourceTime> warmupTimer_; // 加载后预热引擎
     std::unique_ptr<EventSourceTime> dbusRetry_;   // dbus 模块未就绪时补注册
 
@@ -178,6 +181,9 @@ private:
     std::unique_ptr<EventSourceTime> thresholdTimer_;
     std::unique_ptr<EventSourceTime> tailTimer_; // 松开后尾音宽限 350ms
     std::unique_ptr<EventSourceTime> resultTimer_;
+    std::unique_ptr<EventSourceTime> recWatchdogTimer_;  // 录音硬上限
+    std::unique_ptr<EventSourceTime> recHardStopTimer_;  // 识别挂起兜底
+    bool finishRequested_ = false; // finishRecording 已请求（看门狗防重入）
     std::unique_ptr<AsrEngine> asr_;
     std::string partial_;                 // 当前流式中间文本
     std::string finalText_;               // ASR 最终文本

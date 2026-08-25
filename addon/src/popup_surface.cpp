@@ -664,6 +664,8 @@ bool VoicePopup::focusedX11WindowLocked() {
             xcb_screen_next(&it);
         }
         xroot_ = it.data->root;
+        xRootW_ = it.data->width_in_pixels;
+        xRootH_ = it.data->height_in_pixels;
         ensureX11Atoms();
         ensureX11EventSource();
         xcb_flush(xconn_);
@@ -836,6 +838,18 @@ std::pair<int, int> VoicePopup::x11CardPosLocked(const Rect &rect, int cardW,
             y = std::max(ry0 + kGapX11, rect.top() - cardH - gap);
         }
     }
+    // X 屏硬界：OR 卡片越出 X 屏（root 尺寸）时 satellite 无法父子化，
+    // 会把它映成独立顶层窗——niri 给新窗键盘焦点，会话 IC 失焦、触发键
+    // 永远到不了（ghostty 末行卡片 y=2288 出 1512 屏卡死实测）。矩形本身
+    // 出屏（GTK 滚动文档坐标虚报、悬浮窗超出 X 屏）也一并兜住：先翻到
+    // 光标上方，再钳回屏内
+    if (xRootW_ > 0 && xRootH_ > 0 && cardW > 0 && cardH > 0) {
+        if (y + cardH > xRootH_ - kGapX11) {
+            y = std::max(kGapX11, rect.top() - cardH - gap);
+        }
+        x = std::clamp(x, kGapX11, std::max(kGapX11, xRootW_ - cardW - kGapX11));
+        y = std::clamp(y, kGapX11, std::max(kGapX11, xRootH_ - cardH - kGapX11));
+    }
     return {x, y};
 }
 
@@ -933,8 +947,10 @@ void VoicePopup::pushFrameX11Locked(const uint8_t *bgra, int w, int h) {
             xcb_map_window(xconn_, xwin_);
             FCITX_INFO() << "VoicePopup: X OR 卡片窗 0x" << std::hex
                          << xwin_ << std::dec << " " << w << "x" << h
-                         << " @ " << xLastRect_.left() << ","
-                         << xLastRect_.top() + xLastRect_.height();
+                         << " @ " << xy.first << "," << xy.second
+                         << "（rect=" << xLastRect_.left() << ","
+                         << xLastRect_.top() << " root=" << xRootW_ << "x"
+                         << xRootH_ << "）";
         } else {
             const uint32_t vals[2] = {static_cast<uint32_t>(w),
                                       static_cast<uint32_t>(h)};

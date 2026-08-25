@@ -21,6 +21,7 @@
 #include <sys/select.h>
 #include <sys/socket.h>
 
+#include <algorithm>
 #include <chrono>
 #include <sstream>
 #include <thread>
@@ -462,6 +463,27 @@ AiInputEngine::AiInputEngine(Instance *instance)
             auto &iev = static_cast<InputContextEvent &>(event);
             if (state_ == State::Idle && popup_) {
                 popup_->prepare(iev.inputContext());
+            }
+        });
+
+    // 会话 IC 失焦即结束录音：焦点被抢走后（X 卡片出屏被 satellite 映成
+    // 独立窗、niri 给新窗键盘焦点，ghostty 末行实测），触发键永远到不了
+    // 会话 IC，录音必须自止——按正常结束走，已采音频照常识别
+    focusOutWatcher_ = instance_->watchEvent(
+        EventType::InputContextFocusOut, EventWatcherPhase::PreInputMethod,
+        [this](Event &event) {
+            auto &iev = static_cast<InputContextEvent &>(event);
+            if (iev.inputContext() != sessionIcRef_.get()) {
+                return;
+            }
+            FCITX_INFO() << "AiInput: [wd] 会话 IC 失焦 state="
+                         << stateName();
+            if (state_ == State::Pressing) {
+                thresholdTimer_.reset();
+                enterIdle();
+            } else if (state_ == State::Recording && !finishRequested_) {
+                FCITX_INFO() << "AiInput: 录音中会话 IC 失焦——自动结束识别";
+                finishRecording();
             }
         });
 
@@ -1095,6 +1117,46 @@ void AiInputEngine::startThresholdTimer() {
     }
 }
 
+// 录音看门狗：触发键 release 可能永远不来（焦点被抢后按键进不了会话
+// IC），录音不能无界。到点先按正常结束走（识别已采音频）；若此后 30s
+// 仍在 Recording（ASR 挂起），强制回收会话
+void AiInputEngine::armRecordingWatchdog() {
+    recWatchdogTimer_.reset();
+    recHardStopTimer_.reset();
+    const int sec = std::clamp(config_.maxRecordingSec.value(), 10, 600);
+    FCITX_INFO() << "AiInput: [wd] 看门狗布防 " << sec << "s";
+    recWatchdogTimer_ = instance_->eventLoop().addTimeEvent(
+        CLOCK_MONOTONIC, nowUs() + static_cast<uint64_t>(sec) * 1000000, 0,
+        [this](EventSourceTime *, uint64_t) {
+            FCITX_INFO() << "AiInput: [wd] 看门狗回调到达 state="
+                         << stateName();
+            if (state_ == State::Recording && !finishRequested_) {
+                FCITX_WARN() << "AiInput: 录音看门狗触发——自动结束识别"
+                                "（触发键松开事件丢失或焦点被抢）";
+                finishRecording();
+            }
+            if (state_ == State::Recording) {
+                recHardStopTimer_ = instance_->eventLoop().addTimeEvent(
+                    CLOCK_MONOTONIC, nowUs() + 30000000, 0,
+                    [this](EventSourceTime *, uint64_t) {
+                        if (state_ == State::Recording) {
+                            FCITX_WARN() << "AiInput: 识别挂起兜底——强制"
+                                            "回收会话";
+                            enterIdle();
+                        }
+                        return false;
+                    });
+                if (recHardStopTimer_) {
+                    recHardStopTimer_->setOneShot();
+                }
+            }
+            return false;
+        });
+    if (recWatchdogTimer_) {
+        recWatchdogTimer_->setOneShot();
+    }
+}
+
 // 按当前配置创建 ASR 引擎（会话级：配置热改后下一会话即生效）
 static std::unique_ptr<AsrEngine> makeAsrEngine(const AiInputConfig &cfg) {
     switch (cfg.asrEngine.value()) {
@@ -1117,7 +1179,9 @@ void AiInputEngine::beginRecording(InputContext *ic) {
     }
     state_ = State::Recording;
     toggleReleased_ = false;
+    finishRequested_ = false;
     recordStartUs_ = nowUs();
+    armRecordingWatchdog();
     // 引擎随会话创建（旧引擎若在跑先取消）
     if (asr_) {
         asr_->cancel();
@@ -1148,6 +1212,7 @@ void AiInputEngine::beginRecording(InputContext *ic) {
 }
 
 void AiInputEngine::finishRecording() {
+    finishRequested_ = true;
     uiNotify("recording-stop");
     // 尾音宽限：parec/PulseAudio 链路还有 ~200-300ms 已采音频在路上，
     // 且解码需要时间追平——立刻 stop 会截掉松开前的内容（漏字）。
@@ -1289,6 +1354,9 @@ flutter_->sendUpdate("{\"state\":\"idle\"" + animField() + "}");
     thresholdTimer_.reset();
     tailTimer_.reset();
     resultTimer_.reset();
+    recWatchdogTimer_.reset();
+    recHardStopTimer_.reset();
+    finishRequested_ = false;
     if (asr_) {
         asr_->stop();
     }

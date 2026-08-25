@@ -285,6 +285,7 @@ private:
     // 原点——只能走 X 侧
     xcb_connection_t *xconn_ = nullptr;
     xcb_window_t xroot_ = XCB_WINDOW_NONE;
+    int xRootW_ = 0, xRootH_ = 0; // X 屏尺寸（satellite root）：OR 卡片硬边界
     bool xTried_ = false, xBroken_ = false;
     bool xActiveLast_ = false; // 活动窗判定结果（日志去重）
     int xErrLog_ = 0;          // X 错误日志限流

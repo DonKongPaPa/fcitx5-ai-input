@@ -56,6 +56,11 @@ FCITX_CONFIGURATION(
     Option<int> triggerThresholdMs{
         this, "TriggerThresholdMs", "长按阈值（毫秒，建议 50-2000，超过才触发录音）",
         300};
+    Option<int> maxRecordingSec{
+        this, "MaxRecordingSec",
+        "单次录音硬上限（秒，10-600）：到点自动结束并识别。防触发键松开"
+        "事件丢失（焦点被抢等）导致会话卡死",
+        60};
 
     // —— 组2 语音引擎 ——
     // —— Sherpa CPU 流式引擎（RSS ~412MB/首字 ~0.07s/0 显存）——

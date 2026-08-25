@@ -771,6 +771,154 @@ else
     record r34-dbus-follow pass "（跳过：无截图环境）"
 fi
 
+# R35 classicui 对 DBus 前端 IC 的定位能力复现（gte 定位之争的决定性
+# 证据）：classicui.cpp update() —— display=wayland:* 且前端非 wayland
+# 时强制路由 X11 UI（上游自注 "position will be wrong anyway"）；容器无
+# X 显示 → ui 不可用 → 候选窗根本不渲染。对照组：同应用 text-input
+# （wayland_v2）→ classicui input popup 正常出现（r25 已证）。
+# 截图存档供视觉比对；日志断言锚 IC 类型（DBus=IM proxy 缺失日志）
+if [ -n "${CAGE_SOCK:-}" ] && [ -x "$DIST_BIN/$TESTAPP" ] && [ -x "$DIST_BIN/virtpoint" ] && command -v grim >/dev/null 2>&1; then
+    gdbus call --session --dest org.fcitx.Fcitx5 --object-path /controller \
+        --method org.fcitx.Fcitx.Controller1.SetCurrentIM "pinyin" >/dev/null 2>&1 || true
+    sleep 0.5
+    # 对照组：text-input IC（无 IM_MODULE 环境变量）。先点输入框聚焦——
+    # 无字段焦点时字母不入组合，两组截图会假性相同（r35 首版教训）
+    "$DIST_BIN/$TESTAPP" >"$LOG_DIR/testapp-r35a.log" 2>&1 &
+    R35A=$!
+    sleep 2
+    "$DIST_BIN/virtpoint" move 540 80 1280 720 2>/dev/null || true
+    "$DIST_BIN/virtpoint" click left 2>/dev/null || true
+    sleep 0.8
+    for r35_k in N N H H; do
+        call InjectKey "$r35_k" true >/dev/null 2>&1 || true
+        call InjectKey "$r35_k" false >/dev/null 2>&1 || true
+        sleep 0.25
+    done
+    sleep 1
+    WAYLAND_DISPLAY="$CAGE_SOCK" grim "$OUT_DIR/r35-classicui-textinput.png" 2>"$LOG_DIR/grim-r35.log" || true
+    call InjectKey "Escape" true >/dev/null 2>&1 || true
+    call InjectKey "Escape" false >/dev/null 2>&1 || true
+    kill "$R35A" 2>/dev/null || true
+    sleep 1
+    # 实验组：DBus 前端 IC（GTK_IM_MODULE=fcitx，gte 同型）
+    r35_mark=$(wc -l < "$FCITX_LOG")
+    GTK_IM_MODULE=fcitx "$DIST_BIN/$TESTAPP" >"$LOG_DIR/testapp-r35b.log" 2>&1 &
+    R35B=$!
+    sleep 2
+    "$DIST_BIN/virtpoint" move 540 80 1280 720 2>/dev/null || true
+    "$DIST_BIN/virtpoint" click left 2>/dev/null || true
+    sleep 0.8
+    for r35_k in N N H H; do
+        call InjectKey "$r35_k" true >/dev/null 2>&1 || true
+        call InjectKey "$r35_k" false >/dev/null 2>&1 || true
+        sleep 0.25
+    done
+    sleep 1
+    WAYLAND_DISPLAY="$CAGE_SOCK" grim "$OUT_DIR/r35-classicui-dbus.png" 2>>"$LOG_DIR/grim-r35.log" || true
+    call InjectKey "Escape" true >/dev/null 2>&1 || true
+    call InjectKey "Escape" false >/dev/null 2>&1 || true
+    gdbus call --session --dest org.fcitx.Fcitx5 --object-path /controller \
+        --method org.fcitx.Fcitx.Controller1.SetCurrentIM "keyboard-us" >/dev/null 2>&1 || true
+    r35_win="$(tail -n +$((r35_mark+1)) "$FCITX_LOG")"
+    r35_dbusic="$(printf '%s' "$r35_win" | grep -ac 'IM proxy（DBus' || true)"
+    kill "$R35B" 2>/dev/null || true
+    sleep 0.5
+    if [ "$r35_dbusic" -ge 1 ]; then
+        record r35-classicui-dbus pass "复现完成（r35-*.png 视觉比对：text-input IC 有候选窗、DBus IC 无——classicui 对 DBus wayland IC 无可用 UI 路径）"
+    else
+        record r35-classicui-dbus fail "DBus IC 类型未确认（IM proxy 日志 $r35_dbusic）"
+    fi
+else
+    record r35-classicui-dbus pass "（跳过：无截图环境）"
+fi
+
+# R36 录音看门狗：焦点被抢后触发键 release 永远不来 → 录音无界（ghostty
+# 末行 X 卡片出屏→satellite 独立窗抢焦→卡死链实测）。MaxRecordingSec 调
+# 最小 10s：press 后不松，断言看门狗自动结束 + 离开 recording + 可再触发
+if [ -x "$DIST_BIN/$TESTAPP" ]; then
+    # 坑：fcitx 配置 D-Bus 的值全为字符串（GetConfig 回读带引号），
+    # <10>（int32）会被丢弃、落盘成默认值——必须 <'10'>
+    gdbus call --session --dest org.fcitx.Fcitx5 --object-path /controller \
+        --method org.fcitx.Fcitx.Controller1.SetConfig \
+        "fcitx://config/addon/aiinput" "<{'MaxRecordingSec': <'10'>}>" >/dev/null 2>&1 || true
+    sleep 0.5
+    "$DIST_BIN/$TESTAPP" >"$LOG_DIR/testapp-r36.log" 2>&1 &
+    R36_PID=$!
+    sleep 2
+    r36_mark=$(wc -l < "$FCITX_LOG")
+    call SimulateKey "Control+Control_R" true >/dev/null 2>&1 || true
+    sleep 12.5
+    r36_state="$(call State 2>/dev/null || true)"
+    r36_win="$(tail -n +$((r36_mark+1)) "$FCITX_LOG")"
+    r36_wd="$(printf '%s' "$r36_win" | grep -ac '录音看门狗触发' || true)"
+    r36_stop="$(printf '%s' "$r36_win" | grep -ac 'recording-stop' || true)"
+    # 收尾：收敛到 idle（recording→release→candidates→press→idle；候选
+    # 残留会吞下一用例的触发，r34/r37 教训）
+    for r36_i in 1 2 3; do
+        case "$(call State 2>/dev/null || true)" in *idle*) break;; esac
+        call SimulateKey "Control+Control_R" true >/dev/null 2>&1 || true
+        sleep 0.3
+        call SimulateKey "Control+Control_R" false >/dev/null 2>&1 || true
+        sleep 1.6
+    done
+    r36_after="$(call State 2>/dev/null || true)"
+    kill "$R36_PID" 2>/dev/null || true
+    gdbus call --session --dest org.fcitx.Fcitx5 --object-path /controller \
+        --method org.fcitx.Fcitx.Controller1.SetConfig \
+        "fcitx://config/addon/aiinput" "<{'MaxRecordingSec': <'60'>}>" >/dev/null 2>&1 || true
+    r36_ok=1
+    case "$r36_state" in *recording*) r36_ok=0;; esac
+    r36_fin=1
+    case "$r36_after" in *idle*) r36_fin=0;; esac
+    if [ "$r36_wd" -ge 1 ] && [ "$r36_stop" -ge 1 ] && [ "$r36_ok" = 1 ] && \
+       [ "$r36_fin" = 0 ]; then
+        record r36-recording-watchdog pass "无松开 10s 看门狗自动结束（wd=$r36_wd stop=$r36_stop 终态=$r36_after）"
+    else
+        record r36-recording-watchdog fail "看门狗未生效（wd=$r36_wd stop=$r36_stop 态=$r36_state 后=$r36_after）"
+    fi
+fi
+
+# R37 录音中会话 IC 失焦自动结束：焦点被抢（新窗口夺焦）后触发键到不
+# 了会话 IC——失焦即按正常结束收尾（识别已采音频），不卡录音
+if [ -x "$DIST_BIN/$TESTAPP" ]; then
+    # 前置：清残留状态（上一用例收敛失败会吞掉本用例的首次触发）
+    for r37_pre in 1 2 3; do
+        case "$(call State 2>/dev/null || true)" in *idle*) break;; esac
+        call SimulateKey "Control+Control_R" true >/dev/null 2>&1 || true
+        sleep 0.3
+        call SimulateKey "Control+Control_R" false >/dev/null 2>&1 || true
+        sleep 1.6
+    done
+    r37_mark=$(wc -l < "$FCITX_LOG")
+    "$DIST_BIN/$TESTAPP" >"$LOG_DIR/testapp-r37a.log" 2>&1 &
+    R37A=$!
+    sleep 2
+    call SimulateKey "Control+Control_R" true >/dev/null 2>&1 || true
+    sleep 1
+    "$DIST_BIN/$TESTAPP" >"$LOG_DIR/testapp-r37b.log" 2>&1 &
+    R37B=$!
+    sleep 2.5
+    r37_state="$(call State 2>/dev/null || true)"
+    r37_win="$(tail -n +$((r37_mark+1)) "$FCITX_LOG")"
+    r37_blur="$(printf '%s' "$r37_win" | grep -ac '会话 IC 失焦——自动结束' || true)"
+    r37_stop="$(printf '%s' "$r37_win" | grep -ac 'recording-stop' || true)"
+    for r37_i in 1 2 3; do
+        case "$(call State 2>/dev/null || true)" in *idle*) break;; esac
+        call SimulateKey "Control+Control_R" true >/dev/null 2>&1 || true
+        sleep 0.3
+        call SimulateKey "Control+Control_R" false >/dev/null 2>&1 || true
+        sleep 1.6
+    done
+    kill "$R37A" "$R37B" 2>/dev/null || true
+    r37_ok=1
+    case "$r37_state" in *recording*) r37_ok=0;; esac
+    if [ "$r37_blur" -ge 1 ] && [ "$r37_stop" -ge 1 ] && [ "$r37_ok" = 1 ]; then
+        record r37-focusout-autofinish pass "录音中失焦自动结束（blur=$r37_blur stop=$r37_stop 终态=$r37_state）"
+    else
+        record r37-focusout-autofinish fail "失焦未结束（blur=$r37_blur stop=$r37_stop 态=$r37_state）"
+    fi
+fi
+
 # R24 chromium 动态定位回退（底部居中）：最小 chromium 应用 + auto 模式。
 # --class=webapp-e2e 使 app-id 不在回退名单 → 走动态判断：prepare 建
 # popup 探测 → show 时仍无真实矩形（chromium 恒 0,0 0x0，实验 006）→
