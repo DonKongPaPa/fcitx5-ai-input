@@ -126,6 +126,13 @@ public:
     // 生效 scale：fractional 事件（精确，1/120）优先；未到则用上次
     // fractional 记忆，最后退 wl_output 整数 scale
     double scale() const {
+        // 首选 zxdg 推导（mode 物理 ÷ 输出逻辑 = 精确分数值，与事件
+        // 时序无关）——metrics ratio 与真实一致时，缓冲=窗口×真实，
+        // 即使合成器对 layer 表面不应用 viewport destination（等比
+        // 缩小的根源），1:1 显示也精确铺满窗口
+        if (xdgLogicalW_ > 0 && outputPhysW_ > 0) {
+            return static_cast<double>(outputPhysW_) / xdgLogicalW_;
+        }
         if (gotFscale_) {
             return scaleNum_ / 120.0;
         }
@@ -224,14 +231,6 @@ private:
     zxdg_output_manager_v1 *xdgOutputMgr_ = nullptr;
     int32_t outputPhysW_ = 0, outputPhysH_ = 0; // mode 事件物理尺寸
     int xdgLogicalW_ = 0, xdgLogicalH_ = 0; // zxdg 输出逻辑尺寸
-    // 输出真实分数 scale：mode 物理 ÷ zxdg 逻辑（精确）；无 zxdg 时退
-    // scale()（fractional 事件记忆——跨屏可能污染，仅兜底）
-    double derivedOutputScaleLocked() const {
-        if (xdgLogicalW_ > 0 && outputPhysW_ > 0) {
-            return static_cast<double>(outputPhysW_) / xdgLogicalW_;
-        }
-        return scale();
-    }
     wl_output *output_ = nullptr;
     int logicalW_ = 0, logicalH_ = 0;
     std::function<void(double)> scaleHandler_;
