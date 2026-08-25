@@ -854,17 +854,22 @@ void VoicePopup::pushFrameX11Locked(const uint8_t *bgra, int w, int h) {
         if (xwin_ == XCB_WINDOW_NONE) {
             const int gap = static_cast<int>(8 * scale() + 0.5);
             xwin_ = xcb_generate_id(xconn_);
+            // 值列表必须按 CW 位序：SAVE_UNDER(1<<8) < 
+            // OVERRIDE_REDIRECT(1<<9) < EVENT_MASK(1<<11)。顺序写反＝
+            // 服务器把事件掩码当 override 布尔读 → BadValue → 窗口从未
+            // 建成（此前 X 卡片全透明的根源；独立程序恰好用对序所以
+            // 一直复现不出来）
             uint32_t mask = XCB_CW_OVERRIDE_REDIRECT |
                             XCB_CW_EVENT_MASK | XCB_CW_SAVE_UNDER;
             uint32_t vals[3] = {
-                1,
+                1, // save_under
+                1, // override_redirect
                 XCB_EVENT_MASK_EXPOSURE | XCB_EVENT_MASK_STRUCTURE_NOTIFY |
                     XCB_EVENT_MASK_ENTER_WINDOW | XCB_EVENT_MASK_LEAVE_WINDOW |
                     XCB_EVENT_MASK_POINTER_MOTION |
                     XCB_EVENT_MASK_BUTTON_PRESS |
                     XCB_EVENT_MASK_BUTTON_RELEASE |
-                    XCB_EVENT_MASK_BUTTON_MOTION,
-                1};
+                    XCB_EVENT_MASK_BUTTON_MOTION};
             xcb_create_window(xconn_, 24, xwin_, xroot_,
                               xLastRect_.left(),
                               xLastRect_.top() + xLastRect_.height() + gap, w,
