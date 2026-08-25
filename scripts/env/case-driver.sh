@@ -672,7 +672,7 @@ if [ -n "${CAGE_SOCK:-}" ] && command -v virtpoint >/dev/null 2>&1 && \
     for r23y in 120 160 200 240 280 320 360 400; do
         "$DIST_BIN/virtpoint" move 640 "$r23y" 1280 720 2>/dev/null || true
         sleep 0.4
-        if tail -n +$((r23_mark+1)) "$FCITX_LOG" | grep -aq 'ui-hover: row=[01]'; then
+        if tail -n +$((r23_mark+1)) "$FCITX_LOG" | grep -aq 'hover-row: [01]'; then
             "$DIST_BIN/virtpoint" click left 2>/dev/null || true
             sleep 1.2
             break

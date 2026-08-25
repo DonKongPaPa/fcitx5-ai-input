@@ -860,11 +860,6 @@ void AiInputEngine::deferredMetrics(int w, int h) {
                 flutter_->updateMetrics(
                     static_cast<int>(pendingMW_ * sc + 0.5),
                     static_cast<int>(pendingMH_ * sc + 0.5), sc);
-                FCITX_LOG(Info) << "AiInput: [diag] metrics "
-                                << static_cast<int>(pendingMW_ * sc + 0.5)
-                                << "x"
-                                << static_cast<int>(pendingMH_ * sc + 0.5)
-                                << " ratio=" << sc;
             }
             return false;
         });
@@ -891,7 +886,9 @@ void AiInputEngine::onFlutterMessage(const std::string &method,
                             sessionIcRef_.get());
         }
     } else if (method == "hoverChanged") {
+        // 测试观测钩子（r23 扫射点击的命中反馈；与 mouse-click-row 同型）
         uiHoverRow_ = numOf(args, "row");
+        FCITX_LOG(Info) << "AiInput: [ui] hover-row: " << uiHoverRow_;
     } else if (method == "ready") {
         FCITX_INFO() << "AiInput: Flutter UI ready";
         pushUiState();
