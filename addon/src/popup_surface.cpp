@@ -584,12 +584,15 @@ void VoicePopup::ensureX11Atoms() {
 
 // layer → X OR 窗升级：program 异步到达后的补判（首 FocusIn 时空串）
 void VoicePopup::tryUpgradeToX11Locked(InputContext *ic) {
-    if (x11Mode_ || !dbusFollow_ || !overlayFallback_ || xBroken_ ||
-        !ic || ic != icRef_.get()) {
+    if (x11Mode_ || !dbusFollow_ || !overlayFallback_ || !ic ||
+        ic != icRef_.get()) {
         return;
     }
+    const Rect rect = ic->cursorRect();
     const auto prog = toLower(ic->program());
-    if (prog.empty() || !isX11AppLocked(prog)) {
+    // 溢出铁证优先；否则 program+WM_CLASS 辅证
+    if (!rectIsXPhysical(rect) &&
+        (prog.empty() || xBroken_ || !isX11AppLocked(prog))) {
         return;
     }
     // 判成 X 应用：拆 layer 表面，改走 X OR 窗（首帧到达时建窗）
@@ -601,8 +604,26 @@ void VoicePopup::tryUpgradeToX11Locked(InputContext *ic) {
     if (modeSwitchHandler_) {
         modeSwitchHandler_(); // 引擎重推一帧 → X 窗建窗
     }
-    FCITX_INFO() << "VoicePopup: X OR 卡片模式（矩形变化时升级，"
+    FCITX_INFO() << "VoicePopup: X OR 卡片模式（矩形变化时升级，rect="
+                 << rect.left() << "," << rect.top() << " program="
                  << ic->program() << "）";
+}
+
+// 矩形是否为 X 物理坐标：超出所有输出的逻辑范围（含一点容差）即铁证
+// ——wayland 原生应用报逻辑值，逻辑值不可能大于输出逻辑尺寸
+bool VoicePopup::rectIsXPhysical(const Rect &rect) {
+    if (rect.height() <= 0) {
+        return false;
+    }
+    int32_t maxW = 0, maxH = 0;
+    for (const auto &kv : outputs_) {
+        maxW = std::max(maxW, kv.second.logicalW);
+        maxH = std::max(maxH, kv.second.logicalH);
+    }
+    if (maxW <= 0 || maxH <= 0) {
+        return false; // 输出几何未知：无法判
+    }
+    return rect.left() > maxW + 64 || rect.top() > maxH + 64;
 }
 
 bool VoicePopup::isX11AppLocked(const std::string &program) {
@@ -732,9 +753,15 @@ bool VoicePopup::isX11AppLocked(const std::string &program) {
         xBroken_ = true; // X 连接中途死掉：本会话不再尝试
         return false;
     }
-    xClassCache_[program] = match;
+    if (match) {
+        // 只缓存正判定：负判定受活动窗口竞态影响（分类时刻活动窗可能
+        // 尚未切到目标应用），毒化后 X 应用永远回不去
+        xClassCache_[program] = true;
+    }
     FCITX_INFO() << "VoicePopup: XWayland 判定 " << program << " → "
-                 << (match ? "X 应用（OR 窗口卡片）" : "wayland 原生");
+                 << (match ? "X 应用（OR 窗口卡片）" : "wayland 原生")
+                 << "（活动窗"
+                 << (actives.empty() ? "无" : "有") << "）";
     return match;
 }
 
@@ -1347,9 +1374,30 @@ bool VoicePopup::ensurePopup(InputContext *ic, bool atShow) {
     // X 应用的 overlay 兜底走 X OR 窗口（classicui 同款传输层）：
     // satellite 把 OR 窗转 xdg_popup 挂聚焦 X 顶层窗，真实窗口原点由
     // 合成器叠加——wayland 层拿不到 X 应用的窗口原点（右列错位根因）
-    // 注意 program 时序：DBus 前端首次 FocusIn 时 program 常还是空串
-    //（异步到达），此处判不上不急——矩形变化时会经
-    // tryUpgradeToX11Locked 重试升级
+    // 判据：①矩形超出全部输出的逻辑范围 → 只可能是 X 物理坐标（wayland
+    // 原生应用的矩形 ≤ 其窗口 ≤ 输出逻辑尺寸）→ 铁证 X 应用，无需
+    // program；②program 非空时 WM_CLASS 匹配（辅证）。program 时序坑：
+    // DBus 前端首次 FocusIn（乃至整个会话）program 可能恒为空串
+    //（实测 WPS 在新 fcitx5 进程里从不到达）——矩形溢出是唯一可靠信号
+    if (overlay && dbusFollow_ && rectIsXPhysical(ic->cursorRect())) {
+        lastProgram_ = toLower(ic->program());
+        if (x11Mode_ && icRef_.get() == ic) {
+            return true; // 同 IC 复用
+        }
+        destroyPopupSurface();
+        destroyX11WindowLocked();
+        topMode_ = false;
+        overlayFallback_ = true;
+        x11Mode_ = true;
+        icRef_ = ic->watch();
+        if (ic->cursorRect().height() > 0) {
+            xLastRect_ = ic->cursorRect();
+        }
+        FCITX_INFO() << "VoicePopup: X OR 卡片模式（矩形溢出判定，rect="
+                     << ic->cursorRect().left() << "," << ic->cursorRect().top()
+                     << "）";
+        return true;
+    }
     if (overlay && dbusFollow_ && !ic->program().empty() &&
         isX11AppLocked(toLower(ic->program()))) {
         if (x11Mode_ && icRef_.get() == ic) {

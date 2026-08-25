@@ -300,6 +300,8 @@ private:
     // X 应用判定（xcb 模块主显示为 XWayland + 活动窗 WM_CLASS ↔ program；
     // 按 program 缓存）。持锁调用，X 查询每应用一次
     bool isX11AppLocked(const std::string &program);
+    // 矩形是否为 X 物理坐标（超出全部输出逻辑范围——X 应用铁证）
+    bool rectIsXPhysical(const Rect &rect);
     // program 异步到达的补判：矩形变化时 layer → X OR 窗升级。持锁调用
     void tryUpgradeToX11Locked(InputContext *ic);
 
