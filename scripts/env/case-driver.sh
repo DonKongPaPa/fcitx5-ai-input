@@ -699,6 +699,78 @@ else
     record r23-top-card-interact pass "（跳过：无 virtpoint 环境）"
 fi
 
+# R34 DbusPosition=follow：DBus 前端 IC（QT_IM_MODULE=fcitx 的 Qt 应用，
+# DMS 启动器同型）贴光标。maximize-column 让窗口铺满输出（无边距）→
+# 光标矩形≈输出绝对坐标；卡片应锚在输入行光标下方（上半屏左侧），
+# 而非默认底部居中。
+# a) 日志链：overlay 兜底（DBus 前端确认）+ 贴光标锚定（矩形→落点）
+# b) 截图像素断言：录音态麦克风圆底（errorContainer 浅粉圆）质心在
+#    左侧 45%——底部居中默认档的圆心在 ~55%，贴光标档卡片左缘贴输出左
+# c) 会话收尾（触发键 toggle）：候选残留会吞掉下一用例的触发（r24 教训）
+if [ -n "${CAGE_SOCK:-}" ] && command -v grim >/dev/null 2>&1; then
+    gdbus call --session --dest org.fcitx.Fcitx5 --object-path /controller \
+        --method org.fcitx.Fcitx.Controller1.SetConfig \
+        "fcitx://config/addon/aiinput" "<{'DbusPosition': <'follow'>}>" >/dev/null 2>&1 || true
+    sleep 0.5
+    r34_mark=$(wc -l < "$FCITX_LOG")
+    QT_IM_MODULE=fcitx "$DIST_BIN/testapp-qt" >"$LOG_DIR/testapp-r34.log" 2>&1 &
+    R34_PID=$!
+    sleep 2
+    # 最大化铺满输出（niri IPC socket 形如 niri.wayland-N.P.sock）
+    NIRI_SOCK_FILE="$(ls "$XDG_RUNTIME_DIR" 2>/dev/null | grep -m1 '^niri\.')"
+    if [ -n "$NIRI_SOCK_FILE" ]; then
+        NIRI_SOCKET="$XDG_RUNTIME_DIR/$NIRI_SOCK_FILE" niri msg action maximize-column >/dev/null 2>&1 || true
+    fi
+    sleep 0.8
+    call SimulateKey "Control+Control_R" true >/dev/null 2>&1 || true
+    sleep 1.2
+    WAYLAND_DISPLAY="$CAGE_SOCK" grim "$OUT_DIR/r34-dbus-follow.png" 2>"$LOG_DIR/grim-r34.log" || true
+    sleep 0.3
+    call SimulateKey "Control+Control_R" false >/dev/null 2>&1 || true
+    sleep 1.5
+    r34_win="$(tail -n +$((r34_mark+1)) "$FCITX_LOG")"
+    r34_overlay="$(printf '%s' "$r34_win" | grep -ac 'overlay 兜底居中模式' || true)"
+    r34_anchor="$(printf '%s' "$r34_win" | grep -ac '贴光标锚定' || true)"
+    # 会话收尾：候选态残留吞触发（r34 首版吞掉 r24 的教训）
+    case "$(call State 2>/dev/null || true)" in *idle*) ;; *)
+        call SimulateKey "Control+Control_R" true >/dev/null 2>&1 || true
+        sleep 0.3
+        call SimulateKey "Control+Control_R" false >/dev/null 2>&1 || true
+        sleep 1.5;; esac
+    kill "$R34_PID" 2>/dev/null || true
+    r34_frac="$(python3 - "$OUT_DIR/r34-dbus-follow.png" <<'PYEOF' 2>/dev/null || echo "-1 -1"
+import sys
+try:
+    from PIL import Image
+except Exception:
+    print(-1, -1); raise SystemExit(0)
+im = Image.open(sys.argv[1]).convert('RGB')
+w, h = im.size
+px = im.load()
+sx = sy = n = 0
+for y in range(0, h, 2):
+    for x in range(0, w, 2):
+        r, g, b = px[x, y]
+        # 录音态麦克风圆底（errorContainer 浅粉 #F9DEDC 一族）
+        if r > 235 and 205 < g < 235 and 200 < b < 235 and r - g > 10:
+            sx += x; sy += y; n += 1
+print(f"{sx/n/w:.3f} {sy/n/h:.3f}" if n > 4 else "-1 -1")
+PYEOF
+)"
+    r34_xf="${r34_frac%% *}"; r34_yf="${r34_frac##* }"
+    gdbus call --session --dest org.fcitx.Fcitx5 --object-path /controller \
+        --method org.fcitx.Fcitx.Controller1.SetConfig \
+        "fcitx://config/addon/aiinput" "<{'DbusPosition': <'bottom'>}>" >/dev/null 2>&1 || true
+    if [ "$r34_overlay" -ge 1 ] && [ "$r34_anchor" -ge 1 ] && \
+       python3 -c "import sys; sys.exit(0 if 0.0 <= float('$r34_xf') < 0.45 else 1)"; then
+        record r34-dbus-follow pass "DBus IC 贴光标：overlay+锚定日志 + 麦克风圆底在左侧（x=$r34_xf y=$r34_yf）"
+    else
+        record r34-dbus-follow fail "follow 未生效（overlay=$r34_overlay anchor=$r34_anchor x=$r34_xf y=$r34_yf）"
+    fi
+else
+    record r34-dbus-follow pass "（跳过：无截图环境）"
+fi
+
 # R24 chromium 动态定位回退（底部居中）：最小 chromium 应用 + auto 模式。
 # --class=webapp-e2e 使 app-id 不在回退名单 → 走动态判断：prepare 建
 # popup 探测 → show 时仍无真实矩形（chromium 恒 0,0 0x0，实验 006）→

@@ -3,7 +3,9 @@
 
 #include <fcitx/instance.h>
 #include <fcitx-utils/event.h>
+#include <fcitx-utils/handlertable.h>
 #include <fcitx-utils/trackableobject.h>
+#include <fcitx/event.h>
 #include <wayland_public.h>
 
 #include <functional>
@@ -105,6 +107,9 @@ public:
     // 放到窗口左上角；此类应用改用 layer-shell 自定位）——
     void setPositionPolicy(const std::string &mode,
                            const std::string &fallbackAppsCsv);
+    // overlay 兜底层（DBus 前端 IC）的贴光标档（DbusPosition=follow）：
+    // 卡片锚到 IC 光标矩形下方（矩形坐标系前提见 anchorOverlayLocked）
+    void setDbusFollow(bool follow);
     // 本 IC 我们上屏过文本。chromium 系只在**文本变化时**报光标矩形：
     // 上屏即意味着合成器 handle 里有新鲜矩形可供 show 重建的 popup
     // 继承 → auto 模式下轮改回跟随
@@ -203,6 +208,9 @@ private:
     void syncViewportLocked(); // destination 与匹配 buffer 同 commit 下发
     void teardown();
     bool wantTopMode(InputContext *ic, bool atShow = false); // 定位模式决策（policy × 名单 × 矩形上报能力）
+    // overlay 兜底层的锚定：follow 档按 IC 光标矩形贴光标（含翻转/钳
+    // 制），默认/无矩形底部（或 policy 的顶部）居中。持锁调用
+    void anchorOverlayLocked(InputContext *ic);
     std::string toLower(std::string s);
 
     Instance *instance_;
@@ -255,6 +263,9 @@ private:
                                    // overlay 层（高于启动器面板）并挂探针
     std::string positionMode_ = "auto";
     std::vector<std::string> fallbackApps_;
+    bool dbusFollow_ = false; // overlay 兜底层贴光标（DbusPosition=follow）
+    int lastAnchorTop_ = -1, lastAnchorLeft_ = -1; // 锚定落点（日志去重）
+    std::unique_ptr<HandlerTableEntry<EventHandler>> rectWatcher_;
     void *surfaceCompat_ = nullptr; // WlSurface wrapper 布局占位（见 cpp）
     wl_region *emptyRegion_ = nullptr; // 隐藏/透明态的空输入区域
     TrackableObjectReference<InputContext> icRef_; // popup 所属 IC

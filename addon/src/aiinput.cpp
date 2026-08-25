@@ -366,6 +366,7 @@ AiInputEngine::AiInputEngine(Instance *instance)
 
     popup_->setPositionPolicy(config_.positionMode.value(),
                               config_.positionFallbackApps.value());
+    popup_->setDbusFollow(config_.dbusPosition.value() == "follow");
     flutter_ = std::make_unique<FlutterEngineHost>(&instance_->eventLoop());
 
     // 帧：引擎软渲输出（主线程）→ popup wl_shm
@@ -590,6 +591,7 @@ void AiInputEngine::reloadConfig() {
     if (popup_) { // 定位策略热更新（PositionMode/PositionFallbackApps）
         popup_->setPositionPolicy(config_.positionMode.value(),
                                   config_.positionFallbackApps.value());
+        popup_->setDbusFollow(config_.dbusPosition.value() == "follow");
     }
     uiNotify("config-reloaded");
 }
@@ -610,6 +612,7 @@ void AiInputEngine::setConfig(const RawConfig &config) {
     if (popup_) {
         popup_->setPositionPolicy(config_.positionMode.value(),
                                   config_.positionFallbackApps.value());
+        popup_->setDbusFollow(config_.dbusPosition.value() == "follow");
     }
     uiNotify("config-saved-via-configtool");
 }

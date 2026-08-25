@@ -16,6 +16,7 @@ extern "C" const wl_interface zwp_tablet_tool_v2_interface = {};
 
 #include <fcitx-utils/log.h>
 #include <fcitx/addonmanager.h>
+#include <fcitx/event.h>
 #include <fcitx/inputcontext.h>
 #include <fcitx/inputpanel.h>
 #include <fcitx-utils/event.h>
@@ -441,6 +442,94 @@ VoicePopup::VoicePopup(Instance *instance) : instance_(instance) {
     ensureWaylandWatcher();
     if (!connHandler_) {
         scheduleWatcherRetry();
+    }
+    // DBus 前端 IC 的光标矩形变化（应用 SetCursorRect → 事件）：
+    // follow 档下卡片实时贴光标（重锚在已映射的 layer surface 上，
+    // 随下一次帧 commit 生效）
+    rectWatcher_ = instance_->watchEvent(
+        EventType::InputContextCursorRectChanged,
+        EventWatcherPhase::PreInputMethod, [this](Event &event) {
+            auto &ie = static_cast<InputContextEvent &>(event);
+            auto *ic = ie.inputContext();
+            std::lock_guard<std::mutex> lock(mutex_);
+            if (dbusFollow_ && overlayFallback_ && layerSurface_ &&
+                ic == icRef_.get()) {
+                anchorOverlayLocked(ic);
+            }
+        });
+}
+
+// overlay 兜底层的锚定。DbusPosition=follow 且 IC 带非零光标矩形时贴
+// 光标：矩形是 Qt/GTK 的窗口局部逻辑坐标，对「铺满输出的面板」（DMS
+// 单窗 spotlight：锚 top+left+right+bottom 铺满，实测矩形即输出绝对
+// 坐标）与原点起铺的平铺/最大化窗口成立。翻转/钳制按「包含矩形的输
+// 出」几何算——矩形本就产自该输出。无矩形/非 follow 档维持底部（或
+// policy top）居中：普通浮动 DBus 窗口的窗口原点 Wayland 不暴露，
+// 贴光标结构性做不到，那类应用就该用 bottom
+void VoicePopup::anchorOverlayLocked(InputContext *ic) {
+    if (!layerSurface_) {
+        return;
+    }
+    Rect rect;
+    if (ic) {
+        rect = ic->cursorRect();
+    }
+    // 高度判有效性（GTK4 的 caret 矩形宽度为 0——线条光标没有宽度）；
+    // 全零矩形（chromium 焦点期恒 0,0 0x0）由高度 0 拒掉
+    if (!dbusFollow_ || rect.height() <= 0) {
+        zwlr_layer_surface_v1_set_anchor(
+            layerSurface_, anchorBottom_
+                               ? ZWLR_LAYER_SURFACE_V1_ANCHOR_BOTTOM
+                               : ZWLR_LAYER_SURFACE_V1_ANCHOR_TOP);
+        zwlr_layer_surface_v1_set_margin(
+            layerSurface_, anchorBottom_ ? 0 : 16, 0,
+            anchorBottom_ ? 16 : 0, 0);
+        return;
+    }
+    const OutputGeom *geom = nullptr;
+    double best = 0;
+    for (const auto &kv : outputs_) {
+        const auto &g = kv.second;
+        if (g.logicalW <= 0 || g.logicalH <= 0 || g.logicalW < rect.left() ||
+            g.logicalH < rect.top()) {
+            continue;
+        }
+        const double area = double(g.logicalW) * g.logicalH;
+        if (!geom || area < best) {
+            geom = &g;
+            best = area;
+        }
+    }
+    constexpr int kGap = 8;
+    int x = rect.left();
+    int top = rect.top() + rect.height() + kGap;
+    if (geom && logicalW_ > 0) {
+        x = std::clamp(x, kGap,
+                       std::max(kGap, geom->logicalW - logicalW_ - kGap));
+        if (top + logicalH_ > geom->logicalH - kGap) {
+            // 下方放不下：翻到光标上方（顶仍越界则贴输出顶兜底）
+            top = std::max(kGap, rect.top() - logicalH_ - kGap);
+        }
+    }
+    zwlr_layer_surface_v1_set_anchor(
+        layerSurface_, ZWLR_LAYER_SURFACE_V1_ANCHOR_TOP |
+                           ZWLR_LAYER_SURFACE_V1_ANCHOR_LEFT);
+    zwlr_layer_surface_v1_set_margin(layerSurface_, top, 0, 0, x);
+    if (top != lastAnchorTop_ || x != lastAnchorLeft_) {
+        // 光标每动一次就来一条会刷屏：只记落点变化
+        lastAnchorTop_ = top;
+        lastAnchorLeft_ = x;
+        FCITX_INFO() << "VoicePopup: overlay 贴光标锚定（矩形 "
+                     << rect.left() << "," << rect.top() << " → 卡片左上 "
+                     << x << "," << top << "）";
+    }
+}
+
+void VoicePopup::setDbusFollow(bool follow) {
+    std::lock_guard<std::mutex> lock(mutex_);
+    dbusFollow_ = follow;
+    if (overlayFallback_ && layerSurface_) {
+        anchorOverlayLocked(icRef_.get());
     }
 }
 
@@ -944,16 +1033,20 @@ bool VoicePopup::ensurePopup(InputContext *ic, bool atShow) {
             "input-method");
         zwlr_layer_surface_v1_add_listener(layerSurface_, &kLayerListener,
                                            this);
-        // overlay 兜底同样底部居中：DBus IC 的 cursorRect 是窗口局部
-        // 坐标，仅全屏窗口≈输出坐标——浮动面板（DMS 启动器）下贴光标
-        // 定位结构性错位（Wayland 不暴露其它 surface 的屏幕位置）
-        zwlr_layer_surface_v1_set_anchor(
-            layerSurface_, anchorBottom_
-                               ? ZWLR_LAYER_SURFACE_V1_ANCHOR_BOTTOM
-                               : ZWLR_LAYER_SURFACE_V1_ANCHOR_TOP);
-        zwlr_layer_surface_v1_set_margin(
-            layerSurface_, anchorBottom_ ? 0 : 16, 0,
-            anchorBottom_ ? 16 : 0, 0);
+        // overlay 兜底锚定：follow 档贴光标（坐标系论证见
+        // anchorOverlayLocked）；默认/无矩形底部居中。policy top/bottom
+        //（非 overlay）走原锚点
+        if (overlayFallback_) {
+            anchorOverlayLocked(ic);
+        } else {
+            zwlr_layer_surface_v1_set_anchor(
+                layerSurface_, anchorBottom_
+                                   ? ZWLR_LAYER_SURFACE_V1_ANCHOR_BOTTOM
+                                   : ZWLR_LAYER_SURFACE_V1_ANCHOR_TOP);
+            zwlr_layer_surface_v1_set_margin(
+                layerSurface_, anchorBottom_ ? 0 : 16, 0,
+                anchorBottom_ ? 16 : 0, 0);
+        }
         zwlr_layer_surface_v1_set_exclusive_zone(layerSurface_, -1);
         zwlr_layer_surface_v1_set_keyboard_interactivity(
             layerSurface_,
@@ -1055,6 +1148,10 @@ void VoicePopup::prepare(InputContext *ic) {
                  << cr.top() << " " << cr.width() << "x" << cr.height();
     if (!ensurePopup(ic, /*atShow=*/false)) {
         return;
+    }
+    if (overlayFallback_ && dbusFollow_) {
+        // FocusIn 时光标矩形新鲜：复用的表面也要按新矩形重锚
+        anchorOverlayLocked(ic);
     }
     // 全透明首帧：触发 map 流水线（内容仍不可见）。
     // layer 模式首个 configure 未到前不提交 buffer（协议要求）
@@ -1240,6 +1337,11 @@ void VoicePopup::setLogicalSize(int w, int h) {
     const bool changed = w != logicalW_ || h != logicalH_;
     logicalW_ = w;
     logicalH_ = h;
+    // follow 档的翻转/钳制按卡片尺寸算：idle(≈54)→候选(≈190) 的高度跳变
+    // 必须重锚，否则按旧高度翻转会把卡片底部裁出输出边缘
+    if (overlayFallback_ && dbusFollow_ && layerSurface_) {
+        anchorOverlayLocked(icRef_.get());
+    }
     // layer surface 尺寸必须跟着卡片走（anchor 的合成器摆放按 surface
     // 尺寸算）：桶内池 resize 不重建 surface，这里不跟进的话卡片长高后
     // 底部会被 surface 边界切掉。set_size 在下一次 commit 生效

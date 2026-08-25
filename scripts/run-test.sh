@@ -56,6 +56,9 @@ podman run --rm \
     "$IMAGE" \
     bash -c '
         set -e
+        # Qt 的 QDBusConnection 读 /etc/machine-id，缺失时 Qt 应用启动即
+        # abort——r34 的 DBus 前端 IC（QT_IM_MODULE=fcitx，DMS 同型）需要
+        [ -s /etc/machine-id ] || printf "%s\n" "$(cat /proc/sys/kernel/random/uuid | tr -d -)" > /etc/machine-id
         cp -r /opt/dist/* /usr/
         # 共存场景：普通输入法（keyboard-us）为默认 IM，aiinput 是
         # Module（全局热键），全程不切换输入法；pinyin 挂在组内供 r25
