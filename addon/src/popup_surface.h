@@ -15,6 +15,7 @@
 #include <mutex>
 #include <set>
 #include <string>
+#include <utility>
 #include <map>
 #include <vector>
 
@@ -229,6 +230,10 @@ private:
     void pushFrameX11Locked(const uint8_t *bgra, int w, int h);
     void destroyX11WindowLocked(); // unmap+销毁+SHM 释放
     void moveX11WindowLocked(const Rect &rect); // 矩形变化重摆
+    // X 卡片落点（caret 下方放不下翻上、钳入输出 X 区段）。持锁
+    std::pair<int, int> x11CardPosLocked(const Rect &rect, int cardW,
+                                         int cardH);
+    static constexpr int kGapX11 = 8;
     std::string toLower(std::string s);
 
     Instance *instance_;

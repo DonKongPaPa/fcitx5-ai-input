@@ -804,13 +804,39 @@ void VoicePopup::moveX11WindowLocked(const Rect &rect) {
     if (xwin_ == XCB_WINDOW_NONE || !xconn_) {
         return;
     }
-    const int gap = static_cast<int>(8 * scale() + 0.5);
-    const uint32_t vals[2] = {static_cast<uint32_t>(rect.left()),
-                              static_cast<uint32_t>(rect.top() +
-                                                    rect.height() + gap)};
+    const auto xy = x11CardPosLocked(rect, xwinW_, xwinH_);
+    const uint32_t vals[2] = {static_cast<uint32_t>(xy.first),
+                              static_cast<uint32_t>(xy.second)};
     xcb_configure_window(xconn_, xwin_,
                          XCB_CONFIG_WINDOW_X | XCB_CONFIG_WINDOW_Y, vals);
     xcb_flush(xconn_);
+}
+
+// X 卡片落点：caret 下方放不下翻上方、水平钳入 caret 所在输出的 X 区段
+//（satellite 不替我们滑——ghostty 末行输入卡片出屏的实测）
+std::pair<int, int> VoicePopup::x11CardPosLocked(const Rect &rect, int cardW,
+                                                 int cardH) {
+    const int gap = static_cast<int>(8 * scale() + 0.5);
+    int x = rect.left();
+    int y = rect.top() + rect.height() + gap;
+    // 含 caret 的输出 X 区段：位置=逻辑原点、范围=物理尺寸
+    const OutputGeom *g = nullptr;
+    for (const auto &kv : outputs_) {
+        if (kv.second.containsXPoint(rect.left(), rect.top())) {
+            g = &kv.second;
+            break;
+        }
+    }
+    if (g && cardW > 0 && cardH > 0) {
+        const int rx0 = g->logicalX, ry0 = g->logicalY;
+        const int rx1 = g->logicalX + g->physW, ry1 = g->logicalY + g->physH;
+        x = std::clamp(x, rx0 + kGapX11,
+                       std::max(rx0 + kGapX11, rx1 - cardW - kGapX11));
+        if (y + cardH > ry1 - kGapX11) {
+            y = std::max(ry0 + kGapX11, rect.top() - cardH - gap);
+        }
+    }
+    return {x, y};
 }
 
 void VoicePopup::pushFrameX11Locked(const uint8_t *bgra, int w, int h) {
@@ -897,11 +923,11 @@ void VoicePopup::pushFrameX11Locked(const uint8_t *bgra, int w, int h) {
                     XCB_EVENT_MASK_BUTTON_RELEASE |
                     XCB_EVENT_MASK_BUTTON_MOTION,
                 xColormap_};
-            xcb_create_window(xconn_, xDepth_, xwin_, xroot_,
-                              xLastRect_.left(),
-                              xLastRect_.top() + xLastRect_.height() + gap, w,
-                              h, 0, XCB_WINDOW_CLASS_INPUT_OUTPUT, xVisual_,
-                              mask, vals);
+            const auto xy = x11CardPosLocked(xLastRect_, w, h);
+            xcb_create_window(xconn_, xDepth_, xwin_, xroot_, xy.first,
+                              xy.second, w, h, 0,
+                              XCB_WINDOW_CLASS_INPUT_OUTPUT, xVisual_, mask,
+                              vals);
             xgc_ = xcb_generate_id(xconn_);
             xcb_create_gc(xconn_, xgc_, xwin_, 0, nullptr);
             xcb_map_window(xconn_, xwin_);
