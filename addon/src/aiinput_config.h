@@ -97,16 +97,16 @@ FCITX_CONFIGURATION(
         "强制底部居中的应用列表（逗号分隔，匹配程序名/app-id 子串；留空=自动判断——默认自动）",
         ""};
     // DBus 前端 IC（GTK_IM_MODULE/QT_IM_MODULE=fcitx 的应用）没有
-    // wayland IM popup 可用，只能 overlay 层自定位。follow 的坐标系前提：
-    // 光标矩形是应用窗口局部坐标，对铺满输出的面板（DMS 单窗 spotlight
-    // 实测即输出绝对坐标）与原点起铺的平铺/最大化窗口成立；普通浮动窗
-    // 的窗口原点 Wayland 不暴露，跟不了——那类应用留 bottom
+    // wayland IM popup 可用，只能 overlay 层自定位。follow 按光标矩形
+    // 贴光标（默认）：矩形是应用窗口局部坐标，铺满输出的窗口（DMS 单窗
+    // spotlight、整列平铺/最大化的 WPS 等——实测占绝对多数）下即输出
+    // 绝对坐标；部分可见窗口会有窗口原点偏移（Wayland 不暴露，best
+    // effort）。bottom=回退底部居中
     Option<std::string> dbusPosition{
         this, "DbusPosition",
-        "DBus 前端应用（GTK/QT_IM_MODULE=fcitx，如 DMS 启动器、最大化"
-        "窗口）的卡片定位（bottom=底部居中（默认） / follow=贴光标矩形"
-        "——适用于铺满输出的面板与最大化窗口）",
-        "bottom"};
+        "DBus 前端应用（GTK/QT_IM_MODULE=fcitx，如 DMS 启动器、WPS）的"
+        "卡片定位（follow=贴光标矩形（默认） / bottom=底部居中）",
+        "follow"};
 
     Option<AsrEngineKind, NoConstrain<AsrEngineKind>, DefaultMarshaller<AsrEngineKind>, AsrEngineKindI18NAnnotation> asrEngine{
         this, "AsrEngine", "ASR 引擎（Dummy=调试模拟，FunASR=流式识别，"

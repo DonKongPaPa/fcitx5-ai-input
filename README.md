@@ -75,7 +75,7 @@ bash /usr/lib/fcitx5-aiinput/scripts/fetch-sherpa-models.sh --model sensevoice
 | AsrEngine | Dummy | Dummy / Sherpa / FunASR / FunASRLocal |
 | PositionMode | auto | auto=可跟随则跟随否则底部居中 / caret=强制跟随 / bottom / top |
 | PositionFallbackApps | （空） | 强制底部居中的应用名单（程序名子串匹配） |
-| DbusPosition | bottom | DBus 前端应用（GTK/QT_IM_MODULE=fcitx，如 DMS 启动器、最大化窗口）的卡片定位：bottom=底部居中 / follow=贴光标矩形 |
+| DbusPosition | follow | DBus 前端应用（GTK/QT_IM_MODULE=fcitx，如 DMS 启动器、WPS）的卡片定位：follow=贴光标矩形 / bottom=底部居中 |
 | UIFont | （空） | 卡片字体（Pango 串；空=跟随 classicui 字体） |
 | LLMEngine | Dummy | LLM 引擎：Dummy=占位润色（规则补标点，双行候选）/ Off=关闭（结果直接上屏）；真实双后端接入中 |
 | UiAnimSpeed | 慢速 | 卡片动画速率挡位（慢速/标准/快速，缩放全部过渡动画时长） |
@@ -90,7 +90,7 @@ FunASR 服务档：configtool「模型部署」组配置 `FunASRAutoStart` + `Fu
 - Chromium/Electron 只在**文本变化时**上报光标矩形（焦点时不报）：录音开始即向应用打入可见组合文本探针（「语音输入中」逐字），组合变化逼应用重报矩形，流式识别文本接续灌入组合——卡片全程贴住光标
 - 无人报矩形的应用（或判定到录音结束仍无矩形）：layer-shell 底部居中兜底
 - D-Bus 前端的应用（`GTK_IM_MODULE/QT_IM_MODULE=fcitx`，如 DMS 启动器）：IC 不经 waylandim、跟随路径整体不可达 → overlay 层卡片兜底，预编辑「语音输入中」经 D-Bus 照常送达应用
-- `DbusPosition=follow` 时 overlay 卡片贴光标：光标矩形是应用窗口局部坐标，对「铺满输出的面板」（DMS 单窗 spotlight：layer 表面锚四边铺满，实测矩形即输出绝对坐标）与原点起铺的平铺/最大化窗口成立；矩形变化（`InputContextCursorRectChanged`）与卡片尺寸变化都会实时重锚（下方放不下翻到光标上方、水平钳入输出）。普通浮动 DBus 窗口的窗口原点 Wayland 不暴露——那类应用请保持 bottom
+- `DbusPosition=follow`（默认）时 overlay 卡片贴光标：光标矩形是应用窗口局部坐标，对铺满输出的窗口（DMS 单窗 spotlight、整列平铺/最大化的 WPS 等——实测占绝对多数）即输出绝对坐标，直接可用；矩形变化（`InputContextCursorRectChanged`）与卡片尺寸变化都会实时重锚（下方放不下翻到光标上方、水平钳入输出）。部分可见（半宽平铺/浮动）窗口会有窗口原点偏移——Wayland 不暴露其它 surface 位置，best effort
 
 ## 开发与测试
 
