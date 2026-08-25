@@ -737,7 +737,7 @@ void VoicePopup::handleX11Events() {
             if (xwin_ != XCB_WINDOW_NONE && xshm_ != XCB_NONE &&
                 xwinW_ > 0) {
                 xcb_shm_put_image(xconn_, xwin_, xgc_, xwinW_, xwinH_, 0, 0,
-                                  xwinW_, xwinH_, 0, 0, 24,
+                                  xwinW_, xwinH_, 0, 0, xDepth_,
                                   XCB_IMAGE_FORMAT_Z_PIXMAP, 0, xshm_, 0);
                 xcb_flush(xconn_);
             }
@@ -853,15 +853,41 @@ void VoicePopup::pushFrameX11Locked(const uint8_t *bgra, int w, int h) {
             xcb_setup_roots_iterator(xcb_get_setup(xconn_)).data;
         if (xwin_ == XCB_WINDOW_NONE) {
             const int gap = static_cast<int>(8 * scale() + 0.5);
+            // 32 位 ARGB visual：卡片四周的阴影余量/圆角/半透明阴影带
+            // alpha，24 位深度下全渲染成黑（WPS 黑边实测）。visual/
+            // colormap 每连接找一次
+            if (xVisual_ == 0) {
+                for (auto d = xcb_screen_allowed_depths_iterator(scr);
+                     d.rem && xVisual_ == 0; xcb_depth_next(&d)) {
+                    if (d.data->depth != 32) {
+                        continue;
+                    }
+                    for (auto v = xcb_depth_visuals_iterator(d.data); v.rem;
+                         xcb_visualtype_next(&v)) {
+                        if (v.data->_class == XCB_VISUAL_CLASS_TRUE_COLOR) {
+                            xVisual_ = v.data->visual_id;
+                            break;
+                        }
+                    }
+                }
+                if (xVisual_ == 0) {
+                    xVisual_ = scr->root_visual; // 退化：无 32 位则黑边
+                    xDepth_ = 24;
+                } else {
+                    xDepth_ = 32;
+                    xColormap_ = xcb_generate_id(xconn_);
+                    xcb_create_colormap(xconn_, XCB_COLORMAP_ALLOC_NONE,
+                                        xColormap_, xroot_, xVisual_);
+                }
+            }
             xwin_ = xcb_generate_id(xconn_);
-            // 值列表必须按 CW 位序：SAVE_UNDER(1<<8) < 
-            // OVERRIDE_REDIRECT(1<<9) < EVENT_MASK(1<<11)。顺序写反＝
-            // 服务器把事件掩码当 override 布尔读 → BadValue → 窗口从未
-            // 建成（此前 X 卡片全透明的根源；独立程序恰好用对序所以
-            // 一直复现不出来）
-            uint32_t mask = XCB_CW_OVERRIDE_REDIRECT |
-                            XCB_CW_EVENT_MASK | XCB_CW_SAVE_UNDER;
-            uint32_t vals[3] = {
+            // 值列表必须按 CW 位序（独立程序实证：border<save<
+            // override<event<colormap；顺序写反＝BadValue 窗口建不成）
+            uint32_t mask = XCB_CW_BORDER_PIXEL | XCB_CW_SAVE_UNDER |
+                            XCB_CW_OVERRIDE_REDIRECT | XCB_CW_EVENT_MASK |
+                            (xDepth_ == 32 ? XCB_CW_COLORMAP : 0);
+            uint32_t vals[5] = {
+                0, // border_pixel
                 1, // save_under
                 1, // override_redirect
                 XCB_EVENT_MASK_EXPOSURE | XCB_EVENT_MASK_STRUCTURE_NOTIFY |
@@ -869,12 +895,13 @@ void VoicePopup::pushFrameX11Locked(const uint8_t *bgra, int w, int h) {
                     XCB_EVENT_MASK_POINTER_MOTION |
                     XCB_EVENT_MASK_BUTTON_PRESS |
                     XCB_EVENT_MASK_BUTTON_RELEASE |
-                    XCB_EVENT_MASK_BUTTON_MOTION};
-            xcb_create_window(xconn_, 24, xwin_, xroot_,
+                    XCB_EVENT_MASK_BUTTON_MOTION,
+                xColormap_};
+            xcb_create_window(xconn_, xDepth_, xwin_, xroot_,
                               xLastRect_.left(),
                               xLastRect_.top() + xLastRect_.height() + gap, w,
-                              h, 0, XCB_WINDOW_CLASS_INPUT_OUTPUT,
-                              scr->root_visual, mask, vals);
+                              h, 0, XCB_WINDOW_CLASS_INPUT_OUTPUT, xVisual_,
+                              mask, vals);
             xgc_ = xcb_generate_id(xconn_);
             xcb_create_gc(xconn_, xgc_, xwin_, 0, nullptr);
             xcb_map_window(xconn_, xwin_);
@@ -894,7 +921,7 @@ void VoicePopup::pushFrameX11Locked(const uint8_t *bgra, int w, int h) {
         return;
     }
     memcpy(xshmAddr_, bgra, bytes);
-    xcb_shm_put_image(xconn_, xwin_, xgc_, w, h, 0, 0, w, h, 0, 0, 24,
+    xcb_shm_put_image(xconn_, xwin_, xgc_, w, h, 0, 0, w, h, 0, 0, xDepth_,
                       XCB_IMAGE_FORMAT_Z_PIXMAP, 0, xshm_, 0);
     xcb_flush(xconn_);
 }

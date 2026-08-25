@@ -290,6 +290,9 @@ private:
     bool x11Mode_ = false;
     xcb_window_t xwin_ = XCB_WINDOW_NONE;
     xcb_gcontext_t xgc_ = XCB_NONE;
+    xcb_visualid_t xVisual_ = 0;  // 32 位 ARGB（无则退化 root_visual）
+    xcb_colormap_t xColormap_ = XCB_NONE;
+    uint8_t xDepth_ = 24;
     xcb_shm_seg_t xshm_ = XCB_NONE;
     int xshmid_ = -1;
     uint8_t *xshmAddr_ = nullptr;
