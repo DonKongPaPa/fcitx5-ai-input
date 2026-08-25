@@ -350,12 +350,16 @@ class _VoiceUiHomeState extends State<VoiceUiHome> {
             child: OverflowBox(
               // 顶部对齐：卡片贴住表面顶（= 光标下方），量化余量全部
               // 沉到底部——居中对齐会把卡推离光标形成视觉空隙
-              alignment: Alignment.topCenter,
+              // 顶部对齐但留 kShadowPad：阴影向上溢出卡片边界，贴 0 会被
+              // 窗口顶切掉（顶部阴影截断）；量化余量仍沉底
+              alignment: Alignment(0, -1),
               minWidth: 0,
               maxWidth: double.infinity,
               minHeight: 0,
               maxHeight: double.infinity,
-              child: KeyedSubtree(
+              child: Padding(
+                padding: const EdgeInsets.only(top: kShadowPad),
+                child: KeyedSubtree(
                 key: _cardKey,
                 child: AnimatedSize(
                   // 卡片尺寸动画（视觉过渡）：child 自然尺寸布局，
@@ -383,6 +387,7 @@ class _VoiceUiHomeState extends State<VoiceUiHome> {
                     ),
                   ),
                 ),
+              ),
               ),
             ),
           ),

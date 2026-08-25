@@ -76,15 +76,70 @@ static const wp_fractional_scale_v1_listener kFscaleListener = {
     /* .preferred_scale = */ &VoicePopup::preferredScale,
 };
 
-void VoicePopup::xdgLogicalSize(void *data, zxdg_output_v1 *, int32_t w,
-                                  int32_t h) {
-    // 输出真实逻辑尺寸（zxdg-output）——与 mode 物理尺寸相除得精确
-    // 分数 scale（wl_output 只有取整值）
+void VoicePopup::recomputeScaleLocked() {
+    if (surfaceOutput_) {
+        auto it = outputs_.find(surfaceOutput_);
+        if (it != outputs_.end() && it->second.scale() > 0) {
+            cachedScale_ = it->second.scale();
+            return;
+        }
+    }
+    for (const auto &kv : outputs_) { // 无 enter 信息：任一可推导输出
+        if (kv.second.scale() > 0) {
+            cachedScale_ = kv.second.scale();
+            return;
+        }
+    }
+    cachedScale_ = gotFscale_    ? scaleNum_ / 120.0
+                   : lastFscaleNum_ > 0 ? lastFscaleNum_ / 120.0
+                                        : outputScale_;
+}
+
+void VoicePopup::xdgLogicalSize(void *data, zxdg_output_v1 *xo,
+                                  int32_t w, int32_t h) {
+    // 输出真实逻辑尺寸（zxdg）——与 mode 物理尺寸相除得精确分数 scale。
+    // xdgOwner_ 定位是哪个输出（listener data 与 user_data 同槽，见
+    // surfaceEnter 注释——这里 data 仍是 this，未受影响？否——同槽！
+    // zxdg proxy 无 compat hack，data 安全为 this）
     auto *s = static_cast<VoicePopup *>(data);
     std::lock_guard<std::mutex> lock(s->mutex_);
-    s->xdgLogicalW_ = w;
-    s->xdgLogicalH_ = h;
+    if (auto it = s->xdgOwner_.find(xo); it != s->xdgOwner_.end()) {
+        auto &g = s->outputs_[it->second];
+        g.logicalW = w;
+        g.logicalH = h;
+        s->recomputeScaleLocked();
+    }
 }
+
+void VoicePopup::surfaceEnter(void *data, wl_surface *, wl_output *o) {
+    // libwayland 陷阱：listener data 与 wl_proxy_set_user_data 同槽。
+    // 我们 surface 的 user_data 被经典 UI 兼容 calloc 块占用——listener
+    // data 也是它。块头部存 this 反向指针（classicui 只读 +0x48）
+    auto **owner = static_cast<VoicePopup **>(data);
+    auto *s = *owner;
+    std::lock_guard<std::mutex> lock(s->mutex_);
+    s->surfaceOutput_ = o;
+    s->recomputeScaleLocked();
+}
+
+void VoicePopup::surfaceLeave(void *data, wl_surface *, wl_output *o) {
+    auto **owner = static_cast<VoicePopup **>(data);
+    auto *s = *owner;
+    std::lock_guard<std::mutex> lock(s->mutex_);
+    if (s->surfaceOutput_ == o) {
+        s->surfaceOutput_ = nullptr;
+        s->recomputeScaleLocked();
+    }
+}
+
+static const wl_surface_listener kSurfaceListener = {
+    /* .enter = */ &VoicePopup::surfaceEnter,
+    /* .leave = */ &VoicePopup::surfaceLeave,
+    /* .preferred_buffer_scale = */ // v5 槽空即 abort（libwayland 行为）
+    [](void *, wl_surface *, int32_t) {},
+    /* .preferred_buffer_transform = */
+    [](void *, wl_surface *, uint32_t) {},
+};
 
 static const zxdg_output_v1_listener kXdgOutputListener = {
     /* .logical = */ [](void *, zxdg_output_v1 *, int32_t, int32_t) {},
@@ -205,6 +260,7 @@ void VoicePopup::preferredScale(void *data, wp_fractional_scale_v1 *,
         return;
     }
     s->scaleNum_ = scale;
+    s->recomputeScaleLocked();
     FCITX_INFO() << "VoicePopup: fractional scale → " << (scale / 120.0);
     if (s->logicalW_ > 0 && s->viewport_) {
         // 物理池按新 scale 重建；viewport destination 不在此急切下发——
@@ -222,13 +278,13 @@ void VoicePopup::preferredScale(void *data, wp_fractional_scale_v1 *,
 void VoicePopup::outputGeometry(void *, wl_output *, int32_t, int32_t,
                                 int32_t, int32_t, int32_t, const char *,
                                 const char *, int32_t) {}
-void VoicePopup::outputMode(void *data, wl_output *, uint32_t, int32_t w,
-                            int32_t h, int32_t) {
-    // mode 物理尺寸：与 zxdg 逻辑尺寸相除得输出精确分数 scale
+void VoicePopup::outputMode(void *data, wl_output *o, uint32_t,
+                            int32_t w, int32_t h, int32_t) {
     auto *s = static_cast<VoicePopup *>(data);
     std::lock_guard<std::mutex> lock(s->mutex_);
-    s->outputPhysW_ = w;
-    s->outputPhysH_ = h;
+    s->outputs_[o].physW = w;
+    s->outputs_[o].physH = h;
+    s->recomputeScaleLocked();
 }
 void VoicePopup::outputDone(void *, wl_output *) {}
 void VoicePopup::outputScale(void *data, wl_output *, int32_t factor) {
@@ -356,6 +412,10 @@ void VoicePopup::ensureWaylandWatcher() {
             shm_ = nullptr;
             seat_ = nullptr;
             pointer_ = nullptr;
+            surfaceOutput_ = nullptr;
+            outputs_.clear();
+            xdgOwner_.clear();
+            cachedScale_ = 0;
             cursorShapeDev_ = nullptr;
             cursorShapeMgr_ = nullptr;
             output_ = nullptr;
@@ -428,20 +488,35 @@ void VoicePopup::registryGlobalImpl(void *data, wl_registry *reg, uint32_t name,
         self->seat_ = static_cast<wl_seat *>(wl_registry_bind(
             reg, name, &wl_seat_interface, sv));
         wl_seat_add_listener(self->seat_, &kSeatListener, self);
-    } else if (strcmp(iface, "wl_output") == 0 && !self->output_) {
-        // wl_output 整数 scale 兜底（niri 不给 IM popup 发 fractional）
-        self->output_ = static_cast<wl_output *>(wl_registry_bind(
-            reg, name, &wl_output_interface, 2)); // v2 起 scale/done 事件
-        wl_output_add_listener(self->output_, &kOutputListener, self);
+    } else if (strcmp(iface, "wl_output") == 0) {
+        // 多输出全绑：scale 按表面所在输出推导（双屏 1.25+1.5 时用首
+        // 输出的推导值会把副屏卡片渲染错比例——等比缩小的双屏变体）
+        auto *o = static_cast<wl_output *>(
+            wl_registry_bind(reg, name, &wl_output_interface, 2));
+        wl_output_add_listener(o, &kOutputListener, self);
+        if (!self->output_) {
+            self->output_ = o; // 首输出：整数 scale 兜底
+        }
+        self->outputs_[o] = OutputGeom{};
         FCITX_INFO() << "VoicePopup: wl_output bound v2 name=" << name;
+        if (self->xdgOutputMgr_) {
+            auto *xo =
+                zxdg_output_manager_v1_get_xdg_output(self->xdgOutputMgr_, o);
+            self->xdgOwner_[xo] = o;
+            zxdg_output_v1_add_listener(xo, &kXdgOutputListener, self);
+        }
     } else if (strcmp(iface, "zxdg_output_manager_v1") == 0 &&
-               !self->xdgOutputMgr_ && self->output_) {
+               !self->xdgOutputMgr_) {
         self->xdgOutputMgr_ = static_cast<zxdg_output_manager_v1 *>(
             wl_registry_bind(reg, name, &zxdg_output_manager_v1_interface,
                              2));
-        auto *xo = zxdg_output_manager_v1_get_xdg_output(
-            self->xdgOutputMgr_, self->output_);
-        zxdg_output_v1_add_listener(xo, &kXdgOutputListener, self);
+        for (auto &kv : self->outputs_) {
+            auto *xo =
+                zxdg_output_manager_v1_get_xdg_output(self->xdgOutputMgr_,
+                                                      kv.first);
+            self->xdgOwner_[xo] = kv.first;
+            zxdg_output_v1_add_listener(xo, &kXdgOutputListener, self);
+        }
     } else if (strcmp(iface, "wp_viewporter") == 0 && !self->viewporter_) {
         FCITX_INFO() << "VoicePopup: global wp_viewporter v" << version;
         self->viewporter_ = static_cast<wp_viewporter *>(wl_registry_bind(
@@ -800,6 +875,10 @@ bool VoicePopup::ensurePopup(InputContext *ic, bool atShow) {
     overlayFallback_ = overlay;
 
     surface_ = wl_compositor_create_surface(compositor_);
+    // 注意顺序陷阱：libwayland 的 listener data 与 set_user_data 同槽，
+    // 下方的 compat calloc 会覆盖——calloc 块头部写入 this 反指针供
+    // surfaceEnter/Leave 取回（经典 UI thunk 只读 +0x48，头部安全）
+    wl_surface_add_listener(surface_, &kSurfaceListener, this);
     // 透明/隐藏态的空输入区域：layer surface 的输入区与像素透明度无关，
     // 不显式清空会把"出现过的区域"变成不可见遮挡（挡住下方按钮）；
     // 可见时再恢复全量输入区（nullptr = 默认全量）
@@ -817,6 +896,7 @@ bool VoicePopup::ensurePopup(InputContext *ic, bool atShow) {
     // if(!window) return 路径安全返回。字段只读这一个偏移，其余不参与
     // 跨组件调用。
     surfaceCompat_ = calloc(1, 0x58);
+    *static_cast<VoicePopup **>(surfaceCompat_) = this;
     wl_proxy_set_user_data(reinterpret_cast<wl_proxy *>(surface_),
                             surfaceCompat_);
     // viewport（物理 buffer → 逻辑显示）+ fractional scale（真实缩放值）

@@ -11,6 +11,7 @@
 #include <mutex>
 #include <set>
 #include <string>
+#include <map>
 #include <vector>
 
 struct wl_display;
@@ -35,6 +36,16 @@ struct wp_cursor_shape_manager_v1;
 struct wp_cursor_shape_device_v1;
 struct zxdg_output_manager_v1;
 struct zxdg_output_v1;
+
+// 每输出几何（多显示器：scale 按表面所在输出推导）
+struct OutputGeom {
+    int32_t physW = 0, physH = 0;          // wl_output mode
+    int32_t logicalW = 0, logicalH = 0;    // zxdg_output logical_size
+    double scale() const {
+        return (logicalW > 0 && physW > 0)
+                   ? static_cast<double>(physW) / logicalW : 0;
+    }
+};
 
 namespace fcitx {
 class InputContext;
@@ -125,21 +136,10 @@ public:
     void setLogicalSize(int w, int h);
     // 生效 scale：fractional 事件（精确，1/120）优先；未到则用上次
     // fractional 记忆，最后退 wl_output 整数 scale
-    double scale() const {
-        // 首选 zxdg 推导（mode 物理 ÷ 输出逻辑 = 精确分数值，与事件
-        // 时序无关）——metrics ratio 与真实一致时，缓冲=窗口×真实，
-        // 即使合成器对 layer 表面不应用 viewport destination（等比
-        // 缩小的根源），1:1 显示也精确铺满窗口
-        if (xdgLogicalW_ > 0 && outputPhysW_ > 0) {
-            return static_cast<double>(outputPhysW_) / xdgLogicalW_;
-        }
-        if (gotFscale_) {
-            return scaleNum_ / 120.0;
-        }
-        // 新 surface 的 fractional 未到：上次 fractional > 整数兜底
-        //（wl_output 整数是取整值，混 scale 双屏上差 33-60%）
-        return lastFscaleNum_ > 0 ? lastFscaleNum_ / 120.0 : outputScale_;
-    }
+    // 只读标量缓存：aiinput 的 metrics 定时器不持锁调用，容器遍历会与
+    // registry/xdg 回调竞争——锁内事件点 recomputeScaleLocked 更新
+    double scale() const { return cachedScale_ > 0 ? cachedScale_ : 1.0; }
+    void recomputeScaleLocked();
     int logicalWidth() const { return logicalW_; }
     int logicalHeight() const { return logicalH_; }
     // scale 变化回调（aiinput 据此更新引擎 metrics 重渲物理帧）
@@ -184,6 +184,8 @@ public:
                                uint32_t scale);
     static void xdgLogicalSize(void *data, zxdg_output_v1 *xo, int32_t w,
                            int32_t h);
+    static void surfaceEnter(void *data, wl_surface *s, wl_output *o);
+    static void surfaceLeave(void *data, wl_surface *s, wl_output *o);
     static void layerConfigure(void *data, zwlr_layer_surface_v1 *ls,
                                uint32_t serial, uint32_t w, uint32_t h);
 
@@ -229,9 +231,12 @@ private:
     uint32_t lastFscaleNum_ = 0;
     int outputScale_ = 1;     // wl_output 整数 scale 兜底
     zxdg_output_manager_v1 *xdgOutputMgr_ = nullptr;
-    int32_t outputPhysW_ = 0, outputPhysH_ = 0; // mode 事件物理尺寸
-    int xdgLogicalW_ = 0, xdgLogicalH_ = 0; // zxdg 输出逻辑尺寸
-    wl_output *output_ = nullptr;
+    // 多输出：全部输出几何 + 表面所在输出（enter/leave 跟踪）
+    std::map<wl_output *, OutputGeom> outputs_;
+    std::map<zxdg_output_v1 *, wl_output *> xdgOwner_; // xdg 对象→输出
+    wl_output *output_ = nullptr;        // 首输出（整数 scale 兜底）
+    wl_output *surfaceOutput_ = nullptr; // 本表面当前所在输出
+    double cachedScale_ = 0; // 锁内解析的有效 scale（事件点更新）
     int logicalW_ = 0, logicalH_ = 0;
     std::function<void(double)> scaleHandler_;
 
