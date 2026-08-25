@@ -6,6 +6,7 @@
 #include <fcitx-utils/handlertable.h>
 #include <fcitx-utils/trackableobject.h>
 #include <fcitx/event.h>
+#include <xcb/shm.h>
 #include <xcb/xcb.h>
 #include <wayland_public.h>
 
@@ -221,16 +222,13 @@ private:
     // overlay 兜底层的锚定：follow 档按 IC 光标矩形贴光标（含翻转/钳
     // 制），默认/无矩形底部（或 policy 的顶部）居中。持锁调用
     void anchorOverlayLocked(InputContext *ic);
-    // XWayland 应用的矩形换算：DBus IC 的光标矩形在 X 应用（WPS 等 Qt
-    // 程序经 XWayland）下是 X 全局**物理**像素（xrandr 实测 X 屏按物理
-    // 尺寸摆进逻辑布局），须除以所在输出 scale 转逻辑。wayland 原生应用
-    // （DMS/gnome-text-editor，无 X 窗口）的矩形本就是逻辑值，返回 false
-    // 走原样路径。判定：xcb 主显示存在且为 XWayland + 当前活动 X 窗口
-    // 的 WM_CLASS 与 IC program 互为子串（分类按 program 缓存，X 查询
-    // 每会话只做一次）。持锁调用（X roundtrip 仅首查）
-    bool tryX11TranslateLocked(const std::string &program, Rect *rect,
-                               const OutputGeom **outGeom);
+    // XWayland 应用判定 + X 卡片窗生命周期。XShm 帧入口在
+    // pushFrameBGRA 的 x11Mode_ 分支
     void ensureX11Atoms();
+    // 首帧建窗（OR，物理尺寸，位置=矩形下方）并贴帧；后续帧只 put
+    void pushFrameX11Locked(const uint8_t *bgra, int w, int h);
+    void destroyX11WindowLocked(); // unmap+销毁+SHM 释放
+    void moveX11WindowLocked(const Rect &rect); // 矩形变化重摆
     std::string toLower(std::string s);
 
     Instance *instance_;
@@ -272,13 +270,36 @@ private:
     zwp_input_popup_surface_v2 *popup_ = nullptr;
     wl_surface *surface_ = nullptr;
 
-    // —— XWayland 矩形换算（独立连接，仅查询不订阅事件）——
+    // —— XWayland 卡片路径（X 应用的 D-Bus IC：classicui 同款传输层）——
+    // xwayland-satellite 把 override-redirect X 窗转成 xdg_popup 挂到
+    // 聚焦 X 顶层窗（源码 create_role_window: popup_for = last_hovered
+    // || last_focused_toplevel；offset=Δ/scale），合成器自动叠加应用窗口
+    // 真实屏幕原点——右列/多输出/缩放全由 satellite+niri 处理。X 应用
+    // 经 D-Bus 报的光标矩形不含窗口原点（satellite 把所有顶层 X 窗摆在
+    // 根 (0,0)，mapToGlobal 是窗口局部物理值），wayland 层表面无从得知
+    // 原点——只能走 X 侧
     xcb_connection_t *xconn_ = nullptr;
     xcb_window_t xroot_ = XCB_WINDOW_NONE;
     bool xTried_ = false, xBroken_ = false;
     std::map<std::string, bool> xClassCache_; // program → 是否 X 应用
     uint32_t xAtomActiveWindow_ = XCB_ATOM_NONE, xAtomWmClass_ = XCB_ATOM_NONE,
-             xAtomPid_ = XCB_ATOM_NONE, xAtomClientList_ = XCB_ATOM_NONE;
+             xAtomClientList_ = XCB_ATOM_NONE;
+    // OR 卡片窗（x11Mode_）：XShm 帧缓冲 + 事件源 + GC
+    bool x11Mode_ = false;
+    xcb_window_t xwin_ = XCB_WINDOW_NONE;
+    xcb_gcontext_t xgc_ = XCB_NONE;
+    xcb_shm_seg_t xshm_ = XCB_NONE;
+    int xshmid_ = -1;
+    uint8_t *xshmAddr_ = nullptr;
+    size_t xshmSize_ = 0;
+    int xwinW_ = 0, xwinH_ = 0;
+    Rect xLastRect_; // 最近光标矩形（首帧建窗定位 + 重摆）
+    std::unique_ptr<EventSourceIO> xEventSrc_;
+    void handleX11Events();          // xcb fd 可读：poll 事件队列
+    void ensureX11EventSource();     // xconn_ fd → fcitx 事件循环
+    // X 应用判定（xcb 模块主显示为 XWayland + 活动窗 WM_CLASS ↔ program；
+    // 按 program 缓存）。持锁调用，X 查询每应用一次
+    bool isX11AppLocked(const std::string &program);
 
     // layer-shell 回退（chromium 系；anchorBottom_ 底部居中为默认，兼容
     // 旧值 "top" 顶部居中）

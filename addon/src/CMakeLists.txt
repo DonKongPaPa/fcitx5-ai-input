@@ -58,7 +58,7 @@ target_link_libraries(aiinput PRIVATE pthread)
 find_package(PkgConfig REQUIRED)
 pkg_check_modules(FONTCONFIG REQUIRED IMPORTED_TARGET fontconfig)
 target_link_libraries(aiinput PRIVATE PkgConfig::FONTCONFIG)
-pkg_check_modules(XCB REQUIRED IMPORTED_TARGET xcb)
+pkg_check_modules(XCB REQUIRED IMPORTED_TARGET xcb xcb-shm)
 target_link_libraries(aiinput PRIVATE PkgConfig::XCB)
 
 # input-method-v2 协议（wlroots/fcitx5 扩展，不在 wayland-protocols 包内）

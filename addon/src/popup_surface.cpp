@@ -21,10 +21,13 @@ extern "C" const wl_interface zwp_tablet_tool_v2_interface = {};
 #include <fcitx/inputpanel.h>
 #include <fcitx-utils/event.h>
 #include <fcitx/text.h>
+#include <xcb/shm.h>
 #include <xcb_public.h>
 #include <wayland_public.h>
 
 #include <fcntl.h>
+#include <sys/ipc.h>
+#include <sys/shm.h>
 
 #include <algorithm>
 #include <cctype>
@@ -465,9 +468,15 @@ VoicePopup::VoicePopup(Instance *instance) : instance_(instance) {
             auto &ie = static_cast<InputContextEvent &>(event);
             auto *ic = ie.inputContext();
             std::lock_guard<std::mutex> lock(mutex_);
-            if (dbusFollow_ && overlayFallback_ && layerSurface_ &&
-                ic == icRef_.get()) {
-                anchorOverlayLocked(ic);
+            if (dbusFollow_ && overlayFallback_ && ic == icRef_.get()) {
+                // X 应用走 OR 窗重摆；wayland 原生走 layer 重锚
+                if (x11Mode_) {
+                    if (ic->cursorRect().height() > 0) {
+                        moveX11WindowLocked(ic->cursorRect());
+                    }
+                } else if (layerSurface_) {
+                    anchorOverlayLocked(ic);
+                }
             }
         });
 }
@@ -499,14 +508,7 @@ void VoicePopup::anchorOverlayLocked(InputContext *ic) {
             anchorBottom_ ? 16 : 0, 0);
         return;
     }
-    // XWayland 应用：矩形是 X 全局物理像素，换算成逻辑（并取该输出的
-    // 几何做后续钳制/翻转）；wayland 原生应用矩形本就是逻辑，走原路径
     const OutputGeom *geom = nullptr;
-    const OutputGeom *xGeom = nullptr;
-    if (ic && tryX11TranslateLocked(ic->program(), &rect, &xGeom) &&
-        xGeom) {
-        geom = xGeom;
-    }
     if (!geom) {
         // 无 X 信息：含矩形的最小输出（重叠布局下取小者更可信）
         double best = 0;
@@ -575,161 +577,341 @@ void VoicePopup::ensureX11Atoms() {
     xAtomClientList_ = intern("_NET_CLIENT_LIST");
 }
 
-bool VoicePopup::tryX11TranslateLocked(const std::string &program, Rect *rect,
-                                       const OutputGeom **outGeom) {
-    *outGeom = nullptr;
+bool VoicePopup::isX11AppLocked(const std::string &program) {
     if (xBroken_ || program.empty()) {
         return false;
     }
-    auto cached = xClassCache_.find(program);
-    const bool isX11 = [&]() -> bool {
-        if (cached != xClassCache_.end()) {
-            return cached->second;
-        }
-        if (!xTried_) {
-            xTried_ = true;
-            // 只认 XWayland 主显示（xcb 模块的判定；无 X 环境直接放弃）
-            auto *xcb = instance_->addonManager().addon("xcb", true);
-            if (!xcb) {
-                xBroken_ = true;
-                return false;
-            }
-            auto name = xcb->call<IXCBModule::mainDisplay>();
-            if (name.empty() || !xcb->call<IXCBModule::isXWayland>(name)) {
-                xBroken_ = true;
-                return false;
-            }
-            int screen = 0;
-            xconn_ = xcb_connect(name.c_str(), &screen);
-            if (xcb_connection_has_error(xconn_)) {
-                xcb_disconnect(xconn_);
-                xconn_ = nullptr;
-                xBroken_ = true;
-                return false;
-            }
-            auto it = xcb_setup_roots_iterator(xcb_get_setup(xconn_));
-            for (int i = 0; i < screen && it.rem > 1; ++i) {
-                xcb_screen_next(&it);
-            }
-            xroot_ = it.data->root;
-            ensureX11Atoms();
-        }
-        if (!xconn_ || xroot_ == XCB_WINDOW_NONE) {
+    if (auto it = xClassCache_.find(program); it != xClassCache_.end()) {
+        return it->second;
+    }
+    if (!xTried_) {
+        xTried_ = true;
+        // 只认 XWayland 主显示（xcb 模块的判定；无 X 环境直接放弃）
+        auto *xcb = instance_->addonManager().addon("xcb", true);
+        if (!xcb) {
+            xBroken_ = true;
             return false;
         }
-        // 分类：活动 X 窗口（其次客户端列表）的 WM_CLASS 与 program 互为
-        // 子串——wayland 原生应用聚焦时活动 X 窗是残留的其它应用，类名
-        // 不会撞上 program
-        auto propString = [&](xcb_window_t w, xcb_atom_t prop,
-                              size_t maxLen) -> std::string {
-            auto *r = xcb_get_property_reply(
-                xconn_,
-                xcb_get_property(xconn_, 0, w, prop, XCB_GET_PROPERTY_TYPE_ANY,
-                                 0, (maxLen + 3) / 4),
-                nullptr);
-            std::string out;
-            if (r && r->type != XCB_ATOM_NONE && r->bytes_after == 0) {
-                out.assign(static_cast<const char *>(
-                               xcb_get_property_value(r)),
-                           xcb_get_property_value_length(r));
-            }
-            free(r);
-            return out;
-        };
-        auto classMatches = [&](xcb_window_t w) -> bool {
-            std::string cls = propString(w, xAtomWmClass_, 128);
-            if (cls.empty()) {
-                return false;
-            }
-            auto prog = toLower(program);
-            // WM_CLASS 是 RESCLASS\0RESINSTANCE\0 双串，逐段比对
-            size_t start = 0;
-            while (start <= cls.size()) {
-                auto end = cls.find('\0', start);
-                if (end == std::string::npos) {
-                    end = cls.size();
-                }
-                std::string seg =
-                    toLower(cls.substr(start, end - start));
-                if (!seg.empty() &&
-                    (seg.find(prog) != std::string::npos ||
-                     prog.find(seg) != std::string::npos)) {
-                    return true;
-                }
-                if (end == cls.size()) {
-                    break;
-                }
-                start = end + 1;
-            }
+        auto name = xcb->call<IXCBModule::mainDisplay>();
+        if (name.empty() || !xcb->call<IXCBModule::isXWayland>(name)) {
+            xBroken_ = true;
             return false;
-        };
-        // 候选窗口：活动窗口优先，退回 _NET_CLIENT_LIST 全量扫
-        std::vector<xcb_window_t> candidates;
-        {
-            auto *r = xcb_get_property_reply(
-                xconn_,
-                xcb_get_property(xconn_, 0, xroot_, xAtomActiveWindow_,
-                                 XCB_ATOM_WINDOW, 0, 1),
-                nullptr);
-            if (r && r->type != XCB_ATOM_NONE &&
-                xcb_get_property_value_length(r) >= 4) {
-                candidates.push_back(
-                    *static_cast<const xcb_window_t *>(
-                        xcb_get_property_value(r)));
-            }
-            free(r);
         }
-        bool match = !candidates.empty() && classMatches(candidates[0]);
-        if (!match) {
-            auto *r = xcb_get_property_reply(
-                xconn_,
-                xcb_get_property(xconn_, 0, xroot_, xAtomClientList_,
-                                 XCB_ATOM_WINDOW, 0, 1024),
-                nullptr);
-            if (r && r->type != XCB_ATOM_NONE) {
-                auto *wins = static_cast<const xcb_window_t *>(
-                    xcb_get_property_value(r));
-                int n = xcb_get_property_value_length(r) / 4;
-                for (int i = 0; i < n && !match; ++i) {
-                    match = classMatches(wins[i]);
-                }
-            }
-            free(r);
-        }
+        int screen = 0;
+        xconn_ = xcb_connect(name.c_str(), &screen);
         if (xcb_connection_has_error(xconn_)) {
-            xBroken_ = true; // X 连接中途死掉：本会话不再尝试
+            xcb_disconnect(xconn_);
+            xconn_ = nullptr;
+            xBroken_ = true;
             return false;
         }
-        xClassCache_[program] = match;
-        FCITX_INFO() << "VoicePopup: XWayland 判定 " << program << " → "
-                     << (match ? "X 应用（矩形按物理换算）" : "wayland 原生");
-        return match;
-    }();
-    if (!isX11) {
+        auto it = xcb_setup_roots_iterator(xcb_get_setup(xconn_));
+        for (int i = 0; i < screen && it.rem > 1; ++i) {
+            xcb_screen_next(&it);
+        }
+        xroot_ = it.data->root;
+        ensureX11Atoms();
+        ensureX11EventSource();
+        xcb_flush(xconn_);
+    }
+    if (!xconn_ || xroot_ == XCB_WINDOW_NONE) {
         return false;
     }
-    // 换算：找包含矩形（X 物理）的输出区段，缩成逻辑（X 原点=输出逻辑
-    // 原点，同一坐标数字）
-    for (const auto &kv : outputs_) {
-        const auto &g = kv.second;
-        const double sc = g.scale();
-        if (sc <= 0 || !g.containsXPoint(rect->left(), rect->top())) {
+    // 分类：活动 X 窗口（其次客户端列表）的 WM_CLASS 与 program 互为
+    // 子串——wayland 原生应用聚焦时活动 X 窗是残留的其它应用，类名
+    // 不会撞上 program。satellite 不维护 _NET_CLIENT_LIST（实测空），
+    // 活动窗是唯一可靠入口
+    auto propString = [&](xcb_window_t w, xcb_atom_t prop,
+                          size_t maxLen) -> std::string {
+        auto *r = xcb_get_property_reply(
+            xconn_,
+            xcb_get_property(xconn_, 0, w, prop, XCB_GET_PROPERTY_TYPE_ANY,
+                             0, (maxLen + 3) / 4),
+            nullptr);
+        std::string out;
+        if (r && r->type != XCB_ATOM_NONE && r->bytes_after == 0) {
+            out.assign(static_cast<const char *>(xcb_get_property_value(r)),
+                       xcb_get_property_value_length(r));
+        }
+        free(r);
+        return out;
+    };
+    auto classMatches = [&](xcb_window_t w) -> bool {
+        std::string cls = propString(w, xAtomWmClass_, 128);
+        if (cls.empty()) {
+            return false;
+        }
+        auto prog = toLower(program);
+        // WM_CLASS 是 RESCLASS\0RESINSTANCE\0 双串，逐段比对
+        size_t start = 0;
+        while (true) {
+            auto end = cls.find('\0', start);
+            if (end == std::string::npos) {
+                end = cls.size();
+            }
+            std::string seg = toLower(cls.substr(start, end - start));
+            if (!seg.empty() &&
+                (seg.find(prog) != std::string::npos ||
+                 prog.find(seg) != std::string::npos)) {
+                return true;
+            }
+            if (end == cls.size()) {
+                break;
+            }
+            start = end + 1;
+        }
+        return false;
+    };
+    std::vector<xcb_window_t> actives;
+    {
+        auto *r = xcb_get_property_reply(
+            xconn_,
+            xcb_get_property(xconn_, 0, xroot_, xAtomActiveWindow_,
+                             XCB_ATOM_WINDOW, 0, 1),
+            nullptr);
+        if (r && r->type != XCB_ATOM_NONE &&
+            xcb_get_property_value_length(r) >= 4) {
+            actives.push_back(
+                *static_cast<const xcb_window_t *>(xcb_get_property_value(r)));
+        }
+        free(r);
+    }
+    bool match = !actives.empty() && classMatches(actives[0]);
+    if (!match) {
+        auto *r = xcb_get_property_reply(
+            xconn_,
+            xcb_get_property(xconn_, 0, xroot_, xAtomClientList_,
+                             XCB_ATOM_WINDOW, 0, 1024),
+            nullptr);
+        if (r && r->type != XCB_ATOM_NONE) {
+            auto *wins = static_cast<const xcb_window_t *>(
+                xcb_get_property_value(r));
+            int n = xcb_get_property_value_length(r) / 4;
+            for (int i = 0; i < n && !match; ++i) {
+                match = classMatches(wins[i]);
+            }
+        }
+        free(r);
+    }
+    if (xcb_connection_has_error(xconn_)) {
+        xBroken_ = true; // X 连接中途死掉：本会话不再尝试
+        return false;
+    }
+    xClassCache_[program] = match;
+    FCITX_INFO() << "VoicePopup: XWayland 判定 " << program << " → "
+                 << (match ? "X 应用（OR 窗口卡片）" : "wayland 原生");
+    return match;
+}
+
+// ---------------------------------------------------------------------------
+// X OR 卡片窗：classicui 同款传输层（satellite→xdg_popup→聚焦 X 顶层窗，
+// 合成器叠加真实窗口原点——右列/多输出由 satellite+niri 处理）
+// ---------------------------------------------------------------------------
+void VoicePopup::ensureX11EventSource() {
+    if (xEventSrc_ || !xconn_) {
+        return;
+    }
+    int fd = xcb_get_file_descriptor(xconn_);
+    if (fd < 0) {
+        return;
+    }
+    xEventSrc_ = instance_->eventLoop().addIOEvent(
+        fd, IOEventFlag::In, [this](EventSourceIO *, int, IOEventFlags) {
+            handleX11Events();
+            return true;
+        });
+}
+
+void VoicePopup::handleX11Events() {
+    std::lock_guard<std::mutex> lock(mutex_);
+    while (auto *e = xcb_poll_for_event(xconn_)) {
+        if (e->response_type == 0) { // X 错误
+            free(e);
             continue;
         }
-        Rect logical;
-        logical.setPosition(
-            g.logicalX +
-                static_cast<int>((rect->left() - g.logicalX) / sc + 0.5),
-            g.logicalY +
-                static_cast<int>((rect->top() - g.logicalY) / sc + 0.5));
-        logical.setSize(
-            static_cast<int>(rect->width() / sc + 0.5),
-            static_cast<int>(rect->height() / sc + 0.5));
-        *rect = logical;
-        *outGeom = &g;
-        return true;
+        switch (e->response_type & 0x7f) {
+        case XCB_EXPOSE: {
+            // 重贴当前帧（SHM 段内容仍在）
+            if (xwin_ != XCB_WINDOW_NONE && xshm_ != XCB_NONE &&
+                xwinW_ > 0) {
+                xcb_shm_put_image(xconn_, xwin_, xgc_, xwinW_, xwinH_, 0, 0,
+                                  xwinW_, xwinH_, 0, 0, 24,
+                                  XCB_IMAGE_FORMAT_Z_PIXMAP, 0, xshm_, 0);
+                xcb_flush(xconn_);
+            }
+            break;
+        }
+        case XCB_ENTER_NOTIFY: {
+            auto *ev = reinterpret_cast<xcb_enter_notify_event_t *>(e);
+            if (ev->event == xwin_ && ev->detail != XCB_NOTIFY_DETAIL_INFERIOR) {
+                pointerOnPopup_ = true;
+                ptrX_ = ev->event_x;
+                ptrY_ = ev->event_y;
+                if (pointerSink_) {
+                    pointerSink_(PointerEvent::Enter, ptrX_, ptrY_);
+                }
+            }
+            break;
+        }
+        case XCB_LEAVE_NOTIFY: {
+            auto *ev = reinterpret_cast<xcb_leave_notify_event_t *>(e);
+            if (ev->event == xwin_ && ev->detail != XCB_NOTIFY_DETAIL_INFERIOR) {
+                pointerOnPopup_ = false;
+                if (pointerSink_) {
+                    pointerSink_(PointerEvent::Leave, ptrX_, ptrY_);
+                }
+            }
+            break;
+        }
+        case XCB_MOTION_NOTIFY: {
+            auto *ev = reinterpret_cast<xcb_motion_notify_event_t *>(e);
+            if (ev->event == xwin_) {
+                ptrX_ = ev->event_x;
+                ptrY_ = ev->event_y;
+                if (pointerOnPopup_ && pointerSink_) {
+                    // X 坐标即物理像素——与 Flutter metrics 同空间直送
+                    pointerSink_(PointerEvent::Motion, ptrX_, ptrY_);
+                }
+            }
+            break;
+        }
+        case XCB_BUTTON_PRESS:
+        case XCB_BUTTON_RELEASE: {
+            auto *ev = reinterpret_cast<xcb_button_press_event_t *>(e);
+            if (ev->event == xwin_ && ev->detail == 1 && pointerOnPopup_ &&
+                pointerSink_) {
+                ptrX_ = ev->event_x;
+                ptrY_ = ev->event_y;
+                pointerSink_(
+                    ev->response_type == XCB_BUTTON_PRESS
+                        ? PointerEvent::Press
+                        : PointerEvent::Release,
+                    ptrX_, ptrY_);
+            }
+            break;
+        }
+        default:
+            break;
+        }
+        free(e);
     }
-    return false; // 矩形不在任何 X 区段内：按 wayland 原生处理
+}
+
+void VoicePopup::moveX11WindowLocked(const Rect &rect) {
+    xLastRect_ = rect;
+    if (xwin_ == XCB_WINDOW_NONE || !xconn_) {
+        return;
+    }
+    const int gap = static_cast<int>(8 * scale() + 0.5);
+    const uint32_t vals[2] = {static_cast<uint32_t>(rect.left()),
+                              static_cast<uint32_t>(rect.top() +
+                                                    rect.height() + gap)};
+    xcb_configure_window(xconn_, xwin_,
+                         XCB_CONFIG_WINDOW_X | XCB_CONFIG_WINDOW_Y, vals);
+    xcb_flush(xconn_);
+}
+
+void VoicePopup::pushFrameX11Locked(const uint8_t *bgra, int w, int h) {
+    if (!visible_ || !xconn_ || xBroken_) {
+        return;
+    }
+    const size_t bytes = static_cast<size_t>(w) * h * 4;
+    if (w != xwinW_ || h != xwinH_ || !xshmAddr_) {
+        // SHM 段重建
+        if (xshm_ != XCB_NONE) {
+            xcb_shm_detach(xconn_, xshm_);
+            xcb_flush(xconn_);
+            xshm_ = XCB_NONE;
+        }
+        if (xshmAddr_) {
+            shmdt(xshmAddr_);
+            shmctl(xshmid_, IPC_RMID, nullptr);
+            xshmAddr_ = nullptr;
+        }
+        xshmid_ = shmget(IPC_PRIVATE, bytes, IPC_CREAT | 0600);
+        if (xshmid_ < 0) {
+            xBroken_ = true;
+            FCITX_WARN() << "VoicePopup: shmget 失败，X 卡片路径弃用";
+            return;
+        }
+        xshmAddr_ =
+            static_cast<uint8_t *>(shmat(xshmid_, nullptr, 0));
+        if (xshmAddr_ == reinterpret_cast<uint8_t *>(-1)) {
+            xshmAddr_ = nullptr;
+            shmctl(xshmid_, IPC_RMID, nullptr);
+            xBroken_ = true;
+            return;
+        }
+        xshmSize_ = bytes;
+        xshm_ = xcb_generate_id(xconn_);
+        xcb_shm_attach(xconn_, xshm_, xshmid_, false);
+        xwinW_ = w;
+        xwinH_ = h;
+        xcb_screen_t *scr =
+            xcb_setup_roots_iterator(xcb_get_setup(xconn_)).data;
+        if (xwin_ == XCB_WINDOW_NONE) {
+            const int gap = static_cast<int>(8 * scale() + 0.5);
+            xwin_ = xcb_generate_id(xconn_);
+            uint32_t mask = XCB_CW_OVERRIDE_REDIRECT |
+                            XCB_CW_EVENT_MASK | XCB_CW_SAVE_UNDER;
+            uint32_t vals[3] = {
+                1,
+                XCB_EVENT_MASK_EXPOSURE | XCB_EVENT_MASK_STRUCTURE_NOTIFY |
+                    XCB_EVENT_MASK_ENTER_WINDOW | XCB_EVENT_MASK_LEAVE_WINDOW |
+                    XCB_EVENT_MASK_POINTER_MOTION |
+                    XCB_EVENT_MASK_BUTTON_PRESS |
+                    XCB_EVENT_MASK_BUTTON_RELEASE |
+                    XCB_EVENT_MASK_BUTTON_MOTION,
+                1};
+            xcb_create_window(xconn_, 24, xwin_, xroot_,
+                              xLastRect_.left(),
+                              xLastRect_.top() + xLastRect_.height() + gap, w,
+                              h, 0, XCB_WINDOW_CLASS_INPUT_OUTPUT,
+                              scr->root_visual, mask, vals);
+            if (xgc_ == XCB_NONE) {
+                xgc_ = xcb_generate_id(xconn_);
+                xcb_create_gc(xconn_, xgc_, xwin_, 0, nullptr);
+            }
+            xcb_map_window(xconn_, xwin_);
+            FCITX_INFO() << "VoicePopup: X OR 卡片窗 0x" << std::hex
+                         << xwin_ << std::dec << " " << w << "x" << h
+                         << " @ " << xLastRect_.left() << ","
+                         << xLastRect_.top() + xLastRect_.height();
+        } else {
+            const uint32_t vals[2] = {static_cast<uint32_t>(w),
+                                      static_cast<uint32_t>(h)};
+            xcb_configure_window(
+                xconn_, xwin_,
+                XCB_CONFIG_WINDOW_WIDTH | XCB_CONFIG_WINDOW_HEIGHT, vals);
+        }
+    }
+    if (xwin_ == XCB_WINDOW_NONE) {
+        return;
+    }
+    memcpy(xshmAddr_, bgra, bytes);
+    xcb_shm_put_image(xconn_, xwin_, xgc_, w, h, 0, 0, w, h, 0, 0, 24,
+                      XCB_IMAGE_FORMAT_Z_PIXMAP, 0, xshm_, 0);
+    xcb_flush(xconn_);
+}
+
+void VoicePopup::destroyX11WindowLocked() {
+    if (xwin_ != XCB_WINDOW_NONE && xconn_) {
+        xcb_unmap_window(xconn_, xwin_);
+        xcb_destroy_window(xconn_, xwin_);
+        xcb_flush(xconn_);
+    }
+    xwin_ = XCB_WINDOW_NONE;
+    xwinW_ = xwinH_ = 0;
+    if (xshm_ != XCB_NONE && xconn_) {
+        xcb_shm_detach(xconn_, xshm_);
+        xshm_ = XCB_NONE;
+    }
+    if (xshmAddr_) {
+        shmdt(xshmAddr_);
+        shmctl(xshmid_, IPC_RMID, nullptr);
+        xshmAddr_ = nullptr;
+    }
+    pointerOnPopup_ = false;
 }
 
 VoicePopup::~VoicePopup() { teardown(); }
@@ -1127,6 +1309,25 @@ bool VoicePopup::ensurePopup(InputContext *ic, bool atShow) {
         imAvailable = im_ != nullptr;
     }
     const bool overlay = !imAvailable;
+    // X 应用的 overlay 兜底走 X OR 窗口（classicui 同款传输层）：
+    // satellite 把 OR 窗转 xdg_popup 挂聚焦 X 顶层窗，真实窗口原点由
+    // 合成器叠加——wayland 层拿不到 X 应用的窗口原点（右列错位根因）
+    if (overlay && dbusFollow_ &&
+        isX11AppLocked(toLower(ic->program()))) {
+        if (x11Mode_ && icRef_.get() == ic) {
+            return true; // 同 IC 复用
+        }
+        lastProgram_ = toLower(ic->program());
+        destroyPopupSurface();
+        destroyX11WindowLocked();
+        topMode_ = false;
+        overlayFallback_ = true;
+        x11Mode_ = true;
+        icRef_ = ic->watch();
+        FCITX_INFO() << "VoicePopup: X OR 卡片模式（" << ic->program()
+                     << "）";
+        return true;
+    }
     const bool top = [&]() {
         const bool want = wantTopMode(ic, atShow);
         // 知识回退 + 非强制（policy/名单）+ IM proxy 可用：show 时刻先不
@@ -1159,8 +1360,10 @@ bool VoicePopup::ensurePopup(InputContext *ic, bool atShow) {
     }
     lastProgram_ = toLower(ic->program());
     destroyPopupSurface();
+    destroyX11WindowLocked(); // 模式可能从 X 切回 wayland（IC 换应用）
     topMode_ = top;
     overlayFallback_ = overlay;
+    x11Mode_ = false;
 
     surface_ = wl_compositor_create_surface(compositor_);
     // 注意顺序陷阱：libwayland 的 listener data 与 set_user_data 同槽，
@@ -1348,6 +1551,13 @@ void VoicePopup::prepare(InputContext *ic) {
     if (!ensurePopup(ic, /*atShow=*/false)) {
         return;
     }
+    if (x11Mode_) {
+        // 首帧建窗的定位源；探针照常走 D-Bus（下方 show 分支）
+        if (ic->cursorRect().height() > 0) {
+            xLastRect_ = ic->cursorRect();
+        }
+        return;
+    }
     if (overlayFallback_ && dbusFollow_) {
         // FocusIn 时光标矩形新鲜：复用的表面也要按新矩形重锚
         anchorOverlayLocked(ic);
@@ -1396,7 +1606,7 @@ void VoicePopup::show(InputContext *ic) {
                             "或录音结束/8s 保险丝回退";
         }
     }
-    if (patternMode_ && (!topMode_ || layerConfigured_)) {
+    if (patternMode_ && !x11Mode_ && (!topMode_ || layerConfigured_)) {
         size_t bufSize = width_ * height_ * 4;
         uint8_t *dst = pixels_ + cur_ * bufSize;
         paintTestPattern(dst, width_, height_);
@@ -1411,7 +1621,7 @@ void VoicePopup::show(InputContext *ic) {
     // 恢复全量。surface state 随下一次 commit 生效（flutter 模式=首帧，
     // 色块模式=下方立即 commit）。注意不能放在 pushFrameBGRA 的
     // !visible_ 分支——那里是早退路径，show 已置 true，永远走不到
-    if (emptyRegion_) {
+    if (emptyRegion_ && surface_) {
         wl_surface_set_input_region(surface_, nullptr);
         FCITX_INFO() << "VoicePopup: 输入区恢复全量（show，"
                      << (topMode_ ? "layer" : "popup") << " 模式）";
@@ -1426,6 +1636,11 @@ void VoicePopup::hide() {
     probeDeferralUsed_ = false; // 下一会话可再用二次探测
     decisionPending_ = false;
     endPreeditProbe(); // 防御：无矩形到达的字段不留悬挂组合
+    if (x11Mode_) {
+        destroyX11WindowLocked();
+        visible_ = false;
+        return;
+    }
     if (!surface_) {
         visible_ = false;
         return;
@@ -1573,6 +1788,20 @@ void VoicePopup::syncViewportLocked() {
 
 void VoicePopup::pushFrameBGRA(const uint8_t *bgra, int w, int h) {
     std::lock_guard<std::mutex> lock(mutex_);
+    if (x11Mode_) {
+        if (!visible_ || decisionPending_ || xBroken_) {
+            return;
+        }
+        // 迟到帧防护同 wayland 路径：目标物理尺寸不符直接丢
+        const double sc = scale();
+        const int pw = static_cast<int>(logicalW_ * sc + 0.5);
+        const int ph = static_cast<int>(logicalH_ * sc + 0.5);
+        if (pw > 0 && (w != pw || h != ph)) {
+            return;
+        }
+        pushFrameX11Locked(bgra, w, h);
+        return;
+    }
     if (w != width_ || h != height_) {
         // 池振荡防护：resize 消息已把逻辑/池更新到目标物理尺寸，而引擎
         // metrics 尚未生效时按**旧尺寸**出帧——此时把池缩回去会让窗口
@@ -1617,6 +1846,7 @@ void VoicePopup::teardown() {
         return;
     }
     destroyPopupSurface();
+    destroyX11WindowLocked();
     im_ = nullptr; // 借自 waylandim，不 destroy
     for (auto &b : buffers_) {
         if (b) {
