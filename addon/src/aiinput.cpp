@@ -561,8 +561,32 @@ void AiInputEngine::reloadConfig() {
         FCITX_INFO() << "AiInput: 配置已迁移 voiceinput.config → "
                         "aiinput.config";
     }
+    // LLMEnabled(bool，已废弃) → LLMEngine(枚举)：显式关过 LLM 的用户
+    // 保持"直接上屏"（Off）；其余走新默认 Dummy（=原默认开启的行为）。
+    // 读原始 ini 判断——选项已从 Configuration 移除，load 看不见旧键
+    bool llmMigrated = false;
+    {
+        RawConfig raw;
+        readAsIni(raw, "conf/aiinput.config");
+        const auto *oldEnabled = raw.valueByPath("LLMEnabled");
+        if (oldEnabled && !raw.valueByPath("LLMEngine")) {
+            if (*oldEnabled == "False" || *oldEnabled == "false" ||
+                *oldEnabled == "0") {
+                config_.llmEngine.setValue(LlmEngineKind::Off);
+            }
+            llmMigrated = true;
+            FCITX_INFO() << "AiInput: 迁移 LLMEnabled=" << *oldEnabled
+                         << " → LLMEngine="
+                         << (config_.llmEngine.value() == LlmEngineKind::Off
+                                 ? "Off"
+                                 : "Dummy");
+        }
+    }
     readAsIni(config_, "conf/aiinput.config");
     migrateLegacyConfig();
+    if (llmMigrated) {
+        safeSaveAsIni(config_, "conf/aiinput.config"); // 落新键、清旧键
+    }
     if (popup_) { // 定位策略热更新（PositionMode/PositionFallbackApps）
         popup_->setPositionPolicy(config_.positionMode.value(),
                                   config_.positionFallbackApps.value());
@@ -681,12 +705,16 @@ void AiInputEngine::pushUiState() {
             }
             arr += "\"" + flutterJsonEscape(candidates_[i]) + "\"";
         }
-        // hover：鼠标悬停优先，否则键盘方向键选择行
+        // hover：鼠标悬停优先，否则键盘方向键选择行；llmDummy=占位档
+        // 标记（Dart 给润色行打「Dummy 润色」tag，未实装期可辨识）
         const int hover = uiHoverRow_ >= 0 ? uiHoverRow_ : keyboardRow_;
+        const bool llmDummy =
+            config_.llmEngine.value() == LlmEngineKind::Dummy;
         flutter_->sendUpdate(
             "{\"state\":\"candidates\",\"final\":\"" +
             flutterJsonEscape(finalText_) + "\",\"candidates\":[" + arr +
-            "],\"hover\":" + std::to_string(hover) + anim + "}");
+            "],\"hover\":" + std::to_string(hover) +
+            (llmDummy ? ",\"llmDummy\":true" : "") + anim + "}");
         break;
     }
     case State::Idle:
@@ -858,7 +886,9 @@ void AiInputEngine::onFlutterMessage(const std::string &method,
                             sessionIcRef_.get());
         }
     } else if (method == "hoverChanged") {
+        // 测试观测钩子（r23 扫射点击的命中反馈；与 mouse-click-row 同型）
         uiHoverRow_ = numOf(args, "row");
+        FCITX_LOG(Info) << "AiInput: [ui] hover-row: " << uiHoverRow_;
     } else if (method == "ready") {
         FCITX_INFO() << "AiInput: Flutter UI ready";
         pushUiState();
@@ -924,6 +954,7 @@ bool AiInputEngine::handleKey(const Key &key, bool pressed,
                         : -1;
                 keyboardRow_ = static_cast<int>(
                     (keyboardRow_ + n + delta) % n);
+                uiHoverRow_ = -1; // 键盘接管选择：静止悬停让位（动鼠标再接管）
                 uiNotify("arrow-select", std::to_string(keyboardRow_));
                 pushUiState(); // 内联 preedit 同步到新选中行
                 return true;
@@ -1139,11 +1170,12 @@ void AiInputEngine::onAsrFinish(const std::string &text) {
         popup_->resolvePendingToLayer();
     }
     finalText_ = text;
-    if (config_.llmEnabled.value()) {
-        // Dummy 阶段：候选 = [润色版, 原始版]（润色=保尾标点，真实 LLM 后替换）
+    if (config_.llmEngine.value() == LlmEngineKind::Dummy) {
+        // Dummy 占位阶段：候选 = [润色版, 原始版]（润色=保尾标点，真实 LLM 后替换）
         candidates_ = {polish(finalText_), finalText_};
         state_ = State::Candidates;
         keyboardRow_ = 0;
+        uiHoverRow_ = -1; // 上会话悬停残留不清会盖住首行选中显示
         pushUiState();
         uiNotify("candidates", joinCandidates());
     } else {

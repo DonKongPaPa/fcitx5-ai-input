@@ -428,6 +428,7 @@ void FlutterEngineHost::updateMetrics(double width, double height,
     metrics.width = width;   // 物理像素 = 逻辑 × ratio
     metrics.height = height; //
     metrics.pixel_ratio = pixelRatio;
+    lastRatio_ = pixelRatio;
     FlutterEngineSendWindowMetricsEvent(engine_, &metrics);
 }
 
@@ -449,6 +450,10 @@ void FlutterEngineHost::onPointer(PointerKind kind, double x, double y) {
     if (!engine_) {
         return;
     }
+    // embedder 约定 FlutterPointerEvent.x/y 是物理像素（与 metrics 同一
+    // 空间），引擎内部再 ÷dpr 还原逻辑做命中。调用方给的是表面局部
+    // 逻辑坐标——不乘这一下，命中位置会被缩到左上 1/scale：副屏
+    // 「指针在第二行、高亮在第一行」与卡片下方红区仍能悬停的根因
     auto send = [this](FlutterPointerPhase phase, double px, double py,
                        int64_t buttons) {
         FlutterPointerEvent ev = {};
@@ -459,8 +464,8 @@ void FlutterEngineHost::onPointer(PointerKind kind, double x, double y) {
                                     std::chrono::steady_clock::now()
                                         .time_since_epoch())
                                     .count());
-        ev.x = px;
-        ev.y = py;
+        ev.x = px * lastRatio_;
+        ev.y = py * lastRatio_;
         ev.device = 0;
         ev.signal_kind = kFlutterPointerSignalKindNone;
         ev.device_kind = kFlutterPointerDeviceKindMouse;
@@ -473,7 +478,11 @@ void FlutterEngineHost::onPointer(PointerKind kind, double x, double y) {
             ptrAdded_ = true;
             send(kAdd, x, y, 0);
         }
-        send(ptrDown_ ? kMove : kHover, x, y, ptrDown_ ? kPrimaryButton : 0);
+        // Enter 不补发 kHover：Enter 常是「表面在静止指针下方弹出」，
+        // 合成 hover 会立即抢走方向键选择；真实移动走 Motion 的 kHover
+        if (ptrDown_) {
+            send(kMove, x, y, kPrimaryButton);
+        }
         break;
     case PointerKind::Leave:
         if (ptrAdded_) {

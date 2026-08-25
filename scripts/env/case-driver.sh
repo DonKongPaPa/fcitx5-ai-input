@@ -157,11 +157,11 @@ rm -f "$TEST_RESULT_FILE"
 "$DIST_BIN/$TESTAPP" >"$LOG_DIR/testapp-r4.log" 2>&1 &
 R4_PID=$!
 sleep 2
-# LLM 关 → Result 态自动上屏（Candidates 态不自动提交，r6 再覆盖）；
+# LLM 关（LLMEngine=Off）→ Result 态自动上屏（Candidates 态不自动提交，r6 再覆盖）；
 # 同时顺带覆盖 configtool SetConfig 链路
 gdbus call --session --dest org.fcitx.Fcitx5 --object-path /controller \
     --method org.fcitx.Fcitx.Controller1.SetConfig \
-    "fcitx://config/addon/aiinput" "<{'LLMEnabled': <'False'>}>" >/dev/null 2>&1 || true
+    "fcitx://config/addon/aiinput" "<{'LLMEngine': <'Off'>}>" >/dev/null 2>&1 || true
 sleep 0.5
 im_before="$(fcitx5-remote -n 2>/dev/null || true)"
 # 录屏取证（popup 卡片渲染）
@@ -193,7 +193,7 @@ im_after="$(fcitx5-remote -n 2>/dev/null || true)"
 # 恢复 LLM 开；确保回 idle（不把 Result/Candidates 残留给 r5）
 gdbus call --session --dest org.fcitx.Fcitx5 --object-path /controller \
     --method org.fcitx.Fcitx.Controller1.SetConfig \
-    "fcitx://config/addon/aiinput" "<{'LLMEnabled': <'True'>}>" >/dev/null 2>&1 || true
+    "fcitx://config/addon/aiinput" "<{'LLMEngine': <'Dummy'>}>" >/dev/null 2>&1 || true
 case "$(call State 2>/dev/null || true)" in *idle*) ;; *)
     call SimulateKey Control_R true >/dev/null 2>&1 || true
     call SimulateKey Control_R false >/dev/null 2>&1 || true;; esac
@@ -666,11 +666,18 @@ if [ -n "${CAGE_SOCK:-}" ] && command -v virtpoint >/dev/null 2>&1 && \
         call InjectKey "$r23k" false >/dev/null 2>&1 || true
         sleep 0.3
     done
-    # hover+点击候选行 1（16pt 字体布局更高：行 1 中心 ≈640,130）
-    "$DIST_BIN/virtpoint" move 640 130 1280 720 2>/dev/null || true
-    sleep 0.6
-    "$DIST_BIN/virtpoint" click left 2>/dev/null || true
-    sleep 1.5
+    # hover+点击候选行：虚拟指针的 motion_absolute 在 niri 里随指针历史
+    # 换算（不同 scale/前序用例下落点漂移，静态坐标不可靠）——从上往下
+    # 逐点试探，ui-hover 命中行即点击
+    for r23y in 120 160 200 240 280 320 360 400; do
+        "$DIST_BIN/virtpoint" move 640 "$r23y" 1280 720 2>/dev/null || true
+        sleep 0.4
+        if tail -n +$((r23_mark+1)) "$FCITX_LOG" | grep -aq 'hover-row: [01]'; then
+            "$DIST_BIN/virtpoint" click left 2>/dev/null || true
+            sleep 1.2
+            break
+        fi
+    done
     r23_win="$(tail -n +$((r23_mark+1)) "$FCITX_LOG")"
     r23_click="$(printf '%s' "$r23_win" | grep -ac 'mouse-click-row' || true)"
     r23_commit="$(printf '%s' "$r23_win" | grep -ac 'committed' || true)"

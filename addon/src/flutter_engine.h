@@ -65,10 +65,11 @@ public:
     // C++→Dart 状态推送（argsJson 为 update 的 JSON 对象体）
     void sendUpdate(const std::string &argsJson);
 
-    // 窗口尺寸（逻辑像素；pixelRatio 当前固定 1.0——popup 池即逻辑尺寸）
+    // 窗口尺寸：width/height 是物理像素（= 逻辑 × pixelRatio，引擎不再乘）
     void updateMetrics(double width, double height, double pixelRatio);
 
-    // popup_surface 指针事件入口（内部合成 Add/Remove/Hover/Down/Move/Up）
+    // popup_surface 指针事件入口（x/y 为表面局部逻辑坐标；内部换算到
+    // metrics 的物理空间后送引擎——见 onPointer 实现）
     void onPointer(PointerKind kind, double x, double y);
 
 private:
@@ -128,6 +129,10 @@ private:
     // 指针状态（Flutter 需要 Add 在前 / Remove 后不再发）
     bool ptrAdded_ = false;
     bool ptrDown_ = false;
+    // 最近一次 updateMetrics 的 dpr：指针逻辑坐标 × 它 = 物理坐标。
+    // 记在引擎侧而非每次向 popup 查 scale——指针必须落在与当前 metrics
+    // 相同的空间里，scale 变化与 metrics 定时器（defer 1ms）之间有竞态
+    double lastRatio_ = 1.0;
 
     FrameCallback frameCb_;
     MessageHandler handler_;

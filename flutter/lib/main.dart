@@ -30,8 +30,9 @@ const double kMaxW = 420;
 // 卡片阴影余量：快照区比卡片四周各大这么多（BoxShadow blur10+spread1
 // 超出边界 ~11px）；指针坐标是含余量的表面局部坐标，Padding 天然吸收
 const double kShadowPad = 12;
-// 增长余量：内容自然长高的当前帧先落在透明余量里，resize 下一帧跟上
-const double kGrowthSlack = 20;
+// 增长余量（曾为 20：吸收 resize 跟进前的过渡帧——窗口改跟内容实
+// 尺寸后无用，只余每侧死边距：卡片被推离光标 + 下方悬停死区）
+const double kGrowthSlack = 0;
 
 // 全局动画时长：基准毫秒 × 挡位系数（与 C++ animScaleOf 对应：快 1.0/
 // 标准 1.6/慢 3.0，默认慢速——挡位由 C++ 随每条 update/font 消息下发）
@@ -63,6 +64,7 @@ class SessionData {
   final int elapsedMs; // 录音计时
   final int timeoutMs; // result 停留时长（倒计时条）
   final int hover; // 键盘方向键选择行（-1=无；鼠标 hover 是本地状态）
+  final bool llmDummy; // LLM 为占位档（润色行打 Dummy 标记）
   const SessionData({
     this.state = UiState.idle,
     this.partial = '',
@@ -71,6 +73,7 @@ class SessionData {
     this.elapsedMs = 0,
     this.timeoutMs = 1500,
     this.hover = -1,
+    this.llmDummy = false,
   });
 }
 
@@ -116,6 +119,10 @@ class _VoiceUiHomeState extends State<VoiceUiHome> {
   int _mouseHover = -1; // 鼠标悬停行（本地状态；键盘选择走 data.hover）
   Size _lastReported = Size.zero;
   final GlobalKey _cardKey = GlobalKey(); // 卡片实际尺寸回读（布局后）
+  // 内容实尺寸（VoicePanel 自然尺寸）：窗口上报的度量源。AnimatedSize
+  // 的盒子是"动画中的视觉裁剪"，会滞留在中间值——曾致窗口比内容小、
+  // 行的命中区伸出可见卡片之外（卡片下方仍能悬停到行）
+  final GlobalKey _panelKey = GlobalKey();
 
   void _invoke(String method, [dynamic args]) {
     _ch.invokeMethod(method, args).catchError((_) => null);
@@ -132,7 +139,8 @@ class _VoiceUiHomeState extends State<VoiceUiHome> {
     // 直到下一次 setState 才"神奇恢复"）
     WidgetsBinding.instance.addPersistentFrameCallback((_) {
       if (!mounted) return;
-      final ro = _cardKey.currentContext?.findRenderObject();
+      var ro = _panelKey.currentContext?.findRenderObject();
+      ro ??= _cardKey.currentContext?.findRenderObject();
       if (ro is RenderBox && ro.hasSize) {
         _reportSize(ro.size);
       }
@@ -140,17 +148,19 @@ class _VoiceUiHomeState extends State<VoiceUiHome> {
   }
 
   void _reportSize(Size card) {
-    // 尺寸量化到 32px 步进（向上取整）：动画期间卡片逐帧生长，若逐帧
-    // 上报，C++ 每帧重建 shm 池+metrics 重排——流式期进度条掉帧的主因。
-    // 量化后窗口始终 ≥ 卡片（余量吸收差值，透明不可见），重建次数降一个
-    // 数量级
-    const q = 32.0;
+    // 窗口 = 卡片 + 四周 kShadowPad 阴影余量，实时精确跟随（不量化）：
+    // 尺寸源是 _panelKey 自然尺寸，状态切换一步到位而非逐帧生长，每会话
+    // 仅数次 resize；shm 池桶内换 buffer 代价低。量化步进只剩死边距
+    //（卡片下方红区悬停到行的空间就是这么来的）
     final win = Size(
-      ((card.width + (kShadowPad + kGrowthSlack) * 2) / q).ceilToDouble() * q,
-      ((card.height + (kShadowPad + kGrowthSlack) * 2) / q).ceilToDouble() * q,
+      (card.width + (kShadowPad + kGrowthSlack) * 2).ceilToDouble(),
+      (card.height + (kShadowPad + kGrowthSlack) * 2).ceilToDouble(),
     );
     if (win != _lastReported) {
-      _lastReported = win;
+      // setState 必须有：SizedBox(_lastReported) 是布局输入，不重建则
+      // 卡片钉在旧窗口里不重新居中——命中布局与渲染视图脱时代（长文本
+      // 卡片最明显：hover 整体偏移的根源）
+      setState(() => _lastReported = win);
       _invoke('resize', {'w': win.width.ceil(), 'h': win.height.ceil()});
     }
   }
@@ -203,12 +213,16 @@ class _VoiceUiHomeState extends State<VoiceUiHome> {
         break;
       case 'candidates':
         _ticker?.cancel();
-        _mouseHover = -1;
+        final int msgHover = (msg['hover'] as num?)?.toInt() ?? -1;
+        // hover 值 ≠ 本地悬停 = 键盘改了选择（或新会话）→ 悬停让位，
+        // 方向键接管显示；鼠标再次移动经 onHover 重新接管
+        _mouseHover = msgHover == _mouseHover ? _mouseHover : -1;
         _update(SessionData(
           state: UiState.candidates,
           resultText: msg['final'] as String? ?? '',
           candidates: (msg['candidates'] as List?)?.cast<String>() ?? const [],
-          hover: (msg['hover'] as num?)?.toInt() ?? -1,
+          hover: msgHover,
+          llmDummy: msg['llmDummy'] == true,
         ));
         break;
       default:
@@ -251,6 +265,10 @@ class _VoiceUiHomeState extends State<VoiceUiHome> {
 
   void _onHoverRow(int row) {
     if (_mouseHover != row) {
+      // ignore: avoid_print
+      print('ui-hover: row=$row');
+    }
+    if (_mouseHover != row) {
       setState(() => _mouseHover = row);
       _invoke('hoverChanged', {'row': row});
     }
@@ -289,12 +307,18 @@ class _VoiceUiHomeState extends State<VoiceUiHome> {
             // 曾把尺寸回读环死锁在初始 56×56）；超出窗口的部分由 surface
             // 裁掉，kGrowthSlack 余量兜住 resize 跟进前的过渡帧
             child: OverflowBox(
-              alignment: Alignment.center,
+              // 顶部对齐：卡片贴住表面顶（= 光标下方），量化余量全部
+              // 沉到底部——居中对齐会把卡推离光标形成视觉空隙
+              // 顶部对齐但留 kShadowPad：阴影向上溢出卡片边界，贴 0 会被
+              // 窗口顶切掉（顶部阴影截断）；量化余量仍沉底
+              alignment: Alignment(0, -1),
               minWidth: 0,
               maxWidth: double.infinity,
               minHeight: 0,
               maxHeight: double.infinity,
-              child: KeyedSubtree(
+              child: Padding(
+                padding: const EdgeInsets.only(top: kShadowPad),
+                child: KeyedSubtree(
                 key: _cardKey,
                 child: AnimatedSize(
                   // 卡片尺寸动画（视觉过渡）：child 自然尺寸布局，
@@ -309,19 +333,23 @@ class _VoiceUiHomeState extends State<VoiceUiHome> {
                       minWidth: 360 * _fontScale,
                       maxWidth: 420 * _fontScale,
                     ),
-                    child: VoicePanel(
+                    child: KeyedSubtree(
+                      key: _panelKey,
+                      child: VoicePanel(
                       data: _data,
                       mouseHover: _mouseHover,
                       animScale: _animScale,
                       onHover: _onHoverRow,
                       onSelect: _selectCandidate,
+                      ),
                     ),
                   ),
                 ),
               ),
+              ),
             ),
           ),
-        ),
+          ),
       ),
     );
   }
@@ -392,18 +420,18 @@ String _fmtMs(int ms) {
 }
 
 // —— 会话卡片（录音/结果/候选同一张卡片，连续形变）——
-// 录音→候选分两拍：先主文本行原位冻结成「识别结果」候选行（徽标+tag
-// 淡入），LLM 润色行延后入场——对应真实 LLM 的异步时序（识别输出完毕
-// 的结果固定在位，优化步骤再排序插入）。行为自绘顶对齐（不用
-// ListTile：其多行内容的垂直居中会让 padding-top 漂移）；头部固定槽，
-// 内容差异不再顶动下方行。
-class _SessionBody extends StatefulWidget {
+// 状态切换内容一次到位（徽标/tag/头部各自淡入淡出），尺寸变化全靠外层
+// 唯一的 AnimatedSize 形变——新尺寸中途到达会重新定向（可打断），卡片
+// 不重建、不分拍增长。行为自绘顶对齐（不用 ListTile：其多行内容的
+// 垂直居中会让 padding-top 漂移）；头部固定槽，内容差异不再顶动下方行。
+class _SessionBody extends StatelessWidget {
   final SessionData data;
   final int mouseHover; // 鼠标悬停行（-1=无）
   final double animScale; // 全局动画速率挡位系数
   final ValueChanged<int> onHover;
   final ValueChanged<int> onSelect;
   const _SessionBody({
+    super.key,
     required this.data,
     required this.mouseHover,
     required this.animScale,
@@ -412,42 +440,10 @@ class _SessionBody extends StatefulWidget {
   });
 
   @override
-  State<_SessionBody> createState() => _SessionBodyState();
-}
-
-class _SessionBodyState extends State<_SessionBody> {
-  bool _showPolish = false; // 润色行是否入场（录音→候选的第二拍）
-  Timer? _polishTimer;
-
-  @override
-  void didUpdateWidget(covariant _SessionBody old) {
-    super.didUpdateWidget(old);
-    final d = widget.data.state;
-    if (d == UiState.candidates && old.data.state == UiState.recording) {
-      // 第一拍立刻生效（徽标+识别结果 tag）；第二拍延后
-      _showPolish = false;
-      _polishTimer?.cancel();
-      _polishTimer = Timer(animDurOf(widget.animScale, 500), () {
-        if (mounted && widget.data.state == UiState.candidates) {
-          setState(() => _showPolish = true);
-        }
-      });
-    } else if (d == UiState.candidates) {
-      _showPolish = true; // 非录音直入候选（如重触发）：无分拍
-    }
-  }
-
-  @override
-  void dispose() {
-    _polishTimer?.cancel();
-    super.dispose();
-  }
-
-  @override
   Widget build(BuildContext context) {
     final theme = Theme.of(context);
     final cs = theme.colorScheme;
-    final d = widget.data;
+    final d = data;
     final isCand = d.state == UiState.candidates;
     final items = d.candidates.take(2).toList();
 
@@ -486,7 +482,7 @@ class _SessionBodyState extends State<_SessionBody> {
             child: Padding(
               padding: const EdgeInsets.fromLTRB(12, 8, 12, 2),
               child: AnimatedSwitcher(
-                duration: animDurOf(widget.animScale, 180),
+                duration: animDurOf(animScale, 180),
                 child: switch (d.state) {
                   UiState.recording => Row(
                       key: const ValueKey('rec'),
@@ -561,36 +557,31 @@ class _SessionBodyState extends State<_SessionBody> {
             ),
           ),
         ),
-        // —— 文本区（AnimatedSize 平滑长高/推入润色行）——
-        AnimatedSize(
-          duration: animDurOf(widget.animScale, 220),
-          curve: Curves.easeOutCubic,
-          alignment: Alignment.topCenter,
-          child: Column(
-            crossAxisAlignment: CrossAxisAlignment.stretch,
-            mainAxisSize: MainAxisSize.min,
-            children: [
-              if (isCand && items.isNotEmpty && _showPolish)
-                TweenAnimationBuilder<double>(
-                  // 润色行入场（第二拍）：淡入，推展由外层 AnimatedSize
-                  tween: Tween(begin: 0, end: 1),
-                  duration: animDurOf(widget.animScale, 220),
-                  builder: (_, v, child) => Opacity(opacity: v, child: child),
-                  child: _row(theme, cs,
-                      index: 0,
-                      text: items[0],
-                      style: theme.textTheme.titleSmall!,
-                      interactive: true,
-                      tag: '润色版'),
-                ),
-              _row(theme, cs,
-                  index: 1,
-                  text: mainText.isEmpty ? ' ' : mainText,
-                  style: mainStyle,
-                  interactive: isCand && items.length > 1,
-                  tag: isCand && items.length > 1 ? '识别结果' : null),
-            ],
-          ),
+        // —— 文本区（尺寸变化统一由外层 AnimatedSize 形变，单一可打断）——
+        Column(
+          crossAxisAlignment: CrossAxisAlignment.stretch,
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            if (isCand && items.isNotEmpty)
+              TweenAnimationBuilder<double>(
+                // 润色行淡入（候选内容一次到位，无分拍）
+                tween: Tween(begin: 0, end: 1),
+                duration: animDurOf(animScale, 220),
+                builder: (_, v, child) => Opacity(opacity: v, child: child),
+                child: _row(theme, cs,
+                    index: 0,
+                    text: items[0],
+                    style: theme.textTheme.titleSmall!,
+                    interactive: true,
+                    tag: data.llmDummy ? 'Dummy 润色' : '润色版'),
+              ),
+            _row(theme, cs,
+                index: 1,
+                text: mainText.isEmpty ? ' ' : mainText,
+                style: mainStyle,
+                interactive: isCand && items.length > 1,
+                tag: isCand && items.length > 1 ? '识别结果' : null),
+          ],
         ),
         // —— 底部条（SizedBox 固定 6px 槽：minHeight:3 的指示器实际渲染
         // 偏高 ~4.5px，曾在录音态撑出底部溢出）——
@@ -610,20 +601,22 @@ class _SessionBodyState extends State<_SessionBody> {
     );
   }
 
-  // 数字徽标（圆形）
-  Widget _badge(ColorScheme cs, int number, {required bool primary}) {
+  // 数字徽标（圆形）：选中=实心主色、未选=描边——徽标编码选中态，
+  // 双行文本几乎一样（占位润色只差句号）也能一眼看出选中了哪行
+  Widget _badge(ColorScheme cs, int number, {required bool selected}) {
     return Container(
       width: 20,
       height: 20,
       alignment: Alignment.center,
       decoration: BoxDecoration(
-        color: primary ? cs.primary : cs.surfaceContainerHighest,
+        color: selected ? cs.primary : null,
         shape: BoxShape.circle,
+        border: selected ? null : Border.all(color: cs.outlineVariant),
       ),
       child: Text('$number',
           style: TextStyle(
             fontSize: 11,
-            color: primary ? cs.onPrimary : cs.onSurfaceVariant,
+            color: selected ? cs.onPrimary : cs.onSurfaceVariant,
           )),
     );
   }
@@ -638,10 +631,10 @@ class _SessionBodyState extends State<_SessionBody> {
       required bool interactive,
       String? tag}) {
     final hovered = interactive &&
-        (widget.mouseHover >= 0 ? widget.mouseHover : widget.data.hover) ==
+        (mouseHover >= 0 ? mouseHover : data.hover) ==
             index;
     Widget core = AnimatedContainer(
-      duration: animDurOf(widget.animScale, 100),
+      duration: animDurOf(animScale, 100),
       color: hovered ? cs.surfaceContainerHighest : null,
       child: Padding(
         padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 6),
@@ -649,9 +642,9 @@ class _SessionBodyState extends State<_SessionBody> {
           crossAxisAlignment: CrossAxisAlignment.start,
           children: [
             AnimatedOpacity(
-              duration: animDurOf(widget.animScale, 220),
+              duration: animDurOf(animScale, 220),
               opacity: interactive ? 1 : 0,
-              child: _badge(cs, index + 1, primary: index == 0),
+              child: _badge(cs, index + 1, selected: hovered),
             ),
             const SizedBox(width: 8),
             Expanded(
@@ -660,13 +653,13 @@ class _SessionBodyState extends State<_SessionBody> {
                 mainAxisSize: MainAxisSize.min,
                 children: [
                   AnimatedDefaultTextStyle(
-                    duration: animDurOf(widget.animScale, 180),
+                    duration: animDurOf(animScale, 180),
                     style: style,
                     child: Text(text, softWrap: true),
                   ),
                   if (tag != null)
                     AnimatedOpacity(
-                      duration: animDurOf(widget.animScale, 220),
+                      duration: animDurOf(animScale, 220),
                       opacity: interactive ? 1 : 0,
                       child: Padding(
                         padding: const EdgeInsets.only(top: 2),
@@ -691,11 +684,13 @@ class _SessionBodyState extends State<_SessionBody> {
     }
     return MouseRegion(
       cursor: SystemMouseCursors.click,
-      onEnter: (_) => widget.onHover(index),
-      onExit: (_) => widget.onHover(-1),
+      // 只挂 onHover（真实移动事件）：静止指针下弹出/布局变化合成的
+      // onEnter 不选择——否则静止鼠标压住方向键选择
+      onHover: (_) => onHover(index),
+      onExit: (_) => onHover(-1),
       child: GestureDetector(
         behavior: HitTestBehavior.opaque,
-        onTap: () => widget.onSelect(index),
+        onTap: () => onSelect(index),
         child: core,
       ),
     );

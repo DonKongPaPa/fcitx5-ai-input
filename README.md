@@ -58,7 +58,7 @@ bash /usr/lib/fcitx5-aiinput/scripts/fetch-sherpa-models.sh --model sensevoice
 1. 任意输入框获得焦点（任意输入法状态）
 2. **按住右 Ctrl** 开始说话（超过长按阈值，默认 300ms；Toggle 模式则再按一次结束）
 3. 卡片实时显示识别中间结果，并跟随光标移动
-4. 松开：直接上屏（默认），或进候选框选择（LLM 候选开启时）
+4. 松开：直接上屏（默认），或进候选框选择（LLM 引擎非 Off 时）
    - 候选态：`1-9` 选对应项 / `↑↓←→` 换行 / `Enter` 选首项 / `Esc` 取消
    - 鼠标：hover 高亮 + 点击选择
 5. 录音中 `Esc` / `Backspace` 取消整轮（候选/结果态同义）
@@ -76,7 +76,7 @@ bash /usr/lib/fcitx5-aiinput/scripts/fetch-sherpa-models.sh --model sensevoice
 | PositionMode | auto | auto=可跟随则跟随否则底部居中 / caret=强制跟随 / bottom / top |
 | PositionFallbackApps | （空） | 强制底部居中的应用名单（程序名子串匹配） |
 | UIFont | （空） | 卡片字体（Pango 串；空=跟随 classicui 字体） |
-| LLMEnabled | true | 开启时结果先入候选框（当前润色为规则版，LLM 后端开发中） |
+| LLMEngine | Dummy | LLM 引擎：Dummy=占位润色（规则补标点，双行候选）/ Off=关闭（结果直接上屏）；真实双后端接入中 |
 | UiAnimSpeed | 慢速 | 卡片动画速率挡位（慢速/标准/快速，缩放全部过渡动画时长） |
 | PopupTimeoutMs | 1500 | 无候选时结果停留时长 |
 
@@ -88,6 +88,7 @@ FunASR 服务档：configtool「模型部署」组配置 `FunASRAutoStart` + `Fu
 - popup 生命周期照抄 classicui：每次显示销毁重建（重夺合成器的单槽追踪 + 继承最新矩形），隐藏即 unmap+销毁
 - Chromium/Electron 只在**文本变化时**上报光标矩形（焦点时不报）：录音开始即向应用打入可见组合文本探针（「语音输入中」逐字），组合变化逼应用重报矩形，流式识别文本接续灌入组合——卡片全程贴住光标
 - 无人报矩形的应用（或判定到录音结束仍无矩形）：layer-shell 底部居中兜底
+- D-Bus 前端的应用（`QT_IM_MODULE=fcitx` 的 Qt 应用/启动器，如 DMS）：IC 不经 waylandim、跟随路径整体不可达 → overlay 层底部居中卡片兜底，预编辑「语音输入中」经 D-Bus 照常送达应用（cursorRect 是窗口局部坐标，仅全屏窗口≈屏幕坐标——浮动面板下贴光标定位会结构性错位，故不做）
 
 ## 开发与测试
 
@@ -102,7 +103,7 @@ make test ENV=niri       # 33 例容器套件（录屏 + journal 断言 + 报告
 ## 已知限制
 
 - 无矩形上报且录音极短的场景，卡片首次出现在底部（跟随判定无解时兜底，非缺陷）
-- LLM 润色当前为规则占位（句末补标点），双后端接入开发中
+- LLM 润色当前为 Dummy 占位档（规则补标点，可在 configtool 切 Off 关闭候选直接上屏），双后端接入开发中
 - kwin / gnome-shell 环境跑过冒烟，定位链路以 niri/GNOME（mutter）验证最充分
 
 ## License
