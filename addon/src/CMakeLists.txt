@@ -13,9 +13,13 @@ target_link_libraries(aiinput PRIVATE Fcitx5::Module::DBus)
 find_package(Fcitx5ModuleWayland CONFIG REQUIRED)
 target_link_libraries(aiinput PRIVATE Fcitx5::Module::Wayland)
 # XWayland 矩形换算：xcb 主显示判定（isXWayland）+ 独立 xcb 连接查
-# _NET_ACTIVE_WINDOW/WM_CLASS/输出区段（无 X 环境自动跳过）
+# _NET_ACTIVE_WINDOW/WM_CLASS/输出区段（无 X 环境自动跳过）。
+# 坑：Fcitx5::Module::XCB 是 INTERFACE 目标只给头文件路径，libxcb
+# 必须显式链——惰性绑定下漏链在无 X 的容器里测不出（符号从未解析），
+# 上机一调 xcb_connect 即 symbol lookup error 崩掉 fcitx5
 find_package(Fcitx5ModuleXCB CONFIG REQUIRED)
 target_link_libraries(aiinput PRIVATE Fcitx5::Module::XCB)
+# libxcb 链接在下方 fontconfig 的 PkgConfig 初始化之后统一声明
 
 # —— Flutter raw embedder 引擎（进程内嵌入，软渲染）——
 # 头文件 vendor 在 addon/third_party/；libflutter_engine.so 由
@@ -54,6 +58,8 @@ target_link_libraries(aiinput PRIVATE pthread)
 find_package(PkgConfig REQUIRED)
 pkg_check_modules(FONTCONFIG REQUIRED IMPORTED_TARGET fontconfig)
 target_link_libraries(aiinput PRIVATE PkgConfig::FONTCONFIG)
+pkg_check_modules(XCB REQUIRED IMPORTED_TARGET xcb)
+target_link_libraries(aiinput PRIVATE PkgConfig::XCB)
 
 # input-method-v2 协议（wlroots/fcitx5 扩展，不在 wayland-protocols 包内）
 find_program(WAYLAND_SCANNER_EXECUTABLE wayland-scanner REQUIRED)
