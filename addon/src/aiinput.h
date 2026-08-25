@@ -133,6 +133,7 @@ private:
     void onAsrFinish(const std::string &text);
     void onAsrPartial(const std::string &text);
     void enterIdle();
+    void resetSession(); // 会话 IC 销毁时回收（防触发吞掉）
     void startThresholdTimer();
     void startResultTimer();
     void ensureTestService();

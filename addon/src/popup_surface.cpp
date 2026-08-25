@@ -621,7 +621,8 @@ bool VoicePopup::rectIsXPhysical(const Rect &rect) {
     if (maxW <= 0 || maxH <= 0) {
         return false; // 输出几何未知：无法判
     }
-    return rect.left() > maxW + 64 || rect.top() > maxH + 64;
+    // 容差 2：wayland 逻辑值最多到逻辑尺寸-1，任何超出都是物理坐标
+    return rect.left() > maxW + 2 || rect.top() > maxH + 2;
 }
 
 bool VoicePopup::focusedX11WindowLocked() {
@@ -688,6 +689,11 @@ bool VoicePopup::focusedX11WindowLocked() {
         FCITX_INFO() << "VoicePopup: [x11diag] 查询中连接死掉";
         xBroken_ = true;
         return false;
+    }
+    if (active != xActiveLast_) {
+        xActiveLast_ = active;
+        FCITX_INFO() << "VoicePopup: [x11diag] 活动 X 窗 "
+                     << (active ? "存在（聚焦应用=X）" : "无（聚焦应用=wayland）");
     }
     return active;
 }

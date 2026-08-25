@@ -418,7 +418,14 @@ AiInputEngine::AiInputEngine(Instance *instance)
             if (!ic) {
                 return;
             }
-            // 活动会话只认会话 IC；其他窗口的按键不掺和
+            // 活动会话只认会话 IC；其他窗口的按键不掺和。
+            // 会话 IC 已销毁（应用窗口被关等）时自愈到 Idle——死 IC 会
+            // 把后续所有触发吞掉（候选残留 + sessionIcRef 悬挂，本晚两
+            // 次实测：WPS/ghostty「不弹卡、连预编辑都没有」即此）
+            if (state_ != State::Idle && sessionIcRef_.get() == nullptr) {
+                FCITX_INFO() << "AiInput: 会话 IC 已销毁，会话自愈到 Idle";
+                resetSession();
+            }
             if (state_ != State::Idle && ic != sessionIcRef_.get()) {
                 return;
             }
@@ -1255,6 +1262,13 @@ void AiInputEngine::commitCandidate(size_t index, InputContext *ic) {
     uiNotify("committed", text);
     enterIdle();
     nudgeCaretRect(ic ? ic : sessionIcRef_.get());
+}
+
+// 会话 IC 已销毁时回收会话（死 IC 悬挂会把后续所有触发吞掉）
+void AiInputEngine::resetSession() {
+    FCITX_INFO() << "AiInput: 会话回收（IC 已销毁，state="
+                 << stateName() << "）";
+    enterIdle();
 }
 
 void AiInputEngine::enterIdle() {
