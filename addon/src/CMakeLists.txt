@@ -12,6 +12,10 @@ find_package(Fcitx5ModuleDBus CONFIG REQUIRED)
 target_link_libraries(aiinput PRIVATE Fcitx5::Module::DBus)
 find_package(Fcitx5ModuleWayland CONFIG REQUIRED)
 target_link_libraries(aiinput PRIVATE Fcitx5::Module::Wayland)
+# XWayland 矩形换算：xcb 主显示判定（isXWayland）+ 独立 xcb 连接查
+# _NET_ACTIVE_WINDOW/WM_CLASS/输出区段（无 X 环境自动跳过）
+find_package(Fcitx5ModuleXCB CONFIG REQUIRED)
+target_link_libraries(aiinput PRIVATE Fcitx5::Module::XCB)
 
 # —— Flutter raw embedder 引擎（进程内嵌入，软渲染）——
 # 头文件 vendor 在 addon/third_party/；libflutter_engine.so 由

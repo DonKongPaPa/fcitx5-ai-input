@@ -6,6 +6,7 @@
 #include <fcitx-utils/handlertable.h>
 #include <fcitx-utils/trackableobject.h>
 #include <fcitx/event.h>
+#include <xcb/xcb.h>
 #include <wayland_public.h>
 
 #include <functional>
@@ -43,9 +44,16 @@ struct zxdg_output_v1;
 struct OutputGeom {
     int32_t physW = 0, physH = 0;          // wl_output mode
     int32_t logicalW = 0, logicalH = 0;    // zxdg_output logical_size
+    int32_t logicalX = 0, logicalY = 0;    // zxdg_output logical_position
     double scale() const {
         return (logicalW > 0 && physW > 0)
                    ? static_cast<double>(physW) / logicalW : 0;
+    }
+    // XWayland 的输出区段：位置=逻辑原点、范围=物理尺寸（xrandr 实测：
+    // X 屏把每个输出按物理大小摆进逻辑布局——X 坐标是物理像素）
+    bool containsXPoint(int32_t x, int32_t y) const {
+        return physW > 0 && x >= logicalX && y >= logicalY &&
+               x < logicalX + physW && y < logicalY + physH;
     }
 };
 
@@ -189,6 +197,8 @@ public:
                                uint32_t scale);
     static void xdgLogicalSize(void *data, zxdg_output_v1 *xo, int32_t w,
                            int32_t h);
+    static void xdgLogicalPos(void *data, zxdg_output_v1 *xo, int32_t x,
+                              int32_t y);
     static void surfaceEnter(void *data, wl_surface *s, wl_output *o);
     static void surfaceLeave(void *data, wl_surface *s, wl_output *o);
     static void layerConfigure(void *data, zwlr_layer_surface_v1 *ls,
@@ -211,6 +221,16 @@ private:
     // overlay 兜底层的锚定：follow 档按 IC 光标矩形贴光标（含翻转/钳
     // 制），默认/无矩形底部（或 policy 的顶部）居中。持锁调用
     void anchorOverlayLocked(InputContext *ic);
+    // XWayland 应用的矩形换算：DBus IC 的光标矩形在 X 应用（WPS 等 Qt
+    // 程序经 XWayland）下是 X 全局**物理**像素（xrandr 实测 X 屏按物理
+    // 尺寸摆进逻辑布局），须除以所在输出 scale 转逻辑。wayland 原生应用
+    // （DMS/gnome-text-editor，无 X 窗口）的矩形本就是逻辑值，返回 false
+    // 走原样路径。判定：xcb 主显示存在且为 XWayland + 当前活动 X 窗口
+    // 的 WM_CLASS 与 IC program 互为子串（分类按 program 缓存，X 查询
+    // 每会话只做一次）。持锁调用（X roundtrip 仅首查）
+    bool tryX11TranslateLocked(const std::string &program, Rect *rect,
+                               const OutputGeom **outGeom);
+    void ensureX11Atoms();
     std::string toLower(std::string s);
 
     Instance *instance_;
@@ -251,6 +271,14 @@ private:
     zwp_input_method_v2 *im_ = nullptr; // 借用：waylandim 所有
     zwp_input_popup_surface_v2 *popup_ = nullptr;
     wl_surface *surface_ = nullptr;
+
+    // —— XWayland 矩形换算（独立连接，仅查询不订阅事件）——
+    xcb_connection_t *xconn_ = nullptr;
+    xcb_window_t xroot_ = XCB_WINDOW_NONE;
+    bool xTried_ = false, xBroken_ = false;
+    std::map<std::string, bool> xClassCache_; // program → 是否 X 应用
+    uint32_t xAtomActiveWindow_ = XCB_ATOM_NONE, xAtomWmClass_ = XCB_ATOM_NONE,
+             xAtomPid_ = XCB_ATOM_NONE, xAtomClientList_ = XCB_ATOM_NONE;
 
     // layer-shell 回退（chromium 系；anchorBottom_ 底部居中为默认，兼容
     // 旧值 "top" 顶部居中）
