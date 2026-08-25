@@ -282,6 +282,7 @@ private:
     xcb_window_t xroot_ = XCB_WINDOW_NONE;
     bool xTried_ = false, xBroken_ = false;
     bool xActiveLast_ = false; // 活动窗判定结果（日志去重）
+    int xErrLog_ = 0;          // X 错误日志限流
     std::map<std::string, bool> xClassCache_; // program → 是否 X 应用
     uint32_t xAtomActiveWindow_ = XCB_ATOM_NONE, xAtomWmClass_ = XCB_ATOM_NONE,
              xAtomClientList_ = XCB_ATOM_NONE;

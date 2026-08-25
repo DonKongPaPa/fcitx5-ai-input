@@ -720,7 +720,14 @@ void VoicePopup::ensureX11EventSource() {
 void VoicePopup::handleX11Events() {
     std::lock_guard<std::mutex> lock(mutex_);
     while (auto *e = xcb_poll_for_event(xconn_)) {
-        if (e->response_type == 0) { // X 错误
+        if (e->response_type == 0) { // X 错误（此前静默吞——BadGC 等）
+            if (xErrLog_ < 8) {
+                ++xErrLog_;
+                auto *xerr = reinterpret_cast<xcb_generic_error_t *>(e);
+                FCITX_WARN() << "VoicePopup: [x11diag] X 错误 code="
+                             << int(xerr->error_code) << " seq="
+                             << xerr->sequence;
+            }
             free(e);
             continue;
         }
@@ -863,10 +870,8 @@ void VoicePopup::pushFrameX11Locked(const uint8_t *bgra, int w, int h) {
                               xLastRect_.top() + xLastRect_.height() + gap, w,
                               h, 0, XCB_WINDOW_CLASS_INPUT_OUTPUT,
                               scr->root_visual, mask, vals);
-            if (xgc_ == XCB_NONE) {
-                xgc_ = xcb_generate_id(xconn_);
-                xcb_create_gc(xconn_, xgc_, xwin_, 0, nullptr);
-            }
+            xgc_ = xcb_generate_id(xconn_);
+            xcb_create_gc(xconn_, xgc_, xwin_, 0, nullptr);
             xcb_map_window(xconn_, xwin_);
             FCITX_INFO() << "VoicePopup: X OR 卡片窗 0x" << std::hex
                          << xwin_ << std::dec << " " << w << "x" << h
@@ -895,6 +900,13 @@ void VoicePopup::destroyX11WindowLocked() {
         xcb_destroy_window(xconn_, xwin_);
         xcb_flush(xconn_);
     }
+    // GC 的 drawable 随窗失效：留着必 BadGC（曾致 put_image 全败、
+    // 窗口映射着但全透明不可见）
+    if (xgc_ != XCB_NONE && xconn_) {
+        xcb_free_gc(xconn_, xgc_);
+        xcb_flush(xconn_);
+    }
+    xgc_ = XCB_NONE;
     xwin_ = XCB_WINDOW_NONE;
     xwinW_ = xwinH_ = 0;
     if (xshm_ != XCB_NONE && xconn_) {

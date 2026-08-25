@@ -427,7 +427,14 @@ AiInputEngine::AiInputEngine(Instance *instance)
                 resetSession();
             }
             if (state_ != State::Idle && ic != sessionIcRef_.get()) {
-                return;
+                // 其它窗口的普通按键不掺和；但触发键=换目标：结束旧会话
+                //（旧规则直接吞触发——候选残留时切应用再触发全无响应）
+                if (isTriggerKey(keyEvent.key()) && !keyEvent.isRelease()) {
+                    FCITX_INFO() << "AiInput: 跨 IC 触发——回收旧会话";
+                    resetSession();
+                } else {
+                    return;
+                }
             }
             const bool trig = isTriggerKey(keyEvent.key());
             const bool handled =
