@@ -300,6 +300,8 @@ private:
     // X 应用判定（xcb 模块主显示为 XWayland + 活动窗 WM_CLASS ↔ program；
     // 按 program 缓存）。持锁调用，X 查询每应用一次
     bool isX11AppLocked(const std::string &program);
+    // program 异步到达的补判：矩形变化时 layer → X OR 窗升级。持锁调用
+    void tryUpgradeToX11Locked(InputContext *ic);
 
     // layer-shell 回退（chromium 系；anchorBottom_ 底部居中为默认，兼容
     // 旧值 "top" 顶部居中）

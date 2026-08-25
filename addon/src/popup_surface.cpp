@@ -469,6 +469,11 @@ VoicePopup::VoicePopup(Instance *instance) : instance_(instance) {
             auto *ic = ie.inputContext();
             std::lock_guard<std::mutex> lock(mutex_);
             if (dbusFollow_ && overlayFallback_ && ic == icRef_.get()) {
+                if (!x11Mode_) {
+                    // 首次 FocusIn 时 program 未到（空串）会先落 layer：
+                    // 矩形变化时 program 已就位则升级成 X OR 窗
+                    tryUpgradeToX11Locked(ic);
+                }
                 // X 应用走 OR 窗重摆；wayland 原生走 layer 重锚
                 if (x11Mode_) {
                     if (ic->cursorRect().height() > 0) {
@@ -577,8 +582,33 @@ void VoicePopup::ensureX11Atoms() {
     xAtomClientList_ = intern("_NET_CLIENT_LIST");
 }
 
+// layer → X OR 窗升级：program 异步到达后的补判（首 FocusIn 时空串）
+void VoicePopup::tryUpgradeToX11Locked(InputContext *ic) {
+    if (x11Mode_ || !dbusFollow_ || !overlayFallback_ || xBroken_ ||
+        !ic || ic != icRef_.get()) {
+        return;
+    }
+    const auto prog = toLower(ic->program());
+    if (prog.empty() || !isX11AppLocked(prog)) {
+        return;
+    }
+    // 判成 X 应用：拆 layer 表面，改走 X OR 窗（首帧到达时建窗）
+    destroyPopupSurface();
+    x11Mode_ = true;
+    if (ic->cursorRect().height() > 0) {
+        xLastRect_ = ic->cursorRect();
+    }
+    if (modeSwitchHandler_) {
+        modeSwitchHandler_(); // 引擎重推一帧 → X 窗建窗
+    }
+    FCITX_INFO() << "VoicePopup: X OR 卡片模式（矩形变化时升级，"
+                 << ic->program() << "）";
+}
+
 bool VoicePopup::isX11AppLocked(const std::string &program) {
     if (xBroken_ || program.empty()) {
+        FCITX_INFO() << "VoicePopup: [x11diag] 判定早退 program=\"" << program
+                     << "\" xBroken_=" << xBroken_;
         return false;
     }
     if (auto it = xClassCache_.find(program); it != xClassCache_.end()) {
@@ -589,10 +619,12 @@ bool VoicePopup::isX11AppLocked(const std::string &program) {
         // 只认 XWayland 主显示（xcb 模块的判定；无 X 环境直接放弃）
         auto *xcb = instance_->addonManager().addon("xcb", true);
         if (!xcb) {
+            FCITX_INFO() << "VoicePopup: [x11diag] xcb addon 不可用";
             xBroken_ = true;
             return false;
         }
         auto name = xcb->call<IXCBModule::mainDisplay>();
+        FCITX_INFO() << "VoicePopup: [x11diag] xcb 主显示=\"" << name << "\"";
         if (name.empty() || !xcb->call<IXCBModule::isXWayland>(name)) {
             xBroken_ = true;
             return false;
@@ -600,6 +632,8 @@ bool VoicePopup::isX11AppLocked(const std::string &program) {
         int screen = 0;
         xconn_ = xcb_connect(name.c_str(), &screen);
         if (xcb_connection_has_error(xconn_)) {
+            FCITX_INFO() << "VoicePopup: [x11diag] xcb_connect 失败 err="
+                         << xcb_connection_has_error(xconn_);
             xcb_disconnect(xconn_);
             xconn_ = nullptr;
             xBroken_ = true;
@@ -694,6 +728,7 @@ bool VoicePopup::isX11AppLocked(const std::string &program) {
         free(r);
     }
     if (xcb_connection_has_error(xconn_)) {
+        FCITX_INFO() << "VoicePopup: [x11diag] 查询中连接死掉";
         xBroken_ = true; // X 连接中途死掉：本会话不再尝试
         return false;
     }
@@ -1312,7 +1347,10 @@ bool VoicePopup::ensurePopup(InputContext *ic, bool atShow) {
     // X 应用的 overlay 兜底走 X OR 窗口（classicui 同款传输层）：
     // satellite 把 OR 窗转 xdg_popup 挂聚焦 X 顶层窗，真实窗口原点由
     // 合成器叠加——wayland 层拿不到 X 应用的窗口原点（右列错位根因）
-    if (overlay && dbusFollow_ &&
+    // 注意 program 时序：DBus 前端首次 FocusIn 时 program 常还是空串
+    //（异步到达），此处判不上不急——矩形变化时会经
+    // tryUpgradeToX11Locked 重试升级
+    if (overlay && dbusFollow_ && !ic->program().empty() &&
         isX11AppLocked(toLower(ic->program()))) {
         if (x11Mode_ && icRef_.get() == ic) {
             return true; // 同 IC 复用
