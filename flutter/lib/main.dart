@@ -150,20 +150,19 @@ class _VoiceUiHomeState extends State<VoiceUiHome> {
   }
 
   void _reportSize(Size card) {
-    // 尺寸量化到 32px 步进（向上取整）：动画期间卡片逐帧生长，若逐帧
-    // 上报，C++ 每帧重建 shm 池+metrics 重排——流式期进度条掉帧的主因。
-    // 量化后窗口始终 ≥ 卡片（余量吸收差值，透明不可见），重建次数降一个
-    // 数量级
-    const q = 16.0;
+    // 窗口 = 卡片 + 四周 kShadowPad 阴影余量，实时精确跟随（不量化）：
+    // 尺寸源是 _panelKey 自然尺寸，状态切换一步到位而非逐帧生长，每会话
+    // 仅数次 resize；shm 池桶内换 buffer 代价低。量化步进只剩死边距
+    //（卡片下方红区悬停到行的空间就是这么来的）
     final win = Size(
-      ((card.width + (kShadowPad + kGrowthSlack) * 2) / q).ceilToDouble() * q,
-      ((card.height + (kShadowPad + kGrowthSlack) * 2) / q).ceilToDouble() * q,
+      (card.width + (kShadowPad + kGrowthSlack) * 2).ceilToDouble(),
+      (card.height + (kShadowPad + kGrowthSlack) * 2).ceilToDouble(),
     );
     if (win != _lastReported) {
       _logDiag();
       // setState 必须有：SizedBox(_lastReported) 是布局输入，不重建则
-      // 卡片钉在旧窗口里不重新居中——命中布局与渲染视图脱时代（量化
-      // 余量差几十 px，长文本卡片最明显：hover 整体偏移的根源）
+      // 卡片钉在旧窗口里不重新居中——命中布局与渲染视图脱时代（长文本
+      // 卡片最明显：hover 整体偏移的根源）
       setState(() => _lastReported = win);
       _invoke('resize', {'w': win.width.ceil(), 'h': win.height.ceil()});
     }
