@@ -29,7 +29,7 @@ bash scripts/fetch-sherpa-models.sh      # 流式模型 → ~/.local/share/fcitx
 make test ENV=niri
   └─ scripts/run-test.sh                 # 宿主侧编排
        └─ podman run aiinput-niri     # 挂载 /scripts /opt/dist /tests /samples [/models]
-            └─ start-niri.sh MODE=case   # 无头桌面拉起（cage 托管 niri + 录屏器）
+            └─ start-niri.sh MODE=case   # 无头桌面拉起（sway 托管 niri，1080p + 录屏器）
                  └─ case-driver.sh       # 用例执行（本套件核心）
                       ├─ record <id> <pass|fail> <msg>   # 每例一行 → case-results.jsonl
                       ├─ journal 断言（grep addon 日志）
@@ -37,7 +37,8 @@ make test ENV=niri
        └─ scripts/report.py              # 汇总 report.json/html（失败用例并排播放本次 vs 基准录屏）
 ```
 
-- **一个桌面 = 一个容器**：niri（cage 托管）/ kde（kwin_wayland + sway 托管）/ gnome（mutter 嵌套 + sway 托管）；镜像层级 base → host → 各桌面，`aiinput-build` 为编译镜像，`aiinput-funasr` 为 FunASR 服务镜像
+- **一个桌面 = 一个容器**：niri（sway 托管，1920×1080 headless——cage 的 headless 输出 1280×720 硬编码不可调）/ kde（kwin_wayland + sway 托管）/ gnome（mutter 嵌套 + sway 托管）；镜像层级 base → host → 各桌面，`aiinput-build` 为编译镜像，`aiinput-funasr` 为 FunASR 服务镜像
+- **scale 矩阵**：`make test` 默认两轮（scale 1.0 正常 + 2.0 放大，各自独立报告）；`NIRI_TEST_SCALE=x` 单档、`SCALE_MATRIX="1.0 1.5 2.0"` 自定义。用例内坐标全部经 virtpoint extent 归一化（分辨率无关），像素断言用比例值
 - **确定性触发**：测试经 D-Bus 测试钩子（`org.fcitx.AiInput.Test` 的 `SimulateKey` / `InjectKey` / `State` / `Candidates` / `Trigger`）直达 addon 状态机，不依赖真实 ASR；真实音频用例经虚拟麦（`play_to_mic`）喂 wav
 - `SimulateKey` 只喂状态机；`InjectKey` 走真实事件管线（验证拦截/透传语义）；裸字母键在 keyboard-us 下不会到达应用文本框（只有组合文本会）——需要应用侧文本变化时用触发键/候选上屏或拼音组合
 - **两组结构（2026-08-26 重构，37→20）**：S 组 s1-s5 = 部署后运行检查（模块/引擎/版本/基本会话 E2E/HealthCheck，`SUITE=smoke` 单独跑）；C 组 c1-c15 = corner case 集中轮（键盘语义、IC 生命周期、看门狗、失焦自愈、定位矩阵、引擎档）。完整 20 例仅在 niri 达成，kde/gnome 镜像缺 chromium/virtpoint 的用例自动记"pass（跳过）"

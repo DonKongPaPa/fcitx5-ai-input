@@ -1,12 +1,14 @@
 # niri 测试环境（最小）
-# 无头方案：cage(wlroots headless, 60Hz 帧时钟) 托管 niri 嵌套运行
-#（niri 官方不支持 headless 输出，见 niri-wm/niri Discussion #714）
+# 无头方案：sway(wlroots headless, 帧时钟) 托管 niri 嵌套运行
+#（niri 官方不支持 headless 输出，见 niri-wm/niri Discussion #714；
+#  曾用 cage 托管，但其 headless 输出 1280x720 硬编码不可调——1080p 需
+#  sway 的 output resolution 配置，与 kde/gnome 环境同款托管）
 FROM aiinput-host:latest
 
 USER root
 
 RUN pacman -Syu --noconfirm --needed \
-        niri fcitx5-configtool grim \
+        niri sway fcitx5-configtool grim \
         chromium fcitx5-chinese-addons python-pillow \
         && pacman -Scc --noconfirm
 

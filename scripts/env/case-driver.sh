@@ -42,20 +42,45 @@ export TEST_RESULT_FILE="$OUT_DIR/testapp.jsonl"
 RESULTS="$OUT_DIR/case-results.jsonl"
 : >"$RESULTS"
 
-record() {  # record <id> <status> <note>
-    jq -cn --arg id "$1" --arg status "$2" --arg note "$3" \
+record() {  # record <id> <status> <note> [rec-<id>.mp4]
+    local rec="${4:-}"
+    [ -n "$rec" ] && [ -s "$OUT_DIR/$rec" ] || rec=""
+    jq -cn --arg id "$1" --arg status "$2" --arg note "$3" --arg rec "$rec" \
         '{id:$id,status:$status,expected:"",actual:$note,diff_note:$note,
-          latency_ms:0,recording:""}' >>"$RESULTS"
+          latency_ms:0,recording:$rec}' >>"$RESULTS"
     echo "   → $2 ($1)"
 }
 
+REC_PID=""
+rec_start() {  # rec_start <case-id>：整例录屏（取证 + make baseline 素材）
+    [ -n "${CAGE_SOCK:-}" ] || { REC_PID=""; return 0; }
+    rm -f "$OUT_DIR/rec-$1.mp4"
+    WAYLAND_DISPLAY="$CAGE_SOCK" wf-recorder $RECORDER_OPTS --codec libx264 -p crf=30 -r 24 \
+        -f "$OUT_DIR/rec-$1.mp4" >"$LOG_DIR/wf-recorder-$1.log" 2>&1 &
+    REC_PID=$!
+    sleep 0.7
+}
+rec_stop() {
+    [ -n "$REC_PID" ] || return 0
+    kill -INT "$REC_PID" 2>/dev/null || true
+    for _ in $(seq 1 20); do kill -0 "$REC_PID" 2>/dev/null || break; sleep 0.3; done
+    kill -9 "$REC_PID" 2>/dev/null || true
+    wait "$REC_PID" 2>/dev/null || true
+    REC_PID=""
+}
+
+# xtrace 落盘：挂起类问题的直接证据（卡住的最后一行）
+exec {XTRACEFD}>"$LOG_DIR/driver-trace.log"
+export BASH_XTRACEFD
+set -x
+
 FCITX_LOG="$LOG_DIR/fcitx5.log"
-call() { gdbus call --session --dest org.fcitx.Fcitx5 \
+call() { timeout 30 gdbus call --session --dest org.fcitx.Fcitx5 \
     --object-path /org/fcitx/AiInput \
     --method org.fcitx.AiInput.Test."$1" "${@:2}" 2>&1; }
 
 set_cfg() {  # set_cfg "<{'K': <'v'>, ...}>"——值必须字符串（int32 被静默丢弃）
-    gdbus call --session --dest org.fcitx.Fcitx5 --object-path /controller \
+    timeout 30 timeout 30 gdbus call --session --dest org.fcitx.Fcitx5 --object-path /controller \
         --method org.fcitx.Fcitx.Controller1.SetConfig \
         "fcitx://config/addon/aiinput" "$1" >/dev/null 2>&1 || true
 }
@@ -133,6 +158,7 @@ fi
 "$DIST_BIN/$TESTAPP" >"$LOG_DIR/testapp-s4.log" 2>&1 &
 S4_PID=$!
 sleep 2
+rec_start s4
 set_cfg "<{'LLMEngine': <'Off'>}>"
 sleep 0.5
 im_before="$(fcitx5-remote -n 2>/dev/null || true)"
@@ -155,9 +181,11 @@ case "$s4_state" in *recording*) ;; *) s4_notes="未进入录音（$s4_state）"
 [ -n "$s4_actual" ] || s4_notes="${s4_notes:+$s4_notes；}无上屏文本"
 [ "$im_before" = "$im_after" ] || s4_notes="${s4_notes:+$s4_notes；}IM 被切换：$im_before→$im_after"
 if [ -z "$s4_notes" ]; then
-    record s4-session-e2e pass "共存态触发录音→「$s4_actual」自动上屏，IM 未切换"
+    rec_stop
+    record s4-session-e2e pass "共存态触发录音→「$s4_actual」自动上屏，IM 未切换" "rec-s4.mp4"
 else
-    record s4-session-e2e fail "$s4_notes"
+    rec_stop
+    record s4-session-e2e fail "$s4_notes" "rec-s4.mp4"
 fi
 
 # s5 部署健康检查（HealthCheck JSON 各字段 + deep 试加载）
@@ -293,6 +321,7 @@ if [ -n "${CAGE_SOCK:-}" ] && command -v grim >/dev/null 2>&1 && \
     QT_IM_MODULE=fcitx "$DIST_BIN/testapp-qt" >"$LOG_DIR/testapp-c5.log" 2>&1 &
     C5_PID=$!
     sleep 2
+    rec_start c5
     NIRI_SOCK_FILE="$(ls "$XDG_RUNTIME_DIR" 2>/dev/null | grep -m1 '^niri\.')"
     if [ -n "$NIRI_SOCK_FILE" ]; then
         NIRI_SOCKET="$XDG_RUNTIME_DIR/$NIRI_SOCK_FILE" niri msg action maximize-column >/dev/null 2>&1 || true
@@ -309,6 +338,7 @@ if [ -n "${CAGE_SOCK:-}" ] && command -v grim >/dev/null 2>&1 && \
     c5_anchor="$(printf '%s' "$c5_win" | grep -ac '贴光标锚定' || true)"
     back_to_idle
     kill "$C5_PID" 2>/dev/null || true
+    rec_stop
     set_cfg "<{'DbusPosition': <'bottom'>}>"
     c5_frac="$(python3 - "$OUT_DIR/c5-dbus-follow.png" <<'PYEOF' 2>/dev/null || echo "-1 -1"
 import sys
@@ -332,9 +362,9 @@ PYEOF
     c5_xf="${c5_frac%% *}"; c5_yf="${c5_frac##* }"
     if [ "$c5_overlay" -ge 1 ] && [ "$c5_anchor" -ge 1 ] && \
        python3 -c "import sys; sys.exit(0 if 0.0 <= float('$c5_xf') < 0.45 else 1)"; then
-        record c5-dbus-follow pass "DBus IC 贴光标：overlay+锚定 + 圆底在左侧（x=$c5_xf y=$c5_yf）"
+        record c5-dbus-follow pass "DBus IC 贴光标：overlay+锚定 + 圆底在左侧（x=$c5_xf y=$c5_yf）" "rec-c5.mp4"
     else
-        record c5-dbus-follow fail "follow 未生效（overlay=$c5_overlay anchor=$c5_anchor x=$c5_xf y=$c5_yf）"
+        record c5-dbus-follow fail "follow 未生效（overlay=$c5_overlay anchor=$c5_anchor x=$c5_xf y=$c5_yf）" "rec-c5.mp4"
     fi
 else
     record c5-dbus-follow pass "（跳过：无截图环境）"
@@ -354,9 +384,10 @@ if [ -n "${CAGE_SOCK:-}" ] && command -v grim >/dev/null 2>&1 && \
     weston-flower >"$LOG_DIR/flower-c6.log" 2>&1 &
     C6_FLOWER=$!
     sleep 2
+    rec_start c6
     # 焦点还给 testapp 输入框（flower 抢过）
-    "$DIST_BIN/virtpoint" move 540 80 1280 720 2>/dev/null || true
-    "$DIST_BIN/virtpoint" click left 2>/dev/null || true
+    timeout 10 "$DIST_BIN/virtpoint" move 540 80 1280 720 2>/dev/null || true
+    timeout 10 "$DIST_BIN/virtpoint" click left 2>/dev/null || true
     sleep 0.5
     call SimulateKey "Control+Control_R" true >/dev/null 2>&1 || true
     sleep 1.2
@@ -372,10 +403,10 @@ if [ -n "${CAGE_SOCK:-}" ] && command -v grim >/dev/null 2>&1 && \
     done
     # hover 扫射+点击（motion_absolute 落点随指针历史漂移——静态坐标不可靠）
     for c6y in 120 160 200 240 280 320 360 400; do
-        "$DIST_BIN/virtpoint" move 640 "$c6y" 1280 720 2>/dev/null || true
+        timeout 10 "$DIST_BIN/virtpoint" move 640 "$c6y" 1280 720 2>/dev/null || true
         sleep 0.4
         if tail -n +$((c6_mark+1)) "$FCITX_LOG" | grep -aq 'hover-row: [01]'; then
-            "$DIST_BIN/virtpoint" click left 2>/dev/null || true
+            timeout 10 "$DIST_BIN/virtpoint" click left 2>/dev/null || true
             sleep 1.2
             break
         fi
@@ -387,22 +418,23 @@ if [ -n "${CAGE_SOCK:-}" ] && command -v grim >/dev/null 2>&1 && \
     c6_commit="$(printf '%s' "$c6_win" | grep -ac 'committed' || true)"
     # 隐藏后穿透：先点 flower 抢走焦点，再点 testapp 输入框（≈530,80，
     # 卡片出现过的区域）——被残留输入区挡住则焦点回不来
-    "$DIST_BIN/virtpoint" move 128 108 1280 720 2>/dev/null || true
-    "$DIST_BIN/virtpoint" click left 2>/dev/null || true
+    timeout 10 "$DIST_BIN/virtpoint" move 128 108 1280 720 2>/dev/null || true
+    timeout 10 "$DIST_BIN/virtpoint" click left 2>/dev/null || true
     sleep 0.5
     C6_FOCUSED_BEFORE=$(grep -ac 'focus-in' "$LOG_DIR/testapp-c6.log" || true)
-    "$DIST_BIN/virtpoint" move 530 80 1280 720 2>/dev/null || true
-    "$DIST_BIN/virtpoint" click left 2>/dev/null || true
+    timeout 10 "$DIST_BIN/virtpoint" move 530 80 1280 720 2>/dev/null || true
+    timeout 10 "$DIST_BIN/virtpoint" click left 2>/dev/null || true
     sleep 1
     C6_FOCUSED_AFTER=$(grep -ac 'focus-in' "$LOG_DIR/testapp-c6.log" || true)
     kill "$C6_PID" "$C6_FLOWER" 2>/dev/null || true
+    rec_stop
     set_cfg "<{'PositionMode': <'auto'>, 'UIFont': <''>}>"
     back_to_idle
     if [ "$c6_layer" -ge 1 ] && [ "$c6_conf" -ge 1 ] && [ "$c6_click" -ge 1 ] && \
        [ "$c6_commit" -ge 1 ] && [ "$C6_FOCUSED_AFTER" -gt "$C6_FOCUSED_BEFORE" ]; then
-        record c6-position-explicit pass "top 档：layer 就绪 + hover/点击/方向键闭环 + 隐藏后穿透（焦点 $C6_FOCUSED_BEFORE→$C6_FOCUSED_AFTER）"
+        record c6-position-explicit pass "top 档：layer 就绪 + hover/点击/方向键闭环 + 隐藏后穿透（焦点 $C6_FOCUSED_BEFORE→$C6_FOCUSED_AFTER）" "rec-c6.mp4"
     else
-        record c6-position-explicit fail "layer=$c6_layer conf=$c6_conf click=$c6_click commit=$c6_commit 焦点 $C6_FOCUSED_BEFORE→$C6_FOCUSED_AFTER"
+        record c6-position-explicit fail "layer=$c6_layer conf=$c6_conf click=$c6_click commit=$c6_commit 焦点 $C6_FOCUSED_BEFORE→$C6_FOCUSED_AFTER" "rec-c6.mp4"
     fi
 else
     record c6-position-explicit pass "（跳过：无 virtpoint/录屏环境）"
@@ -430,9 +462,10 @@ HTML
         >"$LOG_DIR/chromium-c7.log" 2>&1 &
     C7_PID=$!
     sleep 10
+    rec_start c7
     # 幕1：点击字段 → 录音 → 上屏
-    "$DIST_BIN/virtpoint" move 300 420 1280 720 2>/dev/null || true
-    "$DIST_BIN/virtpoint" click left 2>/dev/null || true
+    timeout 10 "$DIST_BIN/virtpoint" move 300 420 1280 720 2>/dev/null || true
+    timeout 10 "$DIST_BIN/virtpoint" click left 2>/dev/null || true
     sleep 0.8
     call SimulateKey "Control+Control_R" true >/dev/null 2>&1 || true
     sleep 1.2
@@ -453,7 +486,7 @@ HTML
     call SimulateKey "Return" false >/dev/null 2>&1 || true
     sleep 1.5
     # 幕3：pinyin 抢槽 → 再录（重建重夺）
-    gdbus call --session --dest org.fcitx.Fcitx5 --object-path /controller \
+    timeout 30 gdbus call --session --dest org.fcitx.Fcitx5 --object-path /controller \
         --method org.fcitx.Fcitx.Controller1.SetCurrentIM "pinyin" >/dev/null 2>&1 || true
     sleep 0.5
     for c7_k in N I H A O; do
@@ -465,7 +498,7 @@ HTML
     WAYLAND_DISPLAY="$CAGE_SOCK" grim "$OUT_DIR/c7-classicui.png" 2>>"$LOG_DIR/grim-c7.log" || true
     call InjectKey "Escape" true >/dev/null 2>&1 || true
     call InjectKey "Escape" false >/dev/null 2>&1 || true
-    gdbus call --session --dest org.fcitx.Fcitx5 --object-path /controller \
+    timeout 30 gdbus call --session --dest org.fcitx.Fcitx5 --object-path /controller \
         --method org.fcitx.Fcitx.Controller1.SetCurrentIM "keyboard-us" >/dev/null 2>&1 || true
     sleep 0.8
     call SimulateKey "Control+Control_R" true >/dev/null 2>&1 || true
@@ -478,6 +511,7 @@ HTML
     sleep 1.5
     pkill -f "chrome-c7" 2>/dev/null || true
     sleep 1
+    rec_stop
     back_to_idle
     c7_win="$(tail -n +$((c7_mark+1)) "$FCITX_LOG")"
     c7_w2="$(tail -n +$((c7_m2+1)) "$FCITX_LOG")"
@@ -492,7 +526,7 @@ HTML
     done
     if [ "$c7_commit" -ge 1 ] && [ "$c7_follow2" -ge 1 ] && [ "$c7_nolayer2" -eq 0 ] && \
        [ "$c7_rebuild" -ge 3 ] && [ "$c7_detach" -ge 2 ] && [ "$c7_shots" -ge 4 ]; then
-        record c7-chromium-follow pass "chromium 三幕：上屏记账 ×$c7_commit + 幕2 跟随（零回退）+ 抢槽后重建 ×$c7_rebuild（位置视觉复核 c7-*.png）"
+        record c7-chromium-follow pass "chromium 三幕：上屏记账 ×$c7_commit + 幕2 跟随（零回退）+ 抢槽后重建 ×$c7_rebuild（位置视觉复核 c7-*.png）" "rec-c7.mp4"
     else
         record c7-chromium-follow fail "commit=$c7_commit follow2=$c7_follow2 newlayer2=$c7_nolayer2 rebuild=$c7_rebuild detach=$c7_detach shots=$c7_shots"
     fi
@@ -510,9 +544,10 @@ if [ -n "${CAGE_SOCK:-}" ] && [ -x "$DIST_BIN/$TESTAPP" ] && [ -x "$DIST_BIN/vir
     "$DIST_BIN/$TESTAPP" >"$LOG_DIR/testapp-c8.log" 2>&1 &
     C8_PID=$!
     sleep 2
+    rec_start c8
     # 光标 A 点（输入框左侧）→ 录音 1
-    "$DIST_BIN/virtpoint" move 540 80 1280 720 2>/dev/null || true
-    "$DIST_BIN/virtpoint" click left 2>/dev/null || true
+    timeout 10 "$DIST_BIN/virtpoint" move 540 80 1280 720 2>/dev/null || true
+    timeout 10 "$DIST_BIN/virtpoint" click left 2>/dev/null || true
     sleep 1.6  # GTK 焦点报文从容到达 → sawRealRect_ 置位 → 探针自跳过
     call SimulateKey "Control+Control_R" true >/dev/null 2>&1 || true
     sleep 1.2
@@ -523,7 +558,7 @@ if [ -n "${CAGE_SOCK:-}" ] && [ -x "$DIST_BIN/$TESTAPP" ] && [ -x "$DIST_BIN/vir
     call SimulateKey "Return" false >/dev/null 2>&1 || true
     sleep 1.5
     # classicui 抢槽：切 pinyin 打字（字母必须走 InjectKey——拼音引擎才看得见）
-    gdbus call --session --dest org.fcitx.Fcitx5 --object-path /controller \
+    timeout 30 gdbus call --session --dest org.fcitx.Fcitx5 --object-path /controller \
         --method org.fcitx.Fcitx.Controller1.SetCurrentIM "pinyin" >/dev/null 2>&1 || true
     sleep 0.5
     for c8_k in N N H H; do
@@ -534,12 +569,12 @@ if [ -n "${CAGE_SOCK:-}" ] && [ -x "$DIST_BIN/$TESTAPP" ] && [ -x "$DIST_BIN/vir
     sleep 1
     call InjectKey "Escape" true >/dev/null 2>&1 || true
     call InjectKey "Escape" false >/dev/null 2>&1 || true
-    gdbus call --session --dest org.fcitx.Fcitx5 --object-path /controller \
+    timeout 30 gdbus call --session --dest org.fcitx.Fcitx5 --object-path /controller \
         --method org.fcitx.Fcitx.Controller1.SetCurrentIM "keyboard-us" >/dev/null 2>&1 || true
     sleep 0.8
     # 光标 B 点（右侧）→ 录音 2（重建 popup 贴新光标）
-    "$DIST_BIN/virtpoint" move 700 80 1280 720 2>/dev/null || true
-    "$DIST_BIN/virtpoint" click left 2>/dev/null || true
+    timeout 10 "$DIST_BIN/virtpoint" move 700 80 1280 720 2>/dev/null || true
+    timeout 10 "$DIST_BIN/virtpoint" click left 2>/dev/null || true
     sleep 0.8
     call SimulateKey "Control+Control_R" true >/dev/null 2>&1 || true
     sleep 1.2
@@ -550,13 +585,14 @@ if [ -n "${CAGE_SOCK:-}" ] && [ -x "$DIST_BIN/$TESTAPP" ] && [ -x "$DIST_BIN/vir
     call SimulateKey "Return" false >/dev/null 2>&1 || true
     sleep 1.5
     kill "$C8_PID" 2>/dev/null || true
+    rec_stop
     back_to_idle
     c8_win="$(tail -n +$((c8_mark+1)) "$FCITX_LOG")"
     c8_detach="$(printf '%s' "$c8_win" | grep -ac 'popup 已 unmap+销毁' || true)"
     c8_rebuild="$(printf '%s' "$c8_win" | grep -ac '重建：重夺定位槽' || true)"
     c8_real="$(printf '%s' "$c8_win" | grep -ac '收到真实光标矩形' || true)"
     if [ "$c8_detach" -ge 2 ] && [ "$c8_rebuild" -ge 1 ] && [ "$c8_real" -ge 1 ]; then
-        record c8-refollow-gtk pass "GTK 两轮录音：hide 释放槽 ×$c8_detach + show 重建 ×$c8_rebuild + 真实矩形（位置视觉复核 c8-s1/2）"
+        record c8-refollow-gtk pass "GTK 两轮录音：hide 释放槽 ×$c8_detach + show 重建 ×$c8_rebuild + 真实矩形（位置视觉复核 c8-s1/2）" "rec-c8.mp4"
     else
         record c8-refollow-gtk fail "detach=$c8_detach rebuild=$c8_rebuild realrect=$c8_real"
     fi
@@ -576,8 +612,9 @@ if [ -n "${CAGE_SOCK:-}" ] && [ -x "$DIST_BIN/$TESTAPP" ] && [ -x "$DIST_BIN/vir
     weston-flower >"$LOG_DIR/flower-c9.log" 2>&1 &
     C9_FLOWER=$!
     sleep 2
-    "$DIST_BIN/virtpoint" move 540 80 1280 720 2>/dev/null || true
-    "$DIST_BIN/virtpoint" click left 2>/dev/null || true
+    rec_start c9
+    timeout 10 "$DIST_BIN/virtpoint" move 540 80 1280 720 2>/dev/null || true
+    timeout 10 "$DIST_BIN/virtpoint" click left 2>/dev/null || true
     sleep 0.8
     # 轮 1：处女字段首录（首下即跟随）
     call SimulateKey "Control+Control_R" true >/dev/null 2>&1 || true
@@ -589,11 +626,11 @@ if [ -n "${CAGE_SOCK:-}" ] && [ -x "$DIST_BIN/$TESTAPP" ] && [ -x "$DIST_BIN/vir
     call SimulateKey "Return" false >/dev/null 2>&1 || true
     sleep 1.5
     # 焦点切走（flower）再切回
-    "$DIST_BIN/virtpoint" move 128 108 1280 720 2>/dev/null || true
-    "$DIST_BIN/virtpoint" click left 2>/dev/null || true
+    timeout 10 "$DIST_BIN/virtpoint" move 128 108 1280 720 2>/dev/null || true
+    timeout 10 "$DIST_BIN/virtpoint" click left 2>/dev/null || true
     sleep 1
-    "$DIST_BIN/virtpoint" move 540 80 1280 720 2>/dev/null || true
-    "$DIST_BIN/virtpoint" click left 2>/dev/null || true
+    timeout 10 "$DIST_BIN/virtpoint" move 540 80 1280 720 2>/dev/null || true
+    timeout 10 "$DIST_BIN/virtpoint" click left 2>/dev/null || true
     sleep 1
     # 轮 2：重聚焦首录
     call SimulateKey "Control+Control_R" true >/dev/null 2>&1 || true
@@ -605,6 +642,7 @@ if [ -n "${CAGE_SOCK:-}" ] && [ -x "$DIST_BIN/$TESTAPP" ] && [ -x "$DIST_BIN/vir
     call SimulateKey "Return" false >/dev/null 2>&1 || true
     sleep 1.5
     kill "$C9_PID" "$C9_FLOWER" 2>/dev/null || true
+    rec_stop
     back_to_idle
     c9_win="$(tail -n +$((c9_mark+1)) "$FCITX_LOG")"
     c9_probe="$(printf '%s' "$c9_win" | grep -ac '探针' || true)"
@@ -614,7 +652,7 @@ if [ -n "${CAGE_SOCK:-}" ] && [ -x "$DIST_BIN/$TESTAPP" ] && [ -x "$DIST_BIN/vir
     c9_lead=$(grep -ac '"text":" "' "$LOG_DIR/testapp-c9.log" || true)
     if [ "$c9_nofallback" -eq 0 ] && [ "$c9_rebuild" -ge 1 ] && [ "$c9_rect" -ge 2 ] && \
        [ "$c9_lead" -eq 0 ]; then
-        record c9-first-press pass "首下即跟随（零回退+无残留空格）+ 矩形事件 ×$c9_rect（探针 ×$c9_probe；视觉复核 c9-*.png）"
+        record c9-first-press pass "首下即跟随（零回退+无残留空格）+ 矩形事件 ×$c9_rect（探针 ×$c9_probe；视觉复核 c9-*.png）" "rec-c9.mp4"
     else
         record c9-first-press fail "fallback=$c9_nofallback rebuild=$c9_rebuild rect=$c9_rect lead_space=$c9_lead"
     fi
@@ -630,8 +668,8 @@ if [ -n "${CAGE_SOCK:-}" ] && command -v chromium >/dev/null 2>&1 && [ -x "$DIST
     "$DIST_BIN/$TESTAPP" >"$LOG_DIR/testapp-c10.log" 2>&1 &
     C10_A=$!
     sleep 2
-    "$DIST_BIN/virtpoint" move 540 80 1280 720 2>/dev/null || true
-    "$DIST_BIN/virtpoint" click left 2>/dev/null || true
+    timeout 10 "$DIST_BIN/virtpoint" move 540 80 1280 720 2>/dev/null || true
+    timeout 10 "$DIST_BIN/virtpoint" click left 2>/dev/null || true
     sleep 1.6
     call SimulateKey "Control+Control_R" true >/dev/null 2>&1 || true
     sleep 1.2
@@ -649,8 +687,9 @@ if [ -n "${CAGE_SOCK:-}" ] && command -v chromium >/dev/null 2>&1 && [ -x "$DIST
         >"$LOG_DIR/chromium-c10.log" 2>&1 &
     C10_B=$!
     sleep 10
-    "$DIST_BIN/virtpoint" move 300 420 1280 720 2>/dev/null || true
-    "$DIST_BIN/virtpoint" click left 2>/dev/null || true
+    rec_start c10
+    timeout 10 "$DIST_BIN/virtpoint" move 300 420 1280 720 2>/dev/null || true
+    timeout 10 "$DIST_BIN/virtpoint" click left 2>/dev/null || true
     sleep 1
     call SimulateKey "Control+Control_R" true >/dev/null 2>&1 || true
     sleep 1.2
@@ -671,6 +710,7 @@ if [ -n "${CAGE_SOCK:-}" ] && command -v chromium >/dev/null 2>&1 && [ -x "$DIST
     sleep 1.5
     pkill -f "chrome-c10" 2>/dev/null || true
     sleep 1
+    rec_stop
     back_to_idle
     c10_w1="$(tail -n +$((c10_m1+1)) "$FCITX_LOG")"
     c10_w2="$(tail -n +$((c10_m2+1)) "$FCITX_LOG")"
@@ -681,7 +721,7 @@ if [ -n "${CAGE_SOCK:-}" ] && command -v chromium >/dev/null 2>&1 && [ -x "$DIST
     c10_nolayer2="$(printf '%s' "$c10_w2" | grep -ac 'layer surface created' || true)"
     if [ "$c10_rect" -ge 1 ] || [ "$c10_defer" -ge 1 ] || [ "$c10_switch" -ge 1 ]; then
         if [ "$c10_follow2" -ge 1 ] && [ "$c10_nolayer2" -eq 0 ]; then
-            record c10-cross-app pass "跨应用首聚：首轮信号 ✓（矩形 ×$c10_rect / 暂缓 ×$c10_defer），次轮跟随 ✓（视觉复核 c10-cross-*.png）"
+            record c10-cross-app pass "跨应用首聚：首轮信号 ✓（矩形 ×$c10_rect / 暂缓 ×$c10_defer），次轮跟随 ✓（视觉复核 c10-cross-*.png）" "rec-c10.mp4"
         else
             record c10-cross-app fail "首轮 ✓ 但次轮 follow2=$c10_follow2 newlayer2=$c10_nolayer2"
         fi
@@ -701,8 +741,9 @@ if [ -n "${CAGE_SOCK:-}" ] && [ -x "$DIST_BIN/$TESTAPP" ] && [ -x "$DIST_BIN/vir
     "$DIST_BIN/$TESTAPP" >"$LOG_DIR/testapp-c11.log" 2>&1 &
     C11_PID=$!
     sleep 2
-    "$DIST_BIN/virtpoint" move 540 80 1280 720 2>/dev/null || true
-    "$DIST_BIN/virtpoint" click left 2>/dev/null || true
+    rec_start c11
+    timeout 10 "$DIST_BIN/virtpoint" move 540 80 1280 720 2>/dev/null || true
+    timeout 10 "$DIST_BIN/virtpoint" click left 2>/dev/null || true
     sleep 0.8
     for c11_round in 1 2 3; do
         call SimulateKey "Control+Control_R" true >/dev/null 2>&1 || true
@@ -715,6 +756,7 @@ if [ -n "${CAGE_SOCK:-}" ] && [ -x "$DIST_BIN/$TESTAPP" ] && [ -x "$DIST_BIN/vir
         sleep 1.8
     done
     kill "$C11_PID" 2>/dev/null || true
+    rec_stop
     back_to_idle
     c11_win="$(tail -n +$((c11_mark+1)) "$FCITX_LOG")"
     c11_nudge="$(printf '%s' "$c11_win" | grep -ac '光标微移已注入' || true)"
@@ -722,7 +764,7 @@ if [ -n "${CAGE_SOCK:-}" ] && [ -x "$DIST_BIN/$TESTAPP" ] && [ -x "$DIST_BIN/vir
     c11_shots=0
     for i in 1 2 3; do [ -s "$OUT_DIR/c11-s$i.png" ] && c11_shots=$((c11_shots+1)); done
     if [ "$c11_nudge" -ge 3 ] && [ "$c11_rebuild" -ge 3 ] && [ "$c11_shots" -eq 3 ]; then
-        record c11-dictation pass "三轮连续听写：微移 ×$c11_nudge + 重建 ×$c11_rebuild（视觉复核 c11-s1/2/3）"
+        record c11-dictation pass "三轮连续听写：微移 ×$c11_nudge + 重建 ×$c11_rebuild（视觉复核 c11-s1/2/3）" "rec-c11.mp4"
     else
         record c11-dictation fail "nudge=$c11_nudge rebuild=$c11_rebuild shots=$c11_shots"
     fi

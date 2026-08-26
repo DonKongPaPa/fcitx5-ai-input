@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# niri 环境容器内编排：cage(wlroots headless, 60Hz 帧时钟) 托管 niri → wf-recorder 录屏
+# niri 环境容器内编排：sway(wlroots headless) 托管 niri（1080p）→ wf-recorder 录屏
 set -euo pipefail
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 # shellcheck source=common.sh
@@ -8,8 +8,10 @@ source "$SCRIPT_DIR/common.sh"
 DURATION="${DURATION:-10}"
 MODE="${MODE:-sleep}"   # M2 验证用 sleep；M3+ 换成 case 驱动
 
-# 1. cage 无头托管 niri（wlroots headless 有真实帧时钟；weston no-op 会卡死渲染）
-# W3 验证：HiDPI（scale=2）下整轮回归——niri 输出 2x，fractional scale 链路全走
+# 1. sway 无头宿主（wlroots headless 帧时钟）托管嵌套 niri
+#    （cage 的 headless 输出 1280x720 硬编码不可调——1080p 需 sway 的
+#    output resolution 配置；kde/gnome 环境同款托管。niri 官方不支持
+#    headless 直跑。W3：HiDPI 由 NIRI_TEST_SCALE 控制整轮）
 SCALE="${NIRI_TEST_SCALE:-2.0}"
 mkdir -p "$LOG_DIR/niri-cfg"
 # 坑：winit 后端的输出名（Smithay Winit Unknown）不吃 "*" 通配——
@@ -23,24 +25,29 @@ output "Winit" {
     scale $SCALE
 }
 KDL
+cat > "$LOG_DIR/sway-config" <<EOF
+output HEADLESS-1 resolution 1920x1080
+exec niri -c $LOG_DIR/niri-cfg/config.kdl
+EOF
 
 WLR_BACKENDS=headless WLR_LIBINPUT_NO_DEVICES=1 WLR_RENDERER_ALLOW_SOFTWARE=1 \
-    cage -d -s niri -- -c "$LOG_DIR/niri-cfg/config.kdl" >"$LOG_DIR/cage.log" 2>&1 &
-CAGE_PID=$!
+    sway -c "$LOG_DIR/sway-config" >"$LOG_DIR/sway.log" 2>&1 &
+HOST_PID=$!
 
 NIRI_SOCK=""
 for _ in $(seq 1 60); do
     # niri 的 IPC socket 文件名形如 niri.wayland-N.P.sock，直接标明了它的 wayland socket
     NIRI_SOCK="$(ls "$XDG_RUNTIME_DIR" 2>/dev/null | grep -oP '^niri\.\K[^.]+' | head -1 || true)"
     [ -n "$NIRI_SOCK" ] && break
+    kill -0 "$HOST_PID" 2>/dev/null || break
     sleep 0.5
 done
-[ -n "$NIRI_SOCK" ] || { echo "niri socket 未出现"; cat "$LOG_DIR/cage.log" >&2; exit 1; }
+[ -n "$NIRI_SOCK" ] || { echo "niri socket 未出现"; tail -30 "$LOG_DIR/sway.log" >&2; exit 1; }
 export WAYLAND_DISPLAY="$NIRI_SOCK"
-# 录屏对着 cage（另一个 socket）：嵌套 niri 的 screencopy 不出帧，
-# cage(wlroots) 的 screencopy 正常，画面内容即 niri 的输出
+# 录屏对着 sway（另一个 socket）：嵌套 niri 的 screencopy 不出帧，
+# sway(wlroots) 的 screencopy 正常，画面内容即 niri 的输出
 export CAGE_SOCK="$(ls "$XDG_RUNTIME_DIR" | grep -E '^wayland-[0-9]+$' | grep -v "^$NIRI_SOCK$" | head -1)"
-echo "niri 就绪：socket=$NIRI_SOCK（应用） / cage=$CAGE_SOCK（录屏）"
+echo "niri 就绪：socket=$NIRI_SOCK（应用） / sway=$CAGE_SOCK（录屏，1080p）"
 
 # 2. 公共栈（音频/虚拟麦克风/fcitx5）；ENABLE_STACK=0 时跳过（M2 仅验证合成器+录屏）
 if [ "${ENABLE_STACK:-1}" = "1" ]; then
@@ -60,13 +67,13 @@ fi
 # 3.5 用例驱动模式：交给 case-driver（自管录屏/触发/采集）
 if [ "$MODE" = "case" ]; then
     bash "$SCRIPT_DIR/case-driver.sh"
-    kill "$CAGE_PID" 2>/dev/null || true
+    kill "$HOST_PID" 2>/dev/null || true
     cleanup_all
     echo "niri 用例执行完成"
     exit 0
 fi
 
-# 4. 录屏（对着 cage 的 wlr-screencopy；通过 WAYLAND_DISPLAY 指定显示）
+# 4. 录屏（对着 sway 的 wlr-screencopy；通过 WAYLAND_DISPLAY 指定显示）
 WAYLAND_DISPLAY="$CAGE_SOCK" wf-recorder --no-dmabuf --codec libx264 \
     -f "$OUT_DIR/recording.mp4" >"$LOG_DIR/wf-recorder.log" 2>&1 &
 REC_PID=$!
