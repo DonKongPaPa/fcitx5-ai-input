@@ -73,6 +73,15 @@ if [ "$MODE" = "case" ]; then
     exit 0
 fi
 
+# 3.6 定位测量模式：单场景双引擎（surface-test 根因分析工具）
+if [ "$MODE" = "surface" ]; then
+    bash "$SCRIPT_DIR/surface-driver.sh"
+    kill "$HOST_PID" 2>/dev/null || true
+    cleanup_all
+    echo "surface 场景执行完成"
+    exit 0
+fi
+
 # 4. 录屏（对着 sway 的 wlr-screencopy；通过 WAYLAND_DISPLAY 指定显示）
 WAYLAND_DISPLAY="$CAGE_SOCK" wf-recorder --no-dmabuf --codec libx264 \
     -f "$OUT_DIR/recording.mp4" >"$LOG_DIR/wf-recorder.log" 2>&1 &

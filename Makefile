@@ -67,3 +67,6 @@ proto-test:         ## 快档：协议 v1 对拍（schema+跨通道不变量，a
 
 addon-test:         ## 快档：无显示状态机（ic-sim 纯 D-Bus 造 IC，aiinput-base 容器）
 	./scripts/run-addon-test.sh
+
+surface-test:       ## 快档·根因分析：单场景定位测量（SC=S1..S6，差分 bbox+并排报告）
+	./scripts/run-surface-test.sh ${SC}

@@ -141,3 +141,7 @@ tag `vX.Y.Z` 后 GitHub Actions `Release` workflow（`workflow_dispatch` 传 ver
 - `make addon-test`：无显示状态机快档容器（ic-sim 纯 D-Bus 造 IC 驱动
   按键语义/看门狗/失焦/跨 IC/引擎流，aiinput-base，~40s）——改 addon
   会话逻辑后跑；ic-sim 用法见 apps/ic-sim/ic-sim.c 头注释
+- `make surface-test SC=S4`：定位根因分析容器（单场景 ~1min：双引擎差分
+  bbox + HTML 并排报告 + 标注图素材）。场景 S1-S6 见
+  scripts/env/surface-driver.sh；vision 二次测量按
+  lab/surface/vision-probe.md 中性模板（防暗示纪律）
