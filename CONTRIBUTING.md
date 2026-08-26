@@ -119,7 +119,7 @@ fi
 
 - 提交信息：`feat:` / `fix:` / `chore:` / `docs:` / `refactor:` 前缀 + 中文主题，一行说清"做了什么"；多轮调试的来龙去脉写进 body
 - **一个功能分支一个里程碑**（`feat/xxx`、`fix/xxx`），完成后合回 `main`，不长期堆积旧分支
-- PR 到 `main`；改动 addon/Flutter 的须附容器套件全绿（niri 33/33）的运行报告号
+- PR 到 `main`；改动 addon/Flutter 的须附 `make gate-merge` 全绿（niri 20/20 × 双 scale）的运行报告号
 
 ## 发布
 
@@ -145,3 +145,24 @@ tag `vX.Y.Z` 后 GitHub Actions `Release` workflow（`workflow_dispatch` 传 ver
   bbox + HTML 并排报告 + 标注图素材）。场景 S1-S6 见
   scripts/env/surface-driver.sh；vision 二次测量按
   lab/surface/vision-probe.md 中性模板（防暗示纪律）
+
+### 快档 / 广档触发规则
+
+针对性场景测试要快（秒级容器，日常迭代随手跑），合并/发版前测试要广（全套件矩阵，门禁跑）：
+
+| 改动面 | 日常必跑（快档） | 说明 |
+| --- | --- | --- |
+| `flutter/lib/**` | `make ui-test` | widget/golden/回放，~40s |
+| `lab/spec/**`（protocol.md / events 回放） | `make proto-test` | 对拍器秒级，改协议后必跑 |
+| `addon/src/core/`、`addon/src/hub/`（会话/协议） | `make addon-test` | 无显示状态机 7 例 |
+| `addon/src/surfaces/`（定位/表面） | `make addon-test` + `make surface-test SC=<场景>` | 定位问题先单场景收敛 |
+| `apps/ic-sim/`、`scripts/env/*-driver.sh` | 对应档 | 驱动/工具改动随档生效 |
+
+- **合并前门禁（广档）**：`make gate-merge` = niri 全套件双 scale（20×2），
+  feat 分支合回 `main` 前必跑且全绿
+- **发版前门禁（最广）**：`make gate-release` = niri + kde + gnome 三环境
+- e2e（`make test`）不当日常迭代回路：会话逻辑去 addon-test、协议去
+  proto-test、定位去 surface-test，收敛后再进广档
+- 基础镜像变更（`containers/Containerfile.base`）波及全部下游镜像：
+  重建 base 后 `make images` 重建链再跑 gate-merge（镜像级改动可能把
+  静默惰性的用例腿变真实——如 +fcitx5-chinese-addons 激活 c7 抢槽腿）
