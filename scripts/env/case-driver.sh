@@ -345,7 +345,9 @@ if [ -n "${CAGE_SOCK:-}" ] && command -v grim >/dev/null 2>&1 && \
     back_to_idle
     kill "$C5_PID" 2>/dev/null || true
     rec_stop
-    set_cfg "<{'DbusPosition': <'bottom'>}>"
+    # 还原产品默认 follow（写成 bottom 曾把 follow 泄漏给后续全部用例——
+    # X 组依赖 follow 进 X 路径，c5 之后全灭才暴露）
+    set_cfg "<{'DbusPosition': <'follow'>}>"
     c5_frac="$(python3 - "$OUT_DIR/c5-dbus-follow.png" <<'PYEOF' 2>/dev/null || echo "-1 -1"
 import sys
 try:
@@ -893,6 +895,11 @@ fi  # corner
 # 卡死链/末行翻转/分类器）的容器回归。无 X 栈环境记跳过保持计数一致
 if suite x; then
 if [ -n "${DISPLAY:-}" ] && command -v xwayland-satellite >/dev/null 2>&1; then
+
+# 防御性基线：X 路径前置 DbusPosition=follow（产品默认）——防上游用例
+# 配置泄漏再次 silently 关掉 X 分支（c5 曾泄漏 bottom）
+set_cfg "<{'DbusPosition': <'follow'>}>"
+sleep 0.5
 
 XSCALE="${NIRI_TEST_SCALE:-2.0}"
 # X 坐标恒物理像素；virtpoint 归一化用合成器逻辑分辨率
