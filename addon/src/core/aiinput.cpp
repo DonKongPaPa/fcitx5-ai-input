@@ -416,7 +416,7 @@ AiInputEngine::AiInputEngine(Instance *instance)
         }
     });
 
-    // Dart → C++：ready/resize 已由引擎处理，selectCandidate/hoverChanged 到这
+    // Dart → C++：ready/resize 已由引擎处理，select/hover 到这（v1 ui 命令）
     flutter_->setMessageHandler(
         [this](const std::string &method, const std::string &args) {
             onFlutterMessage(method, args);
@@ -1026,14 +1026,24 @@ void AiInputEngine::onFlutterMessage(const std::string &method,
         }
         return atoi(s.c_str() + pos + strlen(key) + 3);
     };
-    if (method == "selectCandidate") {
-        int idx = numOf(args, "index");
-        if (state_ == State::Candidates && idx >= 0) {
+    if (method == "select") {
+        const int idx = numOf(args, "index");
+        if (args.find("\"panel\":true") != std::string::npos) {
+            // panel 候选（pinyin 等）：CandidateWord::select——引擎自行
+            // commit + 刷 InputPanel（update() 重推 panel/update）
+            auto list = panelCandidates_.get();
+            auto *ic = panelIcRef_.get();
+            if (list && ic && idx >= 0 &&
+                idx < static_cast<int>(list->size())) {
+                uiNotify("panel-select", std::to_string(idx));
+                list->candidate(static_cast<size_t>(idx)).select(ic);
+            }
+        } else if (state_ == State::Candidates && idx >= 0) {
             uiNotify("mouse-click-row", std::to_string(idx));
             commitCandidate(static_cast<size_t>(idx),
                             sessionIcRef_.get());
         }
-    } else if (method == "hoverChanged") {
+    } else if (method == "hover") {
         // 测试观测钩子（r23 扫射点击的命中反馈；与 mouse-click-row 同型）
         uiHoverRow_ = numOf(args, "row");
         FCITX_LOG(Info) << "AiInput: [ui] hover-row: " << uiHoverRow_;

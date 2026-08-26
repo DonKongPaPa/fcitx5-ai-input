@@ -18,8 +18,8 @@
 //              configtool UiAnimSpeed 热改即时生效；font 消息同样携带）
 //   Dart→C++ : invokeMethod('ready')
 //              invokeMethod('resize', {w, h})     // 含阴影余量的整窗尺寸
-//              invokeMethod('selectCandidate', {index})
-//              invokeMethod('hoverChanged', {row}) // 测试观测用
+//              invokeMethod('select', {index, panel?})  // panel=true 走输入法候选
+//              invokeMethod('hover', {row})       // 测试观测用
 import 'dart:async';
 import 'dart:convert';
 import 'dart:io';
