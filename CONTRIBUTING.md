@@ -6,7 +6,7 @@
 
 ```bash
 make images              # 构建全部镜像（base → host → build/niri/kde/gnome）
-make build               # 编译 addon + Flutter 资产 + 测试应用 → artifacts/dist/
+make build               # 编译 addon + Flutter 资产 + 测试应用 → artifacts/dist/（Flutter 全链在 aiinput-build 镜像 SDK 内产出，宿主无需装 flutter）
 make test ENV=niri       # 跑全套件（S 组 smoke + C 组 corner）→ artifacts/reports/<run_id>/report.html
 SUITE=smoke make test ENV=niri   # 只跑部署后运行检查（5 例，~1 分钟）
 SUITE=corner make test ENV=niri  # 只跑 corner case 集中轮（15 例）
