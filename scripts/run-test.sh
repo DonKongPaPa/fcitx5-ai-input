@@ -49,6 +49,7 @@ podman run --rm \
     -e ENV_NAME="$ENV_NAME" \
     -e NIRI_TEST_SCALE="${NIRI_TEST_SCALE:-2.0}" \
     -e MODE=case \
+    -e SUITE="${SUITE:-all}" \
     -e LOG_DIR=/out/logs \
     -e OUT_DIR=/out \
     -e CASES_DIR=/tests/cases \

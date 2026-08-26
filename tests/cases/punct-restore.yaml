@@ -1,8 +1,0 @@
-{
-  "id": "punct-restore",
-  "desc": "标点恢复场景（LLM 接入后：ASR 无标点输入 → 期望带标点输出；当前骨架直通）",
-  "trigger_text": "今天天气怎么样？",
-  "expected": "今天天气怎么样？",
-  "audio": null,
-  "params": {}
-}

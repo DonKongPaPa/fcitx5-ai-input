@@ -7,12 +7,14 @@
 ```bash
 make images              # 构建全部镜像（base → host → build/niri/kde/gnome）
 make build               # 编译 addon + Flutter 资产 + 测试应用 → artifacts/dist/
-make test ENV=niri       # 跑 33 例套件 → artifacts/reports/<run_id>/report.html
+make test ENV=niri       # 跑全套件（S 组 smoke + C 组 corner）→ artifacts/reports/<run_id>/report.html
+SUITE=smoke make test ENV=niri   # 只跑部署后运行检查（5 例，~1 分钟）
+SUITE=corner make test ENV=niri  # 只跑 corner case 集中轮（15 例）
 make test-all            # niri + kde + gnome 三环境
 make shell ENV=niri      # 交互式进入环境容器调试
 ```
 
-可选模型（启用 r15/r16/r20/r21 真实引擎用例；无模型时这些用例记"跳过"）：
+可选模型（启用 c13-c15 真实引擎用例；无模型时这些用例记"跳过"）：
 
 ```bash
 bash scripts/fetch-sherpa-runtime.sh     # sherpa-onnx 运行时（版本锁定）
@@ -38,25 +40,25 @@ make test ENV=niri
 - **一个桌面 = 一个容器**：niri（cage 托管）/ kde（kwin_wayland + sway 托管）/ gnome（mutter 嵌套 + sway 托管）；镜像层级 base → host → 各桌面，`aiinput-build` 为编译镜像，`aiinput-funasr` 为 FunASR 服务镜像
 - **确定性触发**：测试经 D-Bus 测试钩子（`org.fcitx.AiInput.Test` 的 `SimulateKey` / `InjectKey` / `State` / `Candidates` / `Trigger`）直达 addon 状态机，不依赖真实 ASR；真实音频用例经虚拟麦（`play_to_mic`）喂 wav
 - `SimulateKey` 只喂状态机；`InjectKey` 走真实事件管线（验证拦截/透传语义）；裸字母键在 keyboard-us 下不会到达应用文本框（只有组合文本会）——需要应用侧文本变化时用触发键/候选上屏或拼音组合
-- **完整 33 例仅在 niri 达成**：kde/gnome 镜像缺 chromium/virtpoint 的用例自动记"pass（跳过）"
+- **两组结构（2026-08-26 重构，37→20）**：S 组 s1-s5 = 部署后运行检查（模块/引擎/版本/基本会话 E2E/HealthCheck，`SUITE=smoke` 单独跑）；C 组 c1-c15 = corner case 集中轮（键盘语义、IC 生命周期、看门狗、失焦自愈、定位矩阵、引擎档）。完整 20 例仅在 niri 达成，kde/gnome 镜像缺 chromium/virtpoint 的用例自动记"pass（跳过）"
 - 性能采样：容器内 `/proc` 轻量采样器（自身开销 <1%）随套件全程运行 → `perf.csv`
 - `make baseline` 把通过用例的录屏存为基准；之后失败用例的 HTML 报告会并排播放「本次 vs 基准」；`make compare` 生成历史运行对比页
 
 ## 如何新增用例
 
-在 `scripts/env/case-driver.sh` 里加一段（现有 r1-r31 均为此式），编号递增、一个场景一个用例：
+在 `scripts/env/case-driver.sh` 对应组里加一段（现有 s/c 系均为此式），编号递增、一个场景一个用例：
 
 ```bash
-# R32 <场景名>：<一句话意图>
-r32_mark=$(wc -l < "$FCITX_LOG")          # 记日志水位
+# c16 <场景名>：<一句话意图>
+c16_mark=$(wc -l < "$FCITX_LOG")          # 记日志水位
 call SimulateKey "Control+Control_R" true # 触发（D-Bus helper）
 play_to_mic "samples/xxx.wav"             # 需要真实音频时
 sleep 2
-r32_win="$(tail -n +$((r32_mark+1)) "$FCITX_LOG")"
-if printf '%s' "$r32_win" | grep -aq '<期望日志>'; then
-    record r32-<slug> pass "描述"
+c16_win="$(tail -n +$((c16_mark+1)) "$FCITX_LOG")"
+if printf '%s' "$c16_win" | grep -aq '<期望日志>'; then
+    record c16-<slug> pass "描述"
 else
-    record r32-<slug> fail "诊断信息"
+    record c16-<slug> fail "诊断信息"
 fi
 ```
 
@@ -64,13 +66,13 @@ fi
 
 - 断言优先用 addon journal 日志（`VoicePopup:` / `[ui]` / `Sherpa:` 前缀）；位置/渲染类结论用录屏或 `grim` 截图，需视觉判断时人工复核截图
 - 依赖 chromium / 录屏 / 模型的用例必须写跳过分支（`record <id> pass "（跳过：原因）"`），保证 kde/gnome/无模型环境总用例数一致
-- 每轮录音会话结束后要清候选残留（候选态吞下一轮触发键），参考 r24/r25 的收尾点击
+- 每轮录音会话结束必须 `back_to_idle` 收尾（候选/录音残留会吞下一用例的触发键——三次踩坑后固化为公共函数）
+- fcitx 配置 D-Bus SetConfig 的值必须字符串（`<'10'>`；int32 被静默丢弃落默认值）
 - case-driver 头部「用例地图」同步更新
 
 ## 测试资产
 
 - **语音样本**：`语音测试集/`（gitignored，真实人声 6.3-6.5s FLAC）→ 派生 16k 单声道 wav 放 `artifacts/voice-samples/`（gitignored），容器内挂 `/samples`
-- **期望转写**：`tests/expected-transcripts.json`（真实音频用例的精确匹配基准）
 - **报告与录屏**：全部在 `artifacts/`（gitignored）
 - **实验记录**：方案探索放 `experiments/NNN-slug/`（gitignored，`_template/` 有固定格式，索引在 `_INDEX.md`）——结论沉淀进代码注释或文档后，实验目录只是过程档案
 
