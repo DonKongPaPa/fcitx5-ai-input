@@ -135,3 +135,6 @@ tag `vX.Y.Z` 后 GitHub Actions `Release` workflow（`workflow_dispatch` 传 ver
 - `make ui-test`：UI 层快档容器（flutter test+golden+回放断言，复用
   aiinput-build 镜像，~40s）；golden 基线只在容器内生成/校验（SDK pin），
   更新用 `UPDATE_GOLDENS=1 ./scripts/run-ui-test.sh` 后人工审图
+- `make proto-test`：协议快档容器（envelope/事件参数校验+跨通道对拍
+  不变量——ui↔asr↔refine 语义一致性，hub 参考行为规约；秒级，
+  aiinput-base 零依赖）——改 protocol.md/events 后必跑
