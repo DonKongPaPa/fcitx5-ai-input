@@ -625,6 +625,38 @@ bool VoicePopup::rectIsXPhysical(const Rect &rect) {
     return rect.left() > maxW + 2 || rect.top() > maxH + 2;
 }
 
+// 刷新聚焦 X 顶层窗几何（持锁）。satellite 把所有顶层 X 窗摆在根
+// (0,0)——窗口局部坐标即 X 根坐标，卡片越出父窗范围时 satellite 拒绝
+// 父子化、映成独立顶层窗被 niri 平铺到别处（0.3.0.39 实测卡片跑对面
+// 显示器）：父窗边界才是钳制首要边界，X 屏只作几何不可得时兜底
+void VoicePopup::queryFocusGeometryLocked() {
+    xFocusW_ = xFocusH_ = 0;
+    if (!xconn_ || xroot_ == XCB_WINDOW_NONE) {
+        return;
+    }
+    auto *r = xcb_get_property_reply(
+        xconn_,
+        xcb_get_property(xconn_, 0, xroot_, xAtomActiveWindow_,
+                         XCB_ATOM_WINDOW, 0, 1),
+        nullptr);
+    xcb_window_t w = XCB_WINDOW_NONE;
+    if (r && r->type != XCB_ATOM_NONE &&
+        xcb_get_property_value_length(r) >= 4) {
+        w = *static_cast<const xcb_window_t *>(xcb_get_property_value(r));
+    }
+    free(r);
+    if (w == XCB_WINDOW_NONE || w == xroot_ || w == xwin_) {
+        return;
+    }
+    auto *g = xcb_get_geometry_reply(xconn_, xcb_get_geometry(xconn_, w),
+                                     nullptr);
+    if (g) {
+        xFocusW_ = g->width;
+        xFocusH_ = g->height;
+        free(g);
+    }
+}
+
 bool VoicePopup::focusedX11WindowLocked() {
     // 活动窗存在 ⟺ 聚焦应用是 X 应用：FocusIn 的 IC 就是聚焦应用，
     // 而 satellite 在 wayland 应用聚焦时清空 _NET_ACTIVE_WINDOW（实测
@@ -838,12 +870,21 @@ std::pair<int, int> VoicePopup::x11CardPosLocked(const Rect &rect, int cardW,
             y = std::max(ry0 + kGapX11, rect.top() - cardH - gap);
         }
     }
-    // X 屏硬界：OR 卡片越出 X 屏（root 尺寸）时 satellite 无法父子化，
-    // 会把它映成独立顶层窗——niri 给新窗键盘焦点，会话 IC 失焦、触发键
-    // 永远到不了（ghostty 末行卡片 y=2288 出 1512 屏卡死实测）。矩形本身
-    // 出屏（GTK 滚动文档坐标虚报、悬浮窗超出 X 屏）也一并兜住：先翻到
-    // 光标上方，再钳回屏内
-    if (xRootW_ > 0 && xRootH_ > 0 && cardW > 0 && cardH > 0) {
+    // 父窗硬界（首要）：聚焦 X 顶层窗自身范围。satellite 父子化要求
+    // 卡片落在父窗内；越出（GTK 滚动文档虚报 rect 超窗高、末行放不下）
+    // → 独立顶层窗 → niri 平铺抢焦/乱放。先翻上方再钳入窗界。X 屏
+    // （root）只在窗口几何不可得时兜底——高浮动窗可超出 X 屏，但其
+    // 弹层随窗面滚动，按窗界钳才正确
+    queryFocusGeometryLocked();
+    if (xFocusW_ > 0 && xFocusH_ > 0 && cardW > 0 && cardH > 0) {
+        if (y + cardH > xFocusH_ - kGapX11) {
+            y = std::max(kGapX11, rect.top() - cardH - gap);
+        }
+        x = std::clamp(x, kGapX11,
+                       std::max(kGapX11, xFocusW_ - cardW - kGapX11));
+        y = std::clamp(y, kGapX11,
+                       std::max(kGapX11, xFocusH_ - cardH - kGapX11));
+    } else if (xRootW_ > 0 && xRootH_ > 0 && cardW > 0 && cardH > 0) {
         if (y + cardH > xRootH_ - kGapX11) {
             y = std::max(kGapX11, rect.top() - cardH - gap);
         }
@@ -949,7 +990,8 @@ void VoicePopup::pushFrameX11Locked(const uint8_t *bgra, int w, int h) {
                          << xwin_ << std::dec << " " << w << "x" << h
                          << " @ " << xy.first << "," << xy.second
                          << "（rect=" << xLastRect_.left() << ","
-                         << xLastRect_.top() << " root=" << xRootW_ << "x"
+                         << xLastRect_.top() << " 父窗=" << xFocusW_ << "x"
+                         << xFocusH_ << " root=" << xRootW_ << "x"
                          << xRootH_ << "）";
         } else {
             const uint32_t vals[2] = {static_cast<uint32_t>(w),

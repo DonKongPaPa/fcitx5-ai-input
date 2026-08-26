@@ -285,7 +285,8 @@ private:
     // 原点——只能走 X 侧
     xcb_connection_t *xconn_ = nullptr;
     xcb_window_t xroot_ = XCB_WINDOW_NONE;
-    int xRootW_ = 0, xRootH_ = 0; // X 屏尺寸（satellite root）：OR 卡片硬边界
+    int xRootW_ = 0, xRootH_ = 0; // X 屏尺寸（satellite root）：卡片硬边界
+    int xFocusW_ = 0, xFocusH_ = 0; // 聚焦 X 顶层窗尺寸（卡片首要边界）
     bool xTried_ = false, xBroken_ = false;
     bool xActiveLast_ = false; // 活动窗判定结果（日志去重）
     int xErrLog_ = 0;          // X 错误日志限流
@@ -311,6 +312,8 @@ private:
     // 聚焦应用是否 X 应用：_NET_ACTIVE_WINDOW 存在（satellite 在 wayland
     // 聚焦时清空它——FocusIn 的 IC 即聚焦应用，无需 program/WM_CLASS）
     bool focusedX11WindowLocked();
+    // 刷新聚焦 X 顶层窗几何到 xFocusW_/H_（卡片钳制的父窗边界）
+    void queryFocusGeometryLocked();
     // 矩形是否为 X 物理坐标（超出全部输出逻辑范围——X 应用铁证）
     bool rectIsXPhysical(const Rect &rect);
     // program 异步到达的补判：矩形变化时 layer → X OR 窗升级。持锁调用
