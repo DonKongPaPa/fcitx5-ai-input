@@ -1,6 +1,6 @@
 # 原子避坑知识资产 INDEX
 
-共 65 条（wayland 13 · x11 11 · fcitx-api 11 · embedder 5 · app-behavior 4 · container-test 13 · build-deploy 8）。每条一文件：症状/根因/约束规则/来源/验证。
+共 66 条（wayland 13 · x11 11 · fcitx-api 11 · embedder 5 · app-behavior 4 · container-test 14 · build-deploy 8）。每条一文件：症状/根因/约束规则/来源/验证。
 规则：重构动到的模块先过该类目清单；能固化为断言的进对应容器用例。
 再生成：`python3 lab/knowledge/gen.py`（条目定义在脚本 ITEMS 内，加条目只改数据）。
 
@@ -60,6 +60,7 @@
 
 ## 容器与测试
 - [ct-satellite-nested-container](ct-satellite-nested-container.md) xwayland-satellite 可挂嵌套合成器链（容器 X 仿真）
+- [ct-case-config-leak](ct-case-config-leak.md) 用例改配置必须还原到产品默认（不是任意安全值）
 - [proto-json-dumps-space](proto-json-dumps-space.md) python json.dumps 默认冒号后带空格，紧凑解析器全盲
 - [glib288-variant-traps](glib288-variant-traps.md) glib 2.88 GVariant 三个坑（ic-sim 实证）
 - [ct-scale-wildcard-winit](ct-scale-wildcard-winit.md) 嵌套 niri 输出名不吃 output "*" 通配
