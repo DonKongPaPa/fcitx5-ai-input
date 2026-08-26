@@ -32,6 +32,12 @@ public:
                          const std::vector<std::string> &candidates,
                          int hover, bool llmDummy, double anim);
     void voiceIdle(double anim);
+    void panelUpdate(const std::string &preeditJson,
+                     const std::string &auxUp, const std::string &auxDown,
+                     const std::string &candidatesJson, int cursor,
+                     const std::string &layout, bool hasPrev, bool hasNext,
+                     int page, const std::string &imName);
+    void panelHide();
 
 private:
     void send(const std::string &method, const std::string &args) {

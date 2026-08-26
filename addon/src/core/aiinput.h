@@ -11,12 +11,14 @@
 #include <fcitx/addoninstance.h>
 #include <fcitx/event.h>
 #include <fcitx/instance.h>
+#include <fcitx/userinterface.h>
 #include <fcitx-utils/trackableobject.h>
 
 #include <atomic>
 #include <memory>
 
 #include "ui_bus.h"
+#include <fcitx/candidatelist.h>
 
 namespace fcitx {
 
@@ -86,10 +88,20 @@ private:
  *   Result（LLM 关）：展示 popupTimeoutMs 后自动 commit
  *   Candidates（LLM 开）：润色/原始候选，数字1-9/Enter/Esc/方向键/空格选择
  */
-class AiInputEngine : public AddonInstance {
+class AiInputEngine : public UserInterface {
 public:
     AiInputEngine(Instance *instance);
     ~AiInputEngine() override;
+
+    // —— UserInterface 四方法（Category=UI 后 fcitx5 调用）——
+    // update(InputPanel)：IC 的候选/预编辑/辅助文本变化——翻译为 v1
+    // panel/* 事件经 UiBus 送 Flutter；与语音卡片共用同一表面（竞争时
+    // 语音卡片优先——录音态不覆盖）
+    void update(UserInterfaceComponent component,
+                InputContext *inputContext) override;
+    bool available() override;
+    void suspend() override;
+    void resume() override;
 
     // configtool 设置页：Configuration 自动生成 UI。注意保存链路是
     // D-Bus SetConfig → setConfig()（基类默认 no-op，不实现则 configtool
@@ -165,6 +177,9 @@ private:
     AiInputConfig config_;
     std::unique_ptr<VoicePopup> popup_;
     UiBus uiBus_; // hub：ui 通道 v1 发射器（sender=embedder channel）
+    // IM 面板状态（pinyin/rime 候选——update() 写、select 读）
+    std::shared_ptr<CandidateList> panelCandidates_;
+    TrackableObjectReference<InputContext> panelIcRef_;
     std::unique_ptr<FlutterEngineHost> flutter_;
     dbus::Bus *bus_ = nullptr;
     std::unique_ptr<TestService> testService_;

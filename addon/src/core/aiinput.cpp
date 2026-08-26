@@ -12,6 +12,8 @@
 #include <fcitx-utils/log.h>
 #include <fcitx/addonmanager.h>
 #include <fcitx/inputcontextmanager.h>
+#include <fcitx/inputpanel.h>
+#include <fcitx/candidatelist.h>
 
 #include <dbus_public.h>
 
@@ -594,6 +596,108 @@ static bool configFileExists(const char *path) {
     auto f = StandardPath::global().open(StandardPath::Type::PkgConfig,
                                          path, O_RDONLY);
     return f.fd() >= 0;
+}
+
+
+// —— UserInterface 实现（Category=UI：pinyin/rime 等引擎的候选窗）——
+// update(InputPanel) 把 IC 的候选列表/预编辑翻译为 v1 panel/* 事件。
+// 语音会话进行中不覆盖（录音/结果/候选态由状态机独占表面）
+void AiInputEngine::update(UserInterfaceComponent component,
+                            InputContext *ic) {
+    // 无条件日志：确认 fcitx5 是否调到了我们的 UI 接口
+    FCITX_LOG(Info) << "AiInput: [ui] update(component="
+                    << static_cast<int>(component) << " ic=" << ic << ")";
+    if (component != UserInterfaceComponent::InputPanel || !ic) {
+        return;
+    }
+    if (state_ != State::Idle) {
+        return; // 语音会话活跃：面板让位
+    }
+    auto &panel = ic->inputPanel();
+    if (panel.empty()) {
+        uiBus_.panelHide();
+        panelCandidates_.reset();
+        panelIcRef_ = TrackableObjectReference<InputContext>();
+        return;
+    }
+    // 持有候选列表引用（异步点击选择时仍有效）
+    panelCandidates_ = panel.candidateList();
+    panelIcRef_ = ic->watch();
+
+    // preedit → 数组 [{text, underline}]
+    std::string preedit;
+    const auto &preeditText = panel.preedit();
+    if (!preeditText.empty()) {
+        for (size_t i = 0; i < preeditText.size(); ++i) {
+            auto fmt = preeditText.formatAt(i);
+            preedit += "{\"text\":\"" +
+                       flutterJsonEscape(preeditText.stringAt(i)) +
+                       "\",\"underline\":" +
+                       ((fmt & TextFormatFlag::Underline) ? "true" : "false") +
+                       "},";
+        }
+        if (!preedit.empty()) preedit.pop_back(); // 尾逗号
+    }
+    preedit = "[" + preedit + "]";
+
+    // 候选 → 数组 [{label, text, comment?}]
+    std::string cands;
+    int cursor = -1;
+    auto list = panel.candidateList();
+    if (list) {
+        cursor = static_cast<int>(list->cursorIndex());
+        for (int i = 0; i < static_cast<int>(list->size()); ++i) {
+            auto &w = list->candidate(i);
+            std::string label = list->label(i).toString();
+            std::string text = w.text().toString();
+            std::string comment = w.comment().toString();
+            if (!cands.empty()) cands += ",";
+            cands += "{\"label\":\"" + flutterJsonEscape(label) +
+                     "\",\"text\":\"" + flutterJsonEscape(text);
+            if (!comment.empty()) {
+                cands += "\",\"comment\":\"" + flutterJsonEscape(comment);
+            }
+            cands += "\"}";
+        }
+    }
+    cands = "[" + cands + "]";
+
+    bool hasPrev = false, hasNext = false;
+    if (list) {
+        if (auto *pageable = list->toPageable()) {
+            hasPrev = pageable->hasPrev();
+            hasNext = pageable->hasNext();
+        }
+    }
+    std::string layout = "horizontal";
+    if (list) {
+        auto hint = list->layoutHint();
+        if (hint == CandidateLayoutHint::Vertical) {
+            layout = "vertical";
+        }
+    }
+    auto auxUp = panel.auxUp().toString();
+    auto auxDown = panel.auxDown().toString();
+    auto imName = instance_->currentInputMethod();
+
+    uiBus_.panelUpdate(preedit, auxUp, auxDown, cands, cursor, layout,
+                       hasPrev, hasNext, 0, imName);
+}
+
+bool AiInputEngine::available() {
+    // 无条件 true：Flutter 引擎 5s 预热期间 UI 选择不能跳过我们——
+    // classicui 的 available() 同样恒 true。引擎未就绪时面板暂不渲染
+    //（send 落空），就绪后下一次引擎 update() 即出面板
+    return true;
+}
+
+void AiInputEngine::suspend() {
+    uiBus_.panelHide();
+    panelCandidates_.reset();
+}
+
+void AiInputEngine::resume() {
+    // 无需主动恢复——下一次引擎 update() 会重推
 }
 
 void AiInputEngine::reloadConfig() {

@@ -99,6 +99,30 @@ class SessionData {
   });
 }
 
+
+/// IM 候选面板数据（panel/update 事件——pinyin/rime 等引擎的候选窗）
+class PanelData {
+  final List<PanelCandidate> candidates;
+  final int cursor;
+  final bool isVertical;
+  final String auxUp;
+  final String imName;
+  const PanelData({
+    this.candidates = const [],
+    this.cursor = -1,
+    this.isVertical = false,
+    this.auxUp = '',
+    this.imName = '',
+  });
+}
+
+class PanelCandidate {
+  final String label;
+  final String text;
+  final String comment;
+  const PanelCandidate(this.label, this.text, {this.comment = ''});
+}
+
 // ---------------------------------------------------------------------------
 // App 根
 // ---------------------------------------------------------------------------
@@ -141,6 +165,7 @@ class _VoiceUiHomeState extends State<VoiceUiHome> {
   double _fontScale = 1.0; // size/12 基准
   double _animScale = kDefaultAnimScale; // 动画速率挡位系数
   int _mouseHover = -1; // 鼠标悬停行（本地状态；键盘选择走 data.hover）
+  PanelData? _panel; // IM 候选面板（panel/update 事件驱动；null=隐藏）
   Size _lastReported = Size.zero;
   final GlobalKey _cardKey = GlobalKey(); // 卡片实际尺寸回读（布局后）
   // 内容实尺寸（VoicePanel 自然尺寸）：窗口上报的度量源。AnimatedSize
@@ -251,10 +276,37 @@ class _VoiceUiHomeState extends State<VoiceUiHome> {
         _mouseHover = -1;
         _update(const SessionData());
         break;
+      case 'panel/update':
+        _ticker?.cancel();
+        _mouseHover = -1;
+        final cands = (args['candidates'] as List? ?? const [])
+            .map((c) => PanelCandidate(
+                (c as Map)['label'] as String? ?? '',
+                c['text'] as String? ?? '',
+                comment: c['comment'] as String? ?? ''))
+            .toList();
+        setState(() => _panel = PanelData(
+            candidates: cands,
+            cursor: (args['cursor'] as num?)?.toInt() ?? -1,
+            isVertical: args['layout'] == 'vertical',
+            auxUp: args['aux_up'] as String? ?? '',
+            imName: args['im_name'] as String? ?? ''));
+        break;
+      case 'panel/hide':
+        _ticker?.cancel();
+        setState(() => _panel = null);
+        break;
       default:
-        // 协议约定：未知 method（panel/* 等 P4 能力）忽略，向前兼容
+        // 协议约定：未知 method 忽略，向前兼容
         break;
     }
+  }
+
+  void _selectPanelCandidate(int index) {
+    if (_panel == null || index < 0 || index >= _panel!.candidates.length) {
+      return;
+    }
+    _invoke('select', {'index': index, 'panel': true});
   }
 
   void _update(SessionData d) {
@@ -365,6 +417,10 @@ class _VoiceUiHomeState extends State<VoiceUiHome> {
                       animScale: _animScale,
                       onHover: _onHoverRow,
                       onSelect: _selectCandidate,
+                      panel: _panel,
+                      onPanelSelect: _selectPanelCandidate,
+                      fontScale: _fontScale,
+                      sysFontFamily: _sysFontFamily,
                       ),
                     ),
                   ),
@@ -388,6 +444,10 @@ class VoicePanel extends StatelessWidget {
   final double animScale; // 全局动画速率挡位系数
   final ValueChanged<int> onHover;
   final ValueChanged<int> onSelect;
+  final PanelData? panel; // IM 候选面板（null=无）
+  final ValueChanged<int>? onPanelSelect;
+  final double fontScale;
+  final String? sysFontFamily;
   const VoicePanel({
     super.key,
     required this.data,
@@ -395,6 +455,10 @@ class VoicePanel extends StatelessWidget {
     required this.animScale,
     required this.onHover,
     required this.onSelect,
+    this.panel,
+    this.onPanelSelect,
+    this.fontScale = 1.0,
+    this.sysFontFamily,
   });
 
   @override
@@ -423,7 +487,14 @@ class VoicePanel extends StatelessWidget {
             // 只在 会话↔空闲 间做整体切换，状态间过渡由 _SessionBody
             // 内部的局部动画完成（文字本体不重建、不闪烁）
             key: ValueKey(data.state == UiState.idle ? 'idle' : 'session'),
-            child: data.state == UiState.idle
+            child: panel != null
+                ? CandidatePanel(
+                    data: panel!,
+                    onSelect: onPanelSelect ?? (_) {},
+                    animScale: animScale,
+                    fontScale: fontScale,
+                    sysFontFamily: sysFontFamily)
+                : data.state == UiState.idle
                 ? const _IdleBody()
                 : _SessionBody(
                     data: data,
@@ -722,6 +793,78 @@ class _SessionBody extends StatelessWidget {
 }
 
 // —— 空闲态（理论上不可见；保留占位避免空帧）——
+
+/// IM 候选面板（classicui 等价渲染）：水平/竖排候选列表，标签+文本+
+/// 高亮+点击选择。视觉上与语音卡片共用 VoicePanel 容器（阴影/圆角）。
+class CandidatePanel extends StatelessWidget {
+  const CandidatePanel({
+    super.key,
+    required this.data,
+    required this.onSelect,
+    required this.animScale,
+    this.fontScale = 1.0,
+    this.sysFontFamily,
+  });
+
+  final PanelData data;
+  final ValueChanged<int> onSelect;
+  final double animScale;
+  final double fontScale;
+  final String? sysFontFamily;
+
+  @override
+  Widget build(BuildContext context) {
+    final cs = Theme.of(context).colorScheme;
+    final fam = sysFontFamily ?? 'NotoSansSC';
+    final cursor = data.cursor;
+    final children = <Widget>[];
+    for (int i = 0; i < data.candidates.length; i++) {
+      final c = data.candidates[i];
+      final selected = i == cursor;
+      children.add(_candidateRow(cs, fam, c, i, selected));
+    }
+    if (data.isVertical) {
+      return Column(
+          mainAxisSize: MainAxisSize.min, crossAxisAlignment: CrossAxisAlignment.start, children: children);
+    }
+    return Wrap(spacing: 4, runSpacing: 2, children: children);
+  }
+
+  Widget _candidateRow(ColorScheme cs, String fam, PanelCandidate c, int index, bool selected) {
+    return GestureDetector(
+      onTap: () => onSelect(index),
+      child: Container(
+        padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 3),
+        decoration: BoxDecoration(
+          color: selected ? cs.primaryContainer : Colors.transparent,
+          borderRadius: BorderRadius.circular(4),
+        ),
+        child: Row(mainAxisSize: MainAxisSize.min, children: [
+          Text(c.label,
+              style: TextStyle(
+                  fontFamily: fam,
+                  fontSize: 13 * fontScale,
+                  color: selected ? cs.onPrimaryContainer : cs.onSurfaceVariant)),
+          const SizedBox(width: 3),
+          Text(c.text,
+              style: TextStyle(
+                  fontFamily: fam,
+                  fontSize: 14 * fontScale,
+                  color: selected ? cs.onPrimaryContainer : cs.onSurface)),
+          if (c.comment.isNotEmpty) ...[
+            const SizedBox(width: 3),
+            Text(c.comment,
+                style: TextStyle(
+                    fontFamily: fam,
+                    fontSize: 11 * fontScale,
+                    color: cs.onSurfaceVariant)),
+          ],
+        ]),
+      ),
+    );
+  }
+}
+
 class _IdleBody extends StatelessWidget {
   const _IdleBody();
 

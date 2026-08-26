@@ -52,4 +52,26 @@ void UiBus::voiceIdle(double anim) {
     send("voice/idle", o.str());
 }
 
+
+void UiBus::panelUpdate(const std::string &preeditJson,
+                        const std::string &auxUp, const std::string &auxDown,
+                        const std::string &candidatesJson, int cursor,
+                        const std::string &layout, bool hasPrev, bool hasNext,
+                        int page, const std::string &imName) {
+    std::ostringstream o;
+    o << "{\"preedit\":" << preeditJson
+      << ",\"aux_up\":\"" << flutterJsonEscape(auxUp)
+      << "\",\"aux_down\":\"" << flutterJsonEscape(auxDown)
+      << "\",\"candidates\":" << candidatesJson
+      << ",\"cursor\":" << cursor
+      << ",\"layout\":\"" << layout << "\""
+      << ",\"has_prev\":" << (hasPrev ? "true" : "false")
+      << ",\"has_next\":" << (hasNext ? "true" : "false")
+      << ",\"page\":" << page
+      << ",\"im_name\":\"" << flutterJsonEscape(imName) << "\"}";
+    send("panel/update", o.str());
+}
+
+void UiBus::panelHide() { send("panel/hide", "{}"); }
+
 } // namespace fcitx
