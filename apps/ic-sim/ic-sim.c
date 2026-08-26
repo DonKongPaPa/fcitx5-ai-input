@@ -10,6 +10,7 @@
  *   use <程序名>            切换当前 IC
  *   focus-in / focus-out
  *   key <名|0xHEX> press|release [mods]   mods=修饰位串如 ctrl
+ *   setim <名>             重建组加入该 IM 并切为当前（拼音组合测试用）
  *   rect <x> <y> <w> <h>
  *   select <i>
  *   commit-wait <文本> [超时ms]            等 CommitString 匹配
@@ -148,6 +149,50 @@ static void call_ic(const char *method, GVariant *args, const char *fmt_out,
     fflush(stdout);
 }
 
+/* setim：把 <名> 加进当前组并切成当前 IM。
+ * 组名单必须从总线取——"Default" 名会被 zh_CN locale 翻译，硬编码必踩。
+ * SetCurrentIM 要求目标 IM 已在组列表里（否则静默 no-op），所以先重建组 */
+static void cmd_setim(const char *name) {
+    GError *err = NULL;
+    GVariant *ret = g_dbus_connection_call_sync(
+        conn, FCITX_BUS, "/controller", "org.fcitx.Fcitx.Controller1",
+        "CurrentInputMethodGroup", NULL, G_VARIANT_TYPE("(s)"),
+        G_DBUS_CALL_FLAGS_NONE, 5000, NULL, &err);
+    if (!ret) {
+        printf("setim %s err group: %s\n", name, err ? err->message : "?");
+        g_error_free(err); fflush(stdout); return;
+    }
+    const gchar *group = NULL;
+    g_variant_get(ret, "(&s)", &group);
+    GVariantBuilder arr;
+    g_variant_builder_init(&arr, G_VARIANT_TYPE("a(ss)"));
+    g_variant_builder_add(&arr, "(ss)", "keyboard-us", "");
+    g_variant_builder_add(&arr, "(ss)", name, "");
+    /* 与 create 同款 new_tuple 法绕 glib 2.88 varargs 数组坑 */
+    GVariant *children[3] = {
+        g_variant_new_string(group), g_variant_new_string("us"),
+        g_variant_builder_end(&arr)};
+    GVariant *params = g_variant_new_tuple(children, 3);
+    err = NULL;
+    if (!g_dbus_connection_call_sync(
+            conn, FCITX_BUS, "/controller", "org.fcitx.Fcitx.Controller1",
+            "SetInputMethodGroupInfo", params, NULL,
+            G_DBUS_CALL_FLAGS_NONE, 5000, NULL, &err)) {
+        printf("setim %s err groupinfo: %s\n", name, err ? err->message : "?");
+        g_error_free(err); fflush(stdout); return;
+    }
+    err = NULL;
+    if (!g_dbus_connection_call_sync(
+            conn, FCITX_BUS, "/controller", "org.fcitx.Fcitx.Controller1",
+            "SetCurrentIM", g_variant_new("(s)", name), NULL,
+            G_DBUS_CALL_FLAGS_NONE, 5000, NULL, &err)) {
+        printf("setim %s err current: %s\n", name, err ? err->message : "?");
+        g_error_free(err); fflush(stdout); return;
+    }
+    printf("setim %s ok\n", name);
+    fflush(stdout);
+}
+
 int main(int argc, char **argv) {
     (void)argc; (void)argv;
     setvbuf(stdout, NULL, _IOLBF, 0);
@@ -195,6 +240,8 @@ int main(int argc, char **argv) {
                                   (guint32)(g_get_monotonic_time() / 1000)),
                     "(b)", out, sizeof(out));
             printf("key %s %s filtered=%s\n", t[1], release ? "r" : "p", out);
+        } else if (!strcmp(cmd, "setim") && t[1]) {
+            cmd_setim(t[1]);
         } else if (!strcmp(cmd, "rect") && t[1] && t[2] && t[3] && t[4]) {
             call_ic("SetCursorRect",
                     g_variant_new("(iiii)", atoi(t[1]), atoi(t[2]),

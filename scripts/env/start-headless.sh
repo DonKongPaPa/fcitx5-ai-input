@@ -11,7 +11,9 @@ MODE="${MODE:-case}"
 
 # 1. fcitx5 直起（dbus 前端独立工作；wayland/xcb 模块无显示时各自让位，
 #    我们的 popup 走 headless 无处挂分支——仅记日志不影响会话）
-fcitx5 -d --replace >"$LOG_DIR/fcitx5.log" 2>&1
+#    --disable classicui/kimpanel：InputPanel 只派发给唯一活跃 UI
+#    （uim updateSingleComponent 只看 ui_），禁竞争者才是确定性选中我们
+fcitx5 -d --replace --disable=classicui,kimpanel >"$LOG_DIR/fcitx5.log" 2>&1
 for _ in $(seq 1 40); do
     busctl --user status org.fcitx.Fcitx5 >/dev/null 2>&1 && break
     sleep 0.5

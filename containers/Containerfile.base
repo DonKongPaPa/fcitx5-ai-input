@@ -7,6 +7,7 @@ RUN sh /tmp/setup-mirrors.sh && rm /tmp/setup-mirrors.sh
 # 公共运行时：fcitx5 全家桶 + CJK 字体 + 音频(pipewire) + dbus + 软渲染 + 测试应用依赖
 RUN pacman -Syu --noconfirm --needed \
         fcitx5 \
+        fcitx5-chinese-addons \
         fcitx5-gtk \
         fcitx5-qt \
         fcitx5-configtool \

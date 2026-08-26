@@ -123,4 +123,29 @@ else
 fi
 back_to_idle
 
+# a7 拼音组合→InputPanel（P4b：panel 管道端到端）。fcitx5 只把
+# InputPanel 派发给唯一活跃 UI（uim updateSingleComponent 的 ui_），
+# start-headless --disable=classicui,kimpanel 保障选中的是我们；
+# keyboard-us 不产生组合——必须 setim pinyin 才有 component=0 可言
+if [ -f /usr/share/fcitx5/addon/pinyin.conf ]; then
+    mark
+    OUT=$(sim 'create app-g' 'focus-in' 'setim pinyin' \
+        'key n press' 'key n release' 'key i press' 'key i release' \
+        'key h press' 'key h release' 'key a press' 'key a release' \
+        'key o press' 'key o release' 'sleep 300' \
+        'key space press' 'key space release' \
+        'commit-wait 你好 5000' 'setim keyboard-us')
+    echo "$OUT" >"$LOG_DIR/a7-ic-sim.log"
+    W=$(win); echo "$W" > "$LOG_DIR/a7-journal.log"
+    a7_notes=""
+    echo "$W" | grep -aq "update(component=0" || a7_notes="InputPanel 更新未到达 UI 层"
+    echo "$OUT" | grep -q "setim pinyin ok" || a7_notes="${a7_notes:+$a7_notes；}setim 失败"
+    echo "$OUT" | grep -q "commit-ok" || a7_notes="${a7_notes:+$a7_notes；}拼音候选未上屏"
+    [ -z "$a7_notes" ] && record a7-im-panel pass "拼音组合→update(component=0) 到 UI 层→候选上屏" \
+        || record a7-im-panel fail "$a7_notes"
+else
+    record a7-im-panel skip "镜像无 pinyin addon（重建 base 镜像后生效）"
+fi
+back_to_idle
+
 echo "== addon-driver 完毕：$RESULTS"
