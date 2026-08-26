@@ -1596,7 +1596,7 @@ bool VoicePopup::ensurePopup(InputContext *ic, bool atShow) {
         FCITX_INFO() << "VoicePopup: layer surface created（"
                      << (overlayFallback_ ? "overlay 兜底" : anchorBottom_ ? "底部" : "顶部")
                      << "居中模式）";
-    } else {
+    } else if (im_) {
         popup_ = zwp_input_method_v2_get_input_popup_surface(im_, surface_);
         zwp_input_popup_surface_v2_add_listener(popup_, &kPopupListener, this);
         icRef_ = ic->watch();
@@ -1606,6 +1606,12 @@ bool VoicePopup::ensurePopup(InputContext *ic, bool atShow) {
                      << (popupAttachCount_ > 1
                              ? "（重建：重夺定位槽，取最新光标矩形）"
                              : "");
+    } else {
+        // headless（无 wayland 无 layer-shell 的 dbus IC）：无处可挂卡片
+        // ——会话逻辑不受影响，仅无 UI。不判空直调 C API 会 SIGSEGV
+        FCITX_INFO() << "VoicePopup: 无 IM proxy 且无 layer-shell"
+                        "（headless 环境），本会话无卡片";
+        return false;
     }
     wl_display_flush(display_);
     return true;

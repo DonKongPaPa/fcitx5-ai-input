@@ -1,6 +1,6 @@
 # 原子避坑知识资产 INDEX
 
-共 58 条（wayland 13 · x11 10 · fcitx-api 9 · embedder 5 · app-behavior 4 · container-test 10 · build-deploy 7）。每条一文件：症状/根因/约束规则/来源/验证。
+共 61 条（wayland 13 · x11 10 · fcitx-api 10 · embedder 5 · app-behavior 4 · container-test 11 · build-deploy 8）。每条一文件：症状/根因/约束规则/来源/验证。
 规则：重构动到的模块先过该类目清单；能固化为断言的进对应容器用例。
 再生成：`python3 lab/knowledge/gen.py`（条目定义在脚本 ITEMS 内，加条目只改数据）。
 
@@ -41,6 +41,7 @@
 - [fc-classicui-dispatch](fc-classicui-dispatch.md) classicui 对 dbus+wayland IC 强制 X11 UI（上游自认位置错）
 - [fc-timer-usec](fc-timer-usec.md) addTimeEvent 用绝对 µs + setOneShot
 - [fc-uieventloop-include](fc-uieventloop-include.md) EventLoop 完整定义在 event.h
+- [fc-dbus-im-protocol-paths](fc-dbus-im-protocol-paths.md) dbus 前端 IM 协议路径与接口
 
 ## flutter embedder
 - [em-pointer-physical-space](em-pointer-physical-space.md) FlutterPointerEvent 坐标必须是物理像素
@@ -56,6 +57,7 @@
 - [app-qt-dbus-needs-machineid](app-qt-dbus-needs-machineid.md) Qt 的 QDBusConnection 需要 /etc/machine-id
 
 ## 容器与测试
+- [glib288-variant-traps](glib288-variant-traps.md) glib 2.88 GVariant 三个坑（ic-sim 实证）
 - [ct-scale-wildcard-winit](ct-scale-wildcard-winit.md) 嵌套 niri 输出名不吃 output "*" 通配
 - [ct-pkill-hits-container](ct-pkill-hits-container.md) 宿主 pkill 杀容器内同名进程
 - [ct-skip-false-green](ct-skip-false-green.md) 守卫恒假→静默跳过→假绿
@@ -68,6 +70,7 @@
 - [ct-stdin-consumed-by-chain](ct-stdin-consumed-by-chain.md) 交互容器 stdin 会被调用链吞掉
 
 ## 构建与部署
+- [bd-headless-popup-guard](bd-headless-popup-guard.md) headless 环境 popup 分支必须判空 im_
 - [bd-local-lib-not-searched](bd-local-lib-not-searched.md) ~/.local/lib 不入 addon 搜索路径
 - [bd-deploy-verify-artifacts](bd-deploy-verify-artifacts.md) 上机前验证产物：readelf/ldd -r/字符串
 - [bd-build-in-tmp](bd-build-in-tmp.md) 容器内 /tmp 干净构建防时间戳跳过

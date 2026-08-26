@@ -138,3 +138,6 @@ tag `vX.Y.Z` 后 GitHub Actions `Release` workflow（`workflow_dispatch` 传 ver
 - `make proto-test`：协议快档容器（envelope/事件参数校验+跨通道对拍
   不变量——ui↔asr↔refine 语义一致性，hub 参考行为规约；秒级，
   aiinput-base 零依赖）——改 protocol.md/events 后必跑
+- `make addon-test`：无显示状态机快档容器（ic-sim 纯 D-Bus 造 IC 驱动
+  按键语义/看门狗/失焦/跨 IC/引擎流，aiinput-base，~40s）——改 addon
+  会话逻辑后跑；ic-sim 用法见 apps/ic-sim/ic-sim.c 头注释

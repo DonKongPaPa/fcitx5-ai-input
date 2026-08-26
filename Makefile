@@ -64,3 +64,6 @@ ui-test:            ## 快档：UI 层 flutter test+golden+回放（aiinput-buil
 
 proto-test:         ## 快档：协议 v1 对拍（schema+跨通道不变量，aiinput-base 容器）
 	./scripts/run-proto-test.sh
+
+addon-test:         ## 快档：无显示状态机（ic-sim 纯 D-Bus 造 IC，aiinput-base 容器）
+	./scripts/run-addon-test.sh

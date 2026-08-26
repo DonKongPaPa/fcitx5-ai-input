@@ -8,3 +8,4 @@ find_package(PkgConfig REQUIRED)
 
 add_subdirectory(testapp-gtk)
 add_subdirectory(testapp-qt)
+add_subdirectory(ic-sim)
