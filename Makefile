@@ -61,3 +61,6 @@ compare:
 
 ui-test:            ## 快档：UI 层 flutter test+golden+回放（aiinput-build 容器）
 	./scripts/run-ui-test.sh
+
+proto-test:         ## 快档：协议 v1 对拍（schema+跨通道不变量，aiinput-base 容器）
+	./scripts/run-proto-test.sh
