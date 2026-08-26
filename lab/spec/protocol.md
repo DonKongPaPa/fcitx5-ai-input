@@ -12,7 +12,10 @@
 3. **传输无关**：同一事件集可跑在
    - 进程内 platform channel（现状：`fcitx5/flutterui` + JSONMethodCodec，
      wire 即 `{method, args}`，channel/dir 由物理方向隐含）
-   - stdio / Unix socket（P6：UI 或后端进程外）
+   - stdio / Unix socket（**已落地**：asr/refine 后端经 `StdioBackend`
+     子进程行协议接入，参照实现 `backends/asr-dummy.py` /
+     `backends/refine-dummy.py`，配置 `AsrEngine=Stdio` / `LLMEngine=Stdio`；
+     UI 通道进程外仍为规划）
    - **文件回放**（`lab/spec/events/*.jsonl`，每行一个完整 envelope）
 4. **版本协商**：每通道会话首条 `hello`，双方宣告 `proto` 版本与能力位
    `caps[]`；不识别的 method 必须忽略（向前兼容）。
@@ -34,6 +37,11 @@
 | method | string | 见各通道事件表；未知 method 忽略 |
 | seq | int? | 单调递增，回放/诊断用，接收方不依赖 |
 | args | object | 事件参数，schema 见 §6 |
+
+stdio wire 约定：每行一个 envelope（`\n` 结尾），**紧凑 JSON**——
+键值冒号后无空格（python 侧 `separators=(",", ":")`；解析器容忍空白但
+产出方必须紧凑，回放 diff 与人对拍才稳定）。后端 stderr 直通 fcitx5
+日志（排障第一现场）；未知 method 忽略；hello 是每个进程会话首条事件。
 
 回放文件附加约定：`_delay_ms`（数字）= 分发此事件前等待毫秒；`_comment`
 （字符串）行 = 注释，分发器跳过。

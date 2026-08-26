@@ -6,6 +6,8 @@
 #include "sherpa_engine.h"
 #include "sherpa-onnx/c-api.h"
 #include "funasr_ws_engine.h"
+#include "stdio_engine.h"
+#include "proto_line.h"
 
 #include <fcitx-config/iniparser.h>
 #include <fcitx-utils/keysym.h>
@@ -820,17 +822,6 @@ static double animScaleOf(const AiInputConfig &cfg) {
     return 1.0;
 }
 
-// json 字符串字段提取（font 管道回传 {"path","family","size"} → theme）
-static std::string jsonStrField(const std::string &s, const char *key) {
-    std::string pat = "\"" + std::string(key) + "\":\"";
-    auto p = s.find(pat);
-    if (p == std::string::npos) {
-        return "";
-    }
-    p += pat.size();
-    auto e = s.find('"', p);
-    return s.substr(p, e == std::string::npos ? std::string::npos : e - p);
-}
 static int jsonNumField(const std::string &s, const char *key) {
     std::string pat = "\"" + std::string(key) + "\":";
     auto p = s.find(pat);
@@ -1284,6 +1275,8 @@ static std::unique_ptr<AsrEngine> makeAsrEngine(const AiInputConfig &cfg) {
         return std::make_unique<FunAsrLocalEngine>();
     case AsrEngineKind::Sherpa:
         return std::make_unique<SherpaOnnxEngine>();
+    case AsrEngineKind::Stdio:
+        return std::make_unique<StdioAsrEngine>();
     case AsrEngineKind::Dummy:
     default:
         return std::make_unique<DummyAsrEngine>();
@@ -1378,6 +1371,13 @@ void AiInputEngine::onAsrFinish(const std::string &text) {
         uiHoverRow_ = -1; // 上会话悬停残留不清会盖住首行选中显示
         pushUiState();
         uiNotify("candidates", joinCandidates());
+    } else if (config_.llmEngine.value() == LlmEngineKind::Stdio) {
+        // 进程外 refine：先入 Result（超时自动上屏兜底），响应到达换候选
+        state_ = State::Result;
+        pushUiState();
+        uiNotify("result", finalText_);
+        startResultTimer();
+        startRefine(finalText_);
     } else {
         state_ = State::Result;
         pushUiState();
@@ -1408,6 +1408,51 @@ void AiInputEngine::startResultTimer() {
     if (resultTimer_) {
         resultTimer_->setOneShot();
     }
+}
+
+// —— refine 进程外后端（v1 协议 stdio）：spawn-per-session——
+// 每次识别结束起一个 refine 子进程，请求-响应-退出；比常驻进程多一次
+// spawn 开销（dummy python ~50ms），换来零生命周期管理
+void AiInputEngine::startRefine(const std::string &raw) {
+    refineForText_ = raw;
+    bool ok = refineBackend_.spawn(
+        &instance_->eventLoop(), config_.stdioRefineCmd.value(),
+        [this](const std::string &line) { onRefineLine(line); }, nullptr);
+    if (!ok) {
+        // Result 超时定时器兜底自动上屏，不额外处理
+        return;
+    }
+    refineBackend_.send("{\"v\":1,\"channel\":\"refine\",\"dir\":\"out\","
+                        "\"method\":\"hello\",\"seq\":1,"
+                        "\"args\":{\"proto\":1,\"caps\":[]}}");
+    refineBackend_.send(
+        "{\"v\":1,\"channel\":\"refine\",\"dir\":\"out\","
+        "\"method\":\"refine/request\",\"seq\":2,\"args\":{\"raw\":\"" +
+        flutterJsonEscape(raw) + "\",\"mode\":\"candidates\"}}");
+    FCITX_LOG(Info) << "AiInput: [refine-stdio] 请求已发出";
+}
+
+void AiInputEngine::onRefineLine(const std::string &line) {
+    if (envelopeMethod(line) != "refine/result") {
+        return; // hello / 未知 method：忽略
+    }
+    auto cands = jsonStrArrayField(line, "candidates");
+    refineBackend_.terminate();
+    // 会话已翻页（换会话/已自动上屏）的迟到响应直接丢弃
+    if (state_ != State::Result || finalText_ != refineForText_ ||
+        cands.empty()) {
+        FCITX_LOG(Info) << "AiInput: [refine-stdio] 迟到/空响应已忽略";
+        return;
+    }
+    candidates_ = std::move(cands);
+    resultTimer_.reset();
+    state_ = State::Candidates;
+    keyboardRow_ = 0;
+    uiHoverRow_ = -1;
+    pushUiState();
+    uiNotify("candidates", joinCandidates());
+    FCITX_LOG(Info) << "AiInput: [refine-stdio] 候选已到达（"
+                    << candidates_.size() << " 行）";
 }
 
 // Left+Right 键对经真实事件管线注入（与 TestService::InjectKey 同法）：
@@ -1478,6 +1523,7 @@ void AiInputEngine::enterIdle() {
     if (asr_) {
         asr_->stop();
     }
+    refineBackend_.terminate();
     candidates_.clear();
     partial_.clear();
     finalText_.clear();

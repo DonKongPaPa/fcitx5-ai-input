@@ -148,4 +148,26 @@ else
 fi
 back_to_idle
 
+# a8 进程外双后端全链（P6：ASR+refine 走 v1 stdio 协议）
+# 触发→子进程 partial 流→final→refine 子进程→候选→数字选择→上屏
+set_cfg "<{'AsrEngine': <'Stdio'>, 'LLMEngine': <'Stdio'>}>"
+sleep 0.5
+mark
+OUT=$(sim 'create app-h' 'focus-in' \
+    'key Control_R press ctrl' 'sleep 1600' 'key Control_R release ctrl' \
+    'sleep 2500' 'key 1 press' 'key 1 release' \
+    'commit-wait 我们出去玩吧 6000')
+echo "$OUT" >"$LOG_DIR/a8-ic-sim.log"
+W=$(win); echo "$W" > "$LOG_DIR/a8-journal.log"
+a8_notes=""
+echo "$W" | grep -aq "asr-stdio. 会话已启动" || a8_notes="stdio ASR 后端未启动"
+echo "$W" | grep -aq "asr-stdio. final 到达" || a8_notes="${a8_notes:+$a8_notes；}final 未收到"
+echo "$W" | grep -aq "refine-stdio. 候选已到达" || a8_notes="${a8_notes:+$a8_notes；}refine 响应未到达"
+echo "$OUT" | grep -q "commit-ok" || a8_notes="${a8_notes:+$a8_notes；}未上屏"
+[ -z "$a8_notes" ] && record a8-stdio-backends pass "进程外 ASR+refine（v1 stdio）：partial→final→refine/result→候选上屏" \
+    || record a8-stdio-backends fail "$a8_notes"
+set_cfg "<{'AsrEngine': <'Dummy'>, 'LLMEngine': <'Dummy'>}>"
+sleep 0.5
+back_to_idle
+
 echo "== addon-driver 完毕：$RESULTS"

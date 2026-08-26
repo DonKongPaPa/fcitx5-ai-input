@@ -18,6 +18,7 @@
 #include <memory>
 
 #include "ui_bus.h"
+#include "stdio_backend.h"
 #include <fcitx/candidatelist.h>
 
 namespace fcitx {
@@ -147,6 +148,9 @@ private:
     void finishRecording();
     void onAsrFinish(const std::string &text);
     void onAsrPartial(const std::string &text);
+    // —— refine 进程外后端（v1 协议 stdio；P6）——
+    void startRefine(const std::string &raw);
+    void onRefineLine(const std::string &line);
     void enterIdle();
     void resetSession(); // 会话 IC 销毁时回收（防触发吞掉）
     void startThresholdTimer();
@@ -204,6 +208,8 @@ private:
     std::unique_ptr<EventSourceTime> recHardStopTimer_;  // 识别挂起兜底
     bool finishRequested_ = false; // finishRecording 已请求（看门狗防重入）
     std::unique_ptr<AsrEngine> asr_;
+    StdioBackend refineBackend_;         // refine 通道子进程（llmEngine=Stdio）
+    std::string refineForText_;          // 在途 refine 的原文（迟到响应防串话）
     std::string partial_;                 // 当前流式中间文本
     std::string finalText_;               // ASR 最终文本
     std::vector<std::string> candidates_; // LLM 候选（[0]=润色 [1]=原始 ...）

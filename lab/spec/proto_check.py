@@ -115,7 +115,7 @@ def check_args(f, env):
                      "panel/update.candidates 项缺 label/text")
     elif ch == "asr" and d == "in" and m in ("asr/partial", "asr/final"):
         req = ASR_IN_TEXT_REQUIRED
-    elif ch == "refine" and d == "in":
+    elif ch == "refine" and d == "in" and m == "refine/result":
         req = REFINE_IN_REQUIRED
         cands = args.get("candidates")
         f.ok(isinstance(cands, list) and len(cands) >= 1,

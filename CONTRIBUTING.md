@@ -153,7 +153,7 @@ tag `vX.Y.Z` 后 GitHub Actions `Release` workflow（`workflow_dispatch` 传 ver
 | 改动面 | 日常必跑（快档） | 说明 |
 | --- | --- | --- |
 | `flutter/lib/**` | `make ui-test` | widget/golden/回放，~40s |
-| `lab/spec/**`（protocol.md / events 回放） | `make proto-test` | 对拍器秒级，改协议后必跑 |
+| `lab/spec/**`、`backends/**`（协议/后端脚本） | `make proto-test` | 对拍器秒级（含后端实拍：驱动真实子进程产物过同一校验器），改协议或后端后必跑 |
 | `addon/src/core/`、`addon/src/hub/`（会话/协议） | `make addon-test` | 无显示状态机 7 例 |
 | `addon/src/surfaces/`（定位/表面） | `make addon-test` + `make surface-test SC=<场景>` | 定位问题先单场景收敛 |
 | `apps/ic-sim/`、`scripts/env/*-driver.sh` | 对应档 | 驱动/工具改动随档生效 |

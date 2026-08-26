@@ -17,10 +17,11 @@ FCITX_CONFIG_ENUM_I18N_ANNOTATION(TriggerMode, "HoldRelease", "Toggle");
 // ASR 引擎：Dummy=调试用模拟输出（默认）；
 //           FunASR=流式 WS 档（宿主 funasr-serve，MLT 31 语种，GPU/CPU）；
 //           FunASRLocal=GGUF 本地档（llama-funasr-cli 子进程，zh/en/ja，
-//           非流式，CPU ~1.5GB 内存）
-FCITX_CONFIG_ENUM(AsrEngineKind, Dummy, FunASR, FunASRLocal, Sherpa);
+//           非流式，CPU ~1.5GB 内存）；
+//           Stdio=v1 协议进程外后端（stdin/stdout 行协议，P6 解耦试验田）
+FCITX_CONFIG_ENUM(AsrEngineKind, Dummy, FunASR, FunASRLocal, Sherpa, Stdio);
 FCITX_CONFIG_ENUM_I18N_ANNOTATION(AsrEngineKind, "Dummy", "FunASR",
-                                  "FunASRLocal", "Sherpa");
+                                  "FunASRLocal", "Sherpa", "Stdio");
 
 // 模型部署设备档（自动拉起服务时的参数）
 FCITX_CONFIG_ENUM(FunASRDeviceKind, Auto, Gpu, Cpu);
@@ -36,9 +37,10 @@ FCITX_CONFIG_ENUM(UiAnimSpeedKind, Slow, Normal, Fast);
 FCITX_CONFIG_ENUM_I18N_ANNOTATION(UiAnimSpeedKind, "Slow", "Normal", "Fast");
 
 // LLM 引擎：Off=关闭（结果单行直接展示自动上屏）；Dummy=规则占位
-//（句末补标点，双行候选）——真实 LLM 双后端接入前的显式占位档
-FCITX_CONFIG_ENUM(LlmEngineKind, Off, Dummy);
-FCITX_CONFIG_ENUM_I18N_ANNOTATION(LlmEngineKind, "Off", "Dummy");
+//（句末补标点，双行候选）；Stdio=v1 协议进程外后端（refine/request →
+// refine/result，P6 解耦试验田）
+FCITX_CONFIG_ENUM(LlmEngineKind, Off, Dummy, Stdio);
+FCITX_CONFIG_ENUM_I18N_ANNOTATION(LlmEngineKind, "Off", "Dummy", "Stdio");
 
 // configtool 由该 Configuration 自动生成设置页；保存后经 D-Bus 触发
 // reloadConfig()，参数即时生效（无需重启 fcitx5）
@@ -122,9 +124,20 @@ FCITX_CONFIGURATION(
         true};
     Option<LlmEngineKind, NoConstrain<LlmEngineKind>, DefaultMarshaller<LlmEngineKind>, LlmEngineKindI18NAnnotation> llmEngine{
         this, "LLMEngine", "LLM 引擎（Dummy=占位润色（规则补标点，"
-                           "双行候选，真实后端接入前） / Off=关闭（结果"
-                           "直接上屏））",
+                           "双行候选） / Stdio=进程外后端（v1 协议 stdio） / "
+                           "Off=关闭（结果直接上屏））",
         LlmEngineKind::Dummy};
+
+    // —— 组2.3 进程外后端（v1 协议 stdio；P6 解耦试验田）——
+    // 命令经 sh -c 执行（可用参数/管道）；行协议见 lab/spec/protocol.md
+    Option<std::string> stdioAsrCmd{
+        this, "StdioAsrCmd",
+        "Stdio ASR 后端命令（sh -c；子进程收发 v1 envelope 行协议）",
+        "python3 /usr/share/fcitx5-aiinput/backends/asr-dummy.py"};
+    Option<std::string> stdioRefineCmd{
+        this, "StdioRefineCmd",
+        "Stdio refine 后端命令（sh -c；refine/request → refine/result）",
+        "python3 /usr/share/fcitx5-aiinput/backends/refine-dummy.py"};
 
     // —— 组2.1 FunASR 流式（WS 档）——
     Option<std::string> funasrUrl{

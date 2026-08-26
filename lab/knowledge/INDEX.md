@@ -1,6 +1,6 @@
 # 原子避坑知识资产 INDEX
 
-共 61 条（wayland 13 · x11 10 · fcitx-api 10 · embedder 5 · app-behavior 4 · container-test 11 · build-deploy 8）。每条一文件：症状/根因/约束规则/来源/验证。
+共 63 条（wayland 13 · x11 10 · fcitx-api 11 · embedder 5 · app-behavior 4 · container-test 12 · build-deploy 8）。每条一文件：症状/根因/约束规则/来源/验证。
 规则：重构动到的模块先过该类目清单；能固化为断言的进对应容器用例。
 再生成：`python3 lab/knowledge/gen.py`（条目定义在脚本 ITEMS 内，加条目只改数据）。
 
@@ -42,6 +42,7 @@
 - [fc-timer-usec](fc-timer-usec.md) addTimeEvent 用绝对 µs + setOneShot
 - [fc-uieventloop-include](fc-uieventloop-include.md) EventLoop 完整定义在 event.h
 - [fc-dbus-im-protocol-paths](fc-dbus-im-protocol-paths.md) dbus 前端 IM 协议路径与接口
+- [fc-uim-single-active-dispatch](fc-uim-single-active-dispatch.md) InputPanel 只派发给唯一活跃 UI（ui_），非全体
 
 ## flutter embedder
 - [em-pointer-physical-space](em-pointer-physical-space.md) FlutterPointerEvent 坐标必须是物理像素
@@ -57,6 +58,7 @@
 - [app-qt-dbus-needs-machineid](app-qt-dbus-needs-machineid.md) Qt 的 QDBusConnection 需要 /etc/machine-id
 
 ## 容器与测试
+- [proto-json-dumps-space](proto-json-dumps-space.md) python json.dumps 默认冒号后带空格，紧凑解析器全盲
 - [glib288-variant-traps](glib288-variant-traps.md) glib 2.88 GVariant 三个坑（ic-sim 实证）
 - [ct-scale-wildcard-winit](ct-scale-wildcard-winit.md) 嵌套 niri 输出名不吃 output "*" 通配
 - [ct-pkill-hits-container](ct-pkill-hits-container.md) 宿主 pkill 杀容器内同名进程

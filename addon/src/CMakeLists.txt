@@ -5,11 +5,13 @@ add_library(aiinput MODULE)
 target_sources(aiinput PRIVATE
     core/aiinput.cpp
     hub/ui_bus.cpp
+    hub/stdio_backend.cpp
     surfaces/popup_surface.cpp
     embedder/flutter_engine.cpp
     asr/funasr_ws_engine.cpp
     asr/funasr_local_engine.cpp
     asr/sherpa_engine.cpp
+    asr/stdio_engine.cpp
 )
 target_include_directories(aiinput PRIVATE
     "${CMAKE_CURRENT_SOURCE_DIR}"
@@ -149,3 +151,9 @@ if(AIINPUT_FLUTTER_ASSETS_DIR AND EXISTS "${AIINPUT_FLUTTER_ASSETS_DIR}/flutter_
             DESTINATION "${CMAKE_INSTALL_DATADIR}/fcitx5-aiinput/flutter"
             OPTIONAL)
 endif()
+
+# v1 协议 stdio 后端脚本（P6：asr/refine 进程外；StdioAsrCmd/StdioRefineCmd
+# 默认指向此安装路径）。参照实现 + 可直接替换成真实后端
+install(FILES "${CMAKE_CURRENT_SOURCE_DIR}/../../backends/asr-dummy.py"
+              "${CMAKE_CURRENT_SOURCE_DIR}/../../backends/refine-dummy.py"
+        DESTINATION "${CMAKE_INSTALL_DATADIR}/fcitx5-aiinput/backends")
