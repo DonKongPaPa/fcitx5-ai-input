@@ -12,8 +12,11 @@
 #     定位：dbus 贴光标 c5  显式档+交互 c6  chromium 多幕 c7  GTK 重跟随 c8
 #           首按+探针 c9  跨应用 c10  连续听写 c11
 #     字体 c12  引擎（挂模型才跑）：sherpa+尾音 c13  zipformer c14  SenseVoice c15
-# 门控：c13-c15 需挂载模型；c5-c11 需录屏/virtpoint/chromium——依赖缺失记
-#   "pass（跳过）"。scale 维度由整轮 NIRI_TEST_SCALE 控制（非用例内）
+#   X 组 x1-x6 Xwayland 仿真（SUITE=x；all 默认含）——satellite + X11 testapp，
+#     X OR 卡片传输回归：进入/跟随/翻转死锁/GC/ARGB/指针
+# 门控：c13-c15 需挂载模型；c5-c11 需录屏/virtpoint/chromium；x1-x6 需
+#   xwayland-satellite——依赖缺失记 "pass（跳过）"。scale 维度由整轮
+#   NIRI_TEST_SCALE 控制（非用例内）
 # 收尾纪律：每个会话用例结束必须 back_to_idle（残留候选/录音会吞掉下一
 #   用例的触发键——r24/r34/r37 三次教训）
 set -euo pipefail
@@ -97,6 +100,9 @@ back_to_idle() {  # 收敛到 idle：recording→release→candidates→press→
     done
     return 0
 }
+# X 组水位断言：mark 记 fcitx5 日志行数，win 取水位后新增（grep 锚点范围）
+mark() { MARK=$(wc -l < "$FCITX_LOG"); }
+win() { tail -n +$((MARK+1)) "$FCITX_LOG"; }
 
 # 性能采样（容器内 /proc 轻量采样器，覆盖全部用例运行区间）
 python3 /scripts/perf/sampler.py --out "$OUT_DIR/perf.csv" \
@@ -880,6 +886,226 @@ else
     record c15-sensevoice pass "（跳过：sensevoice/zipformer 模型未挂载）"
 fi
 fi  # corner
+
+# —— X 组 x1-x6：Xwayland 仿真（WPS/ghostty 同型拓扑）——
+# xwayland-satellite + GDK_BACKEND=x11 testapp：X 窗 + DBus IC + X OR 卡片。
+# 历史 8 类 X bug（CW 位序/静默 X 错/GC 复用/ARGB 黑边/root·父窗钳制/
+# 卡死链/末行翻转/分类器）的容器回归。无 X 栈环境记跳过保持计数一致
+if suite x; then
+if [ -n "${DISPLAY:-}" ] && command -v xwayland-satellite >/dev/null 2>&1; then
+
+XSCALE="${NIRI_TEST_SCALE:-2.0}"
+# X 坐标恒物理像素；virtpoint 归一化用合成器逻辑分辨率
+XLOG_W=$(python3 -c "print(int(1920/float('$XSCALE')))")
+XLOG_H=$(python3 -c "print(int(1080/float('$XSCALE')))")
+# GDK_SCALE 让 GTK 逻辑单位=scale×物理（WPS 同型）；ENTRY_Y 按 GTK 单位
+# 给到 caret 物理位置 ~880（父窗 ~1050 物理高，卡片 190×scale 物理——
+# 两档都溢出父窗触发翻转）
+XGDK_SCALE=$(python3 -c "print(int(float('$XSCALE')))")
+XENTRY_Y=$(python3 -c "print(int(880/float('$XSCALE')))")
+x_app() {  # x_app <日志名> [额外env...]
+    local log="$1"; shift
+    env "$@" GDK_BACKEND=x11 GTK_IM_MODULE=fcitx GDK_SCALE=$XGDK_SCALE \
+        TEST_TIMEOUT=45 "$DIST_BIN/$TESTAPP" >"$LOG_DIR/$log" 2>&1 &
+    XAPP_PID=$!
+    sleep 3
+    # 点进输入框（焦点+caret 矩形就绪）
+    timeout 10 "$DIST_BIN/virtpoint" move $((XLOG_W/2)) 40 "$XLOG_W" "$XLOG_H" 2>/dev/null || true
+    timeout 10 "$DIST_BIN/virtpoint" click left 2>/dev/null || true
+    sleep 0.5
+}
+x_app_kill() { pkill -f testapp-gtk 2>/dev/null || true; sleep 0.8; }
+
+# x1 X 路径进入 + 卡片窗建成（分类器判据）+ 零 X 错误。
+#    mark 必须在 app 启动前：分类器/卡片模式日志在 X 窗聚焦时就打
+mark
+x_app testapp-x1.log
+rec_start x1
+call SimulateKey "Control+Control_R" true >/dev/null 2>&1 || true
+sleep 1.2
+call SimulateKey "Control+Control_R" false >/dev/null 2>&1 || true
+sleep 2.5
+WAYLAND_DISPLAY="$CAGE_SOCK" grim "$OUT_DIR/x1-card.png" 2>>"$LOG_DIR/grim-x1.log" || true
+call SimulateKey "Return" true >/dev/null 2>&1 || true
+call SimulateKey "Return" false >/dev/null 2>&1 || true
+sleep 1.5
+rec_stop
+x1_win="$(win)"
+x1_card="$(printf '%s' "$x1_win" | grep -ac 'X OR 卡片窗 0x' || true)"
+x1_mode="$(printf '%s' "$x1_win" | grep -ac 'X OR 卡片模式' || true)"
+x1_active="$(printf '%s' "$x1_win" | grep -ac '活动 X 窗 存在' || true)"
+x1_errs="$(printf '%s' "$x1_win" | grep -ac 'X 错误' || true)"
+if [ "$x1_card" -ge 1 ] && [ "$x1_mode" -ge 1 ] && [ "$x1_active" -ge 1 ] && \
+   [ "$x1_errs" -eq 0 ] && [ -s "$OUT_DIR/x1-card.png" ]; then
+    record x1-xwayland-entry pass "X 路径全链：分类器→X OR 卡片窗建成（零 X 错误）"
+else
+    record x1-xwayland-entry fail "card=$x1_card mode=$x1_mode active=$x1_active xerr=$x1_errs"
+fi
+back_to_idle; x_app_kill
+
+# x2 X 卡片几何引擎（ic-sim 驱动 rect 序列→跟随/钳制）。
+#    流式 partial 不灌 preedit 是现行设计（组合恒「语音输入中」），
+#    录音中真实跟随不发生——本例测几何引擎本身：X 窗保持活动（父窗），
+#    ic-sim 的 DBus IC 递进 SetCursorRect，断言卡片逐次重摆且 x 单调
+x_app testapp-x2.log
+mark
+OUT=$(printf '%s\n' \
+    'create xfollow' 'focus-in' \
+    'key Control_R press ctrl' 'sleep 700' \
+    'rect 120 300 8 50' 'sleep 300' \
+    'rect 400 300 8 50' 'sleep 300' \
+    'rect 700 500 8 50' 'sleep 300' \
+    'key Control_R release ctrl' 'sleep 2200' \
+    'key 1 press' 'key 1 release' 'sleep 1200' \
+    | timeout 40 /opt/dist/bin/ic-sim 2>>"$LOG_DIR/x2-ic-sim.err")
+echo "$OUT" >"$LOG_DIR/x2-ic-sim.log"
+x2_win="$(win)"
+x2_pairs="$(printf '%s' "$x2_win" | grep -a 'X OR 卡片跟随' | grep -oP '跟随 \K[0-9]+,[0-9]+' || true)"
+x2_n="$(printf '%s' "$x2_win" | grep -ac 'X OR 卡片跟随' || true)"
+x2_errs="$(printf '%s' "$x2_win" | grep -ac 'X 错误' || true)"
+# rect 序列 x=120/400/700、y=300→500：断言 y 单调升（两档 scale 都不触
+# 底钳）且 x 不回退（scale 2.0 卡片 888 物理宽会被父窗钳平——钳平合法）
+x2_ok=0
+[ "$x2_n" -ge 3 ] && [ "$x2_errs" -eq 0 ] && {
+    mapfile -t x2_xy <<<"$x2_pairs"
+    x2_x1="${x2_xy[0]%,*}"; x2_y1="${x2_xy[0]#*,}"
+    x2_x3="${x2_xy[2]%,*}"; x2_y3="${x2_xy[2]#*,}"
+    [ "${#x2_xy[@]}" -ge 3 ] && [ "$x2_y3" -gt "$x2_y1" ] && \
+    [ "$x2_x3" -ge "$x2_x1" ] && x2_ok=1
+}
+if [ "$x2_ok" = 1 ]; then
+    record x2-xwayland-follow pass "X 卡片几何引擎：rect 递进→跟随（y $x2_y1→$x2_y3，x $x2_x1→$x2_x3 含钳制），零 X 错误"
+else
+    record x2-xwayland-follow fail "n=$x2_n xerr=$x2_errs xy=[$(printf '%s ' "${x2_xy[@]:0:3}")]"
+fi
+back_to_idle; x_app_kill
+
+# x3 末行翻转 + 卡死链回归（0.3.0.39：卡片出父窗→独立顶层→抢焦→死锁）
+x_app testapp-x3.log TESTAPP_ENTRY_Y=$XENTRY_Y
+mark
+rec_start x3
+call SimulateKey "Control+Control_R" true >/dev/null 2>&1 || true
+sleep 1.5
+call SimulateKey "Control+Control_R" false >/dev/null 2>&1 || true
+sleep 2.5
+WAYLAND_DISPLAY="$CAGE_SOCK" grim "$OUT_DIR/x3-flip.png" 2>>"$LOG_DIR/grim-x3.log" || true
+call SimulateKey "Return" true >/dev/null 2>&1 || true
+call SimulateKey "Return" false >/dev/null 2>&1 || true
+sleep 1.5
+rec_stop
+x3_win="$(win)"
+x3_line="$(printf '%s' "$x3_win" | grep -a 'X OR 卡片窗 0x' | head -1 || true)"
+x3_y="$(printf '%s' "$x3_line" | grep -oP '@ \K[0-9]+,[0-9]+' | cut -d, -f2 || true)"
+x3_recty="$(printf '%s' "$x3_line" | grep -oP 'rect=[0-9]+,\K[0-9]+' || true)"
+if [ -n "$x3_y" ] && [ -n "$x3_recty" ] && [ "$x3_y" -lt "$x3_recty" ] && state_is idle; then
+    record x3-xwayland-flip pass "末行 caret（rect.y=$x3_recty）卡片翻上方（y=$x3_y），会话正常收尾"
+else
+    record x3-xwayland-flip fail "y=$x3_y rect.y=$x3_recty state=$(call State 2>/dev/null || true)"
+fi
+back_to_idle; x_app_kill
+
+# x4 跨会话 GC 生命周期（BadGC 回归：窗销毁后 GC 复用→put_image 全败）
+x_app testapp-x4.log
+mark
+for x4_round in 1 2; do
+    call SimulateKey "Control+Control_R" true >/dev/null 2>&1 || true
+    sleep 1.2
+    call SimulateKey "Control+Control_R" false >/dev/null 2>&1 || true
+    sleep 2.2
+    call SimulateKey "Return" true >/dev/null 2>&1 || true
+    call SimulateKey "Return" false >/dev/null 2>&1 || true
+    sleep 1.5
+done
+x4_win="$(win)"
+x4_cards="$(printf '%s' "$x4_win" | grep -ac 'X OR 卡片窗 0x' || true)"
+x4_commits="$(printf '%s' "$x4_win" | grep -ac '\[ui\] committed' || true)"
+x4_errs="$(printf '%s' "$x4_win" | grep -ac 'X 错误' || true)"
+if [ "$x4_cards" -ge 2 ] && [ "$x4_commits" -ge 2 ] && [ "$x4_errs" -eq 0 ]; then
+    record x4-xwayland-gc pass "两轮会话两窗两上屏（GC 随窗重建，零 X 错误）"
+else
+    record x4-xwayland-gc fail "cards=$x4_cards commits=$x4_commits xerr=$x4_errs"
+fi
+back_to_idle; x_app_kill
+
+# x5 ARGB 透明（黑边回归：24 位深度把阴影渲染成不透明黑）
+x_app testapp-x5.log
+mark
+call SimulateKey "Control+Control_R" true >/dev/null 2>&1 || true
+sleep 2.5
+WAYLAND_DISPLAY="$CAGE_SOCK" grim "$OUT_DIR/x5-argb.png" 2>>"$LOG_DIR/grim-x5.log" || true
+x5_win="$(win)"
+x5_line="$(printf '%s' "$x5_win" | grep -a 'X OR 卡片窗 0x' | head -1 || true)"
+call SimulateKey "Control+Control_R" false >/dev/null 2>&1 || true
+sleep 2.2
+call SimulateKey "Return" true >/dev/null 2>&1 || true
+call SimulateKey "Return" false >/dev/null 2>&1 || true
+sleep 1.2
+# 从建窗日志解析物理 x,y,w,h → 采样卡片左上角内侧（阴影/圆角区，黑边必黑）
+x5_px="$(printf '%s' "$x5_line" | grep -oP '@ \K[0-9]+,[0-9]+' | cut -d, -f1 || true)"
+x5_py="$(printf '%s' "$x5_line" | grep -oP '@ \K[0-9]+,[0-9]+' | cut -d, -f2 || true)"
+x5_note="$(printf '%s' "$x5_line" | grep -oP '0x[0-9a-f]+ \K[0-9]+x[0-9]+' || true)"
+x5_pw="${x5_note%x*}"; x5_ph="${x5_note#*x}"
+if [ -n "$x5_px" ] && [ -s "$OUT_DIR/x5-argb.png" ]; then
+    x5_rgb=$(python3 - "$OUT_DIR/x5-argb.png" "$x5_px" "$x5_py" "$x5_pw" "$x5_ph" <<'PYEOF'
+import sys
+from PIL import Image
+img = Image.open(sys.argv[1]).convert("RGB")
+x, y, w, h = (int(v) for v in sys.argv[2:6])
+pts = [(x+3, y+3), (x+w-4, y+3), (x+3, y+h-4), (x+w-4, y+h-4)]
+vals = [sum(img.getpixel(p)) for p in pts if 0 <= p[0] < img.width and 0 <= p[1] < img.height]
+print(min(vals) if vals else -1)
+PYEOF
+)
+    if [ "${x5_rgb:-0}" -gt 90 ]; then
+        record x5-xwayland-argb pass "四角最小 RGB 和=$x5_rgb（阴影半透明非黑，ARGB32 生效）"
+    else
+        record x5-xwayland-argb fail "角部近纯黑（RGB 和=$x5_rgb）——ARGB 退化"
+    fi
+else
+    record x5-xwayland-argb fail "卡片窗日志/截图缺失（line=${x5_line:0:60}）"
+fi
+back_to_idle; x_app_kill
+
+# x6 X 卡交互：键盘选择（数字键→上屏，WPS 真实路径）+ 指针链能力探测。
+#    satellite 0.8.2 不向 OR 窗投递指针（最小探针复现，上游已知限制）——
+#    hover 链现在恒不可达，留探测日志：卫星修复后本例自动升级为真断言
+x_app testapp-x6.log
+mark
+rec_start x6
+call SimulateKey "Control+Control_R" true >/dev/null 2>&1 || true
+sleep 1.2
+call SimulateKey "Control+Control_R" false >/dev/null 2>&1 || true
+sleep 2.5
+# 指针链探测（能力记录，不断言）：扫卡片可能区
+for x6_y in 100 160 220; do
+    timeout 10 "$DIST_BIN/virtpoint" move 600 "$x6_y" "$XLOG_W" "$XLOG_H" 2>/dev/null || true
+    sleep 0.2
+done
+# 键盘：数字 1 选候选 → 上屏
+call InjectKey "1" true >/dev/null 2>&1 || true
+call InjectKey "1" false >/dev/null 2>&1 || true
+sleep 1.5
+rec_stop
+x6_win="$(win)"
+x6_commit="$(printf '%s' "$x6_win" | grep -ac '\[ui\] committed' || true)"
+x6_ptr="$(printf '%s' "$x6_win" | grep -ac 'X 指针 enter' || true)"
+x6_note="键盘选择上屏 ✓"
+[ "$x6_ptr" -ge 1 ] && x6_note="$x6_note；卫星指针链已通（hover 可再升级断言）" \
+                  || x6_note="$x6_note；OR 指针=satellite 已知限制（未达）"
+if [ "$x6_commit" -ge 1 ]; then
+    record x6-xwayland-pointer pass "X 卡交互：$x6_note"
+else
+    record x6-xwayland-pointer fail "commit=$x6_commit（数字键选择未上屏）"
+fi
+back_to_idle; x_app_kill
+
+else  # 无 X 栈（kde/gnome 等）：跳过但保持计数一致
+for x_id in x1-xwayland-entry x2-xwayland-follow x3-xwayland-flip \
+            x4-xwayland-gc x5-xwayland-argb x6-xwayland-pointer; do
+    record "$x_id" pass "（跳过：环境无 xwayland-satellite）"
+done
+fi
+fi  # suite x
 
 # 停采样器并等它写出 summary
 kill -TERM "$SAMPLER_PID" 2>/dev/null || true

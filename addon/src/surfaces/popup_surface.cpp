@@ -783,6 +783,10 @@ void VoicePopup::handleX11Events() {
                 pointerOnPopup_ = true;
                 ptrX_ = ev->event_x;
                 ptrY_ = ev->event_y;
+                // X 卡片指针链观测：satellite 对 OR 窗的指针转发是链上
+                // 最不透明的一段，enter 到达与否一锤定音（hover 失效先查这）
+                FCITX_LOG(Info) << "VoicePopup: X 指针 enter " << ptrX_
+                                << "," << ptrY_;
                 if (pointerSink_) {
                     pointerSink_(PointerEvent::Enter, ptrX_, ptrY_);
                 }
@@ -844,6 +848,10 @@ void VoicePopup::moveX11WindowLocked(const Rect &rect) {
     xcb_configure_window(xconn_, xwin_,
                          XCB_CONFIG_WINDOW_X | XCB_CONFIG_WINDOW_Y, vals);
     xcb_flush(xconn_);
+    // X 组用例断言锚点：矩形变化→卡片重摆（x 坐标随 caret 单调移动）
+    FCITX_LOG(Info) << "VoicePopup: X OR 卡片跟随 " << xy.first << ","
+                    << xy.second << "（rect=" << rect.left() << ","
+                    << rect.top() << "）";
 }
 
 // X 卡片落点：caret 下方放不下翻上方、水平钳入 caret 所在输出的 X 区段
