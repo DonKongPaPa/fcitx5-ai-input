@@ -124,3 +124,14 @@ fi
 ## 发布
 
 tag `vX.Y.Z` 后 GitHub Actions `Release` workflow（`workflow_dispatch` 传 version）自动构建四平台包（Arch/Debian/Fedora/tarball）+ Flutter JIT bundle 并创建 Release。发版前确认 `packaging/` 各 `build.sh` 与版本占位符就绪。
+
+## 试验田（lab/）与快档测试
+
+- `lab/spec/protocol.md`：消息流转规范 v1（ui/asr/refine 三通道统一 envelope）；
+  `lab/spec/events/*.jsonl` 回放脚本；`lab/knowledge/` 原子避坑知识资产
+  （重构动模块前先过类目清单，`python3 lab/knowledge/gen.py` 增条目）
+- `UI_TRANSPORT=mock UI_REPLAY=<jsonl> flutter run -d linux`：dummy 驱动 UI
+  演示（见 lab/player/README.md）
+- `make ui-test`：UI 层快档容器（flutter test+golden+回放断言，复用
+  aiinput-build 镜像，~40s）；golden 基线只在容器内生成/校验（SDK pin），
+  更新用 `UPDATE_GOLDENS=1 ./scripts/run-ui-test.sh` 后人工审图

@@ -21,10 +21,13 @@
 //              invokeMethod('selectCandidate', {index})
 //              invokeMethod('hoverChanged', {row}) // 测试观测用
 import 'dart:async';
+import 'dart:convert';
 import 'dart:io';
 
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
+
+import 'mock_host.dart';
 
 const double kMaxW = 420;
 // 卡片阴影余量：快照区比卡片四周各大这么多（BoxShadow blur10+spread1
@@ -48,6 +51,25 @@ Future<void> main() async {
   final loader = FontLoader('NotoSansSC')
     ..addFont(rootBundle.load('assets/fonts/NotoSansSC-Regular.otf'));
   await loader.load();
+  // 传输选择（协议 v1，lab/spec/protocol.md）：默认嵌入态 channel；
+  // UI_TRANSPORT=mock + UI_REPLAY=<jsonl> 时用回放宿主驱动（试验田/
+  // flutter run 演示），UI 发出的命令由 MockHost 记录打印
+  final env = Platform.environment;
+  if (env['UI_TRANSPORT'] == 'mock') {
+    final script = env['UI_REPLAY'] ?? '';
+    final host = MockHost();
+    if (script.isNotEmpty && File(script).existsSync()) {
+      final lines = File(script).readAsLinesSync();
+      final envelopes = lines
+          .where((l) => l.trim().isNotEmpty)
+          .map((l) => Map<String, dynamic>.from(
+              const JsonDecoder().convert(l) as Map))
+          .toList();
+      unawaited(host.play(MockHost.fromEnvelopes(envelopes)));
+    }
+    runApp(VoiceUiApp(transport: host));
+    return;
+  }
   runApp(const VoiceUiApp());
 }
 
@@ -81,7 +103,9 @@ class SessionData {
 // App 根
 // ---------------------------------------------------------------------------
 class VoiceUiApp extends StatelessWidget {
-  const VoiceUiApp({super.key});
+  const VoiceUiApp({super.key, this.transport});
+
+  final UiTransport? transport; // null=嵌入态默认 channel
 
   @override
   Widget build(BuildContext context) {
@@ -95,21 +119,21 @@ class VoiceUiApp extends StatelessWidget {
         fontFamily: 'NotoSansSC',
         colorScheme: ColorScheme.fromSeed(seedColor: const Color(0xFF6750A4)),
       ),
-      home: const VoiceUiHome(),
+      home: VoiceUiHome(transport: transport ?? const ChannelTransport()),
     );
   }
 }
 
 class VoiceUiHome extends StatefulWidget {
-  const VoiceUiHome({super.key});
+  const VoiceUiHome({super.key, this.transport = const ChannelTransport()});
+
+  final UiTransport transport;
 
   @override
   State<VoiceUiHome> createState() => _VoiceUiHomeState();
 }
 
 class _VoiceUiHomeState extends State<VoiceUiHome> {
-  // GTK runner 下跑（开发调试）时无 C++ 对端，channel 调用静默失败
-  static const _ch = MethodChannel('fcitx5/flutterui', JSONMethodCodec());
   SessionData _data = const SessionData();
   Timer? _ticker;
   int _localElapsed = 0;
@@ -124,14 +148,14 @@ class _VoiceUiHomeState extends State<VoiceUiHome> {
   // 行的命中区伸出可见卡片之外（卡片下方仍能悬停到行）
   final GlobalKey _panelKey = GlobalKey();
 
-  void _invoke(String method, [dynamic args]) {
-    _ch.invokeMethod(method, args).catchError((_) => null);
+  void _invoke(String method, [Map<String, dynamic>? args]) {
+    widget.transport.send(method, args ?? const {});
   }
 
   @override
   void initState() {
     super.initState();
-    _ch.setMethodCallHandler(_onCall);
+    widget.transport.attach(_onTransportMessage);
     _invoke('ready');
     // 持久帧回调：每帧布局完成后回读卡片尺寸、变化即上报。不能挂在
     // build 的 post-frame 上——AnimatedSize 等动画只在 render 层逐帧
@@ -171,23 +195,39 @@ class _VoiceUiHomeState extends State<VoiceUiHome> {
     super.dispose();
   }
 
-  // C++→Dart：update{...}（字段同旧 TCP 协议）
-  Future<dynamic> _onCall(MethodCall call) async {
-    if (call.method != 'update') return null;
-    final msg = (call.arguments as Map?)?.cast<String, dynamic>() ?? {};
-    // 动画挡位随任意消息到达（update/font 均携带）
-    final animScale = (msg['anim'] as num?)?.toDouble();
-    if (animScale != null) _animScale = animScale;
-    // 字体跟随（C++ fontconfig 解析后下发）
-    if (msg['state'] == 'font') {
-      await _applyFont(msg['path'] as String? ?? '',
-          (msg['size'] as num?)?.toDouble() ?? 12);
-      return null;
+  // 宿主→UI 消息入口（协议 v1；旧 'update' wire 在此归一化——P2 addon
+  // 侧切 v1 后删除归一化分支）
+  void _onTransportMessage(String method, Map<String, dynamic> args) {
+    if (method == 'update') {
+      // 旧 wire：{state:recording|result|candidates|idle|font, ...} 平铺
+      final state = args['state'] as String? ?? 'idle';
+      switch (state) {
+        case 'recording':
+          method = 'voice/recording';
+          break;
+        case 'result':
+          method = 'voice/result';
+          break;
+        case 'candidates':
+          method = 'voice/candidates';
+          break;
+        case 'font':
+          method = 'theme';
+          break;
+        default:
+          method = 'voice/idle';
+      }
     }
-    switch (msg['state'] as String? ?? 'idle') {
-      case 'recording':
-        _localElapsed = (msg['elapsed_ms'] as num?)?.toInt() ?? 0;
-        var partial = msg['partial'] as String? ?? '';
+    final animScale = (args['anim'] as num?)?.toDouble();
+    if (animScale != null) _animScale = animScale;
+    switch (method) {
+      case 'theme':
+        _applyFont(args['font_path'] as String? ?? '',
+            (args['font_size'] as num?)?.toDouble() ?? 12);
+        break;
+      case 'voice/recording':
+        _localElapsed = (args['elapsed_ms'] as num?)?.toInt() ?? 0;
+        var partial = args['partial'] as String? ?? '';
         _ticker?.cancel();
         _ticker = Timer.periodic(const Duration(milliseconds: 100), (_) {
           _localElapsed += 100;
@@ -203,34 +243,38 @@ class _VoiceUiHomeState extends State<VoiceUiHome> {
           elapsedMs: _localElapsed,
         ));
         break;
-      case 'result':
+      case 'voice/result':
         _ticker?.cancel();
         _update(SessionData(
           state: UiState.result,
-          resultText: msg['final'] as String? ?? '',
-          timeoutMs: (msg['timeout_ms'] as num?)?.toInt() ?? 1500,
+          resultText: args['final'] as String? ?? '',
+          timeoutMs: (args['timeout_ms'] as num?)?.toInt() ?? 1500,
         ));
         break;
-      case 'candidates':
+      case 'voice/candidates':
         _ticker?.cancel();
-        final int msgHover = (msg['hover'] as num?)?.toInt() ?? -1;
+        final int msgHover = (args['hover'] as num?)?.toInt() ?? -1;
         // hover 值 ≠ 本地悬停 = 键盘改了选择（或新会话）→ 悬停让位，
         // 方向键接管显示；鼠标再次移动经 onHover 重新接管
         _mouseHover = msgHover == _mouseHover ? _mouseHover : -1;
         _update(SessionData(
           state: UiState.candidates,
-          resultText: msg['final'] as String? ?? '',
-          candidates: (msg['candidates'] as List?)?.cast<String>() ?? const [],
+          resultText: args['final'] as String? ?? '',
+          candidates:
+              (args['candidates'] as List?)?.cast<String>() ?? const [],
           hover: msgHover,
-          llmDummy: msg['llmDummy'] == true,
+          llmDummy: args['llm_dummy'] == true,
         ));
         break;
-      default:
+      case 'voice/idle':
         _ticker?.cancel();
         _mouseHover = -1;
         _update(const SessionData());
+        break;
+      default:
+        // 协议约定：未知 method（panel/* 等 P4 能力）忽略，向前兼容
+        break;
     }
-    return null;
   }
 
   void _update(SessionData d) {

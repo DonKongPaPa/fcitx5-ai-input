@@ -1,0 +1,10 @@
+{"_comment":"panel 逐键流：preedit 增长→候选→翻页→选择（P4 classicui 等价的数据形状）"}
+{"v":1,"channel":"ui","dir":"out","seq":1,"method":"hello","args":{"proto":1,"caps":["paging","preedit"]}}
+{"v":1,"channel":"ui","dir":"out","seq":2,"method":"theme","args":{"font_size":16,"anim":1.0}}
+{"v":1,"channel":"ui","dir":"out","seq":3,"method":"panel/update","args":{"preedit":[{"text":"n","underline":true}],"aux_up":"拼音","candidates":[{"label":"1.","text":"你"},{"label":"2.","text":"年"},{"label":"3.","text":"能"}],"cursor":0,"layout":"horizontal","has_prev":false,"has_next":false,"page":0,"im_name":"pinyin"},"_delay_ms":100}
+{"v":1,"channel":"ui","dir":"out","seq":4,"method":"panel/update","args":{"preedit":[{"text":"ni","underline":true}],"aux_up":"拼音","candidates":[{"label":"1.","text":"你"},{"label":"2.","text":"逆"},{"label":"3.","text":"腻"}],"cursor":0,"layout":"horizontal","has_prev":false,"has_next":true,"page":0,"im_name":"pinyin"},"_delay_ms":300}
+{"v":1,"channel":"ui","dir":"out","seq":5,"method":"panel/update","args":{"preedit":[{"text":"nihao","underline":true}],"aux_up":"拼音","candidates":[{"label":"1.","text":"你好"},{"label":"2.","text":"你号"},{"label":"3.","text":"泥嚎"}],"cursor":0,"layout":"horizontal","has_prev":false,"has_next":true,"page":0,"im_name":"pinyin"},"_delay_ms":300}
+{"v":1,"channel":"ui","dir":"out","seq":6,"method":"panel/update","args":{"preedit":[{"text":"nihao","underline":true}],"candidates":[{"label":"1.","text":"倪豪"},{"label":"2.","text":"旎昊"},{"label":"3.","text":"尼壕"}],"cursor":0,"layout":"horizontal","has_prev":true,"has_next":true,"page":1,"im_name":"pinyin"},"_delay_ms":300}
+{"v":1,"channel":"ui","dir":"out","seq":7,"method":"panel/update","args":{"preedit":[{"text":"nihao","underline":true}],"candidates":[{"label":"1.","text":"你好"},{"label":"2.","text":"你号"}],"cursor":1,"layout":"horizontal","has_prev":true,"has_next":false,"page":0,"im_name":"pinyin"},"_delay_ms":300}
+{"v":1,"channel":"ui","dir":"in","seq":8,"method":"select","args":{"index":1},"_delay_ms":400}
+{"v":1,"channel":"ui","dir":"out","seq":9,"method":"panel/hide","args":{},"_delay_ms":100}

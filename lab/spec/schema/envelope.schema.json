@@ -1,0 +1,24 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://github.com/DonKongPaPa/fcitx5-ai-input/envelope.schema.json",
+  "title": "UI Protocol v1 Envelope",
+  "description": "三通道（ui/asr/refine）统一消息封套；回放文件每行一个 envelope 或 _delay_ms/_comment 控制行",
+  "type": "object",
+  "required": ["channel", "method"],
+  "properties": {
+    "v": { "type": "integer", "const": 1 },
+    "channel": { "enum": ["ui", "asr", "refine"] },
+    "dir": { "enum": ["out", "in"] },
+    "method": { "type": "string", "pattern": "^[a-z]+(/[a-z_]+)?$" },
+    "seq": { "type": "integer", "minimum": 0 },
+    "args": { "type": "object" },
+    "_delay_ms": { "type": "number", "minimum": 0 },
+    "_comment": { "type": "string" }
+  },
+  "additionalProperties": false,
+  "anyOf": [
+    { "required": ["args"] },
+    { "required": ["_delay_ms"] },
+    { "required": ["_comment"] }
+  ]
+}

@@ -1,0 +1,6 @@
+{"_comment":"Result 态自动上屏路径（refine Off 档）"}
+{"v":1,"channel":"ui","dir":"out","seq":1,"method":"hello","args":{"proto":1,"caps":[]}}
+{"v":1,"channel":"ui","dir":"out","seq":2,"method":"theme","args":{"font_size":16,"anim":1.6}}
+{"v":1,"channel":"ui","dir":"out","seq":3,"method":"voice/recording","args":{"partial":"测试","elapsed_ms":500},"_delay_ms":100}
+{"v":1,"channel":"ui","dir":"out","seq":4,"method":"voice/result","args":{"final":"测试。","timeout_ms":1500},"_delay_ms":500}
+{"v":1,"channel":"ui","dir":"out","seq":5,"method":"voice/idle","args":{},"_delay_ms":1600}

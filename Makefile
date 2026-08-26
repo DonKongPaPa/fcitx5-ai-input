@@ -58,3 +58,6 @@ report:
 
 compare:
 	python3 scripts/compare.py
+
+ui-test:            ## 快档：UI 层 flutter test+golden+回放（aiinput-build 容器）
+	./scripts/run-ui-test.sh
