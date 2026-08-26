@@ -195,29 +195,9 @@ class _VoiceUiHomeState extends State<VoiceUiHome> {
     super.dispose();
   }
 
-  // 宿主→UI 消息入口（协议 v1；旧 'update' wire 在此归一化——P2 addon
-  // 侧切 v1 后删除归一化分支）
+  // 宿主→UI 消息入口（协议 v1 单契约；legacy 'update' wire 已随 addon
+  // 发射器切换删除）
   void _onTransportMessage(String method, Map<String, dynamic> args) {
-    if (method == 'update') {
-      // 旧 wire：{state:recording|result|candidates|idle|font, ...} 平铺
-      final state = args['state'] as String? ?? 'idle';
-      switch (state) {
-        case 'recording':
-          method = 'voice/recording';
-          break;
-        case 'result':
-          method = 'voice/result';
-          break;
-        case 'candidates':
-          method = 'voice/candidates';
-          break;
-        case 'font':
-          method = 'theme';
-          break;
-        default:
-          method = 'voice/idle';
-      }
-    }
     final animScale = (args['anim'] as num?)?.toDouble();
     if (animScale != null) _animScale = animScale;
     switch (method) {
@@ -314,12 +294,12 @@ class _VoiceUiHomeState extends State<VoiceUiHome> {
     }
     if (_mouseHover != row) {
       setState(() => _mouseHover = row);
-      _invoke('hoverChanged', {'row': row});
+      _invoke('hover', {'row': row});
     }
   }
 
   void _selectCandidate(int index) {
-    _invoke('selectCandidate', {'index': index});
+    _invoke('select', {'index': index});
   }
 
   @override

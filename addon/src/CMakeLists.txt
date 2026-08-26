@@ -1,12 +1,23 @@
 add_library(aiinput MODULE)
+# 模块拆分蓝图（lab/spec/protocol.md §重构）：
+# core=会话状态机/按键/配置  hub=协议发射  surfaces=定位三传输
+# asr=识别后端  embedder=Flutter raw embedder
 target_sources(aiinput PRIVATE
-    aiinput.cpp
-    popup_surface.cpp
-    flutter_engine.cpp
-    funasr_ws_engine.cpp
-    funasr_local_engine.cpp
-    sherpa_engine.cpp
+    core/aiinput.cpp
+    hub/ui_bus.cpp
+    surfaces/popup_surface.cpp
+    embedder/flutter_engine.cpp
+    asr/funasr_ws_engine.cpp
+    asr/funasr_local_engine.cpp
+    asr/sherpa_engine.cpp
 )
+target_include_directories(aiinput PRIVATE
+    "${CMAKE_CURRENT_SOURCE_DIR}"
+    "${CMAKE_CURRENT_SOURCE_DIR}/core"
+    "${CMAKE_CURRENT_SOURCE_DIR}/hub"
+    "${CMAKE_CURRENT_SOURCE_DIR}/surfaces"
+    "${CMAKE_CURRENT_SOURCE_DIR}/asr"
+    "${CMAKE_CURRENT_SOURCE_DIR}/embedder")
 target_link_libraries(aiinput PRIVATE Fcitx5::Core)
 find_package(Fcitx5ModuleDBus CONFIG REQUIRED)
 target_link_libraries(aiinput PRIVATE Fcitx5::Module::DBus)

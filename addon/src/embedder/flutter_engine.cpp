@@ -432,11 +432,12 @@ void FlutterEngineHost::updateMetrics(double width, double height,
     FlutterEngineSendWindowMetricsEvent(engine_, &metrics);
 }
 
-void FlutterEngineHost::sendUpdate(const std::string &argsJson) {
+void FlutterEngineHost::sendMethod(const std::string &method,
+                                  const std::string &argsJson) {
     if (!engine_) {
         return;
     }
-    std::string payload = encodeMethodCall("update", argsJson);
+    std::string payload = encodeMethodCall(method, argsJson);
     FlutterPlatformMessage msg = {};
     msg.struct_size = sizeof(FlutterPlatformMessage);
     msg.channel = kChannel;

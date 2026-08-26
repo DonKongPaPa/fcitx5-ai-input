@@ -16,10 +16,13 @@
 #include <atomic>
 #include <memory>
 
+#include "ui_bus.h"
+
 namespace fcitx {
 
 class VoicePopup;
 class FlutterEngineHost;
+class UiBus;
 class AiInputEngine;
 
 /**
@@ -161,6 +164,7 @@ private:
     Instance *instance_;
     AiInputConfig config_;
     std::unique_ptr<VoicePopup> popup_;
+    UiBus uiBus_; // hub：ui 通道 v1 发射器（sender=embedder channel）
     std::unique_ptr<FlutterEngineHost> flutter_;
     dbus::Bus *bus_ = nullptr;
     std::unique_ptr<TestService> testService_;

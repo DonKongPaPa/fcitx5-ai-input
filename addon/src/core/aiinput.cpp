@@ -1,5 +1,6 @@
 #include "aiinput.h"
 #include "flutter_engine.h"
+#include "ui_bus.h"
 #include "popup_surface.h"
 #include "funasr_local_engine.h"
 #include "sherpa_engine.h"
@@ -404,6 +405,13 @@ AiInputEngine::AiInputEngine(Instance *instance)
             deferredMetrics(popup_->logicalWidth(), popup_->logicalHeight());
         }
     });
+    // hub：ui 通道 v1 发射器——sender 经 embedder 送 MethodCall
+    uiBus_.setSender([this](const std::string &method, const std::string &args) {
+        if (flutter_ && flutter_->running()) {
+            flutter_->sendMethod(method, args);
+        }
+    });
+
     // Dart → C++：ready/resize 已由引擎处理，selectCandidate/hoverChanged 到这
     flutter_->setMessageHandler(
         [this](const std::string &method, const std::string &args) {
@@ -708,6 +716,26 @@ static double animScaleOf(const AiInputConfig &cfg) {
     return 1.0;
 }
 
+// json 字符串字段提取（font 管道回传 {"path","family","size"} → theme）
+static std::string jsonStrField(const std::string &s, const char *key) {
+    std::string pat = "\"" + std::string(key) + "\":\"";
+    auto p = s.find(pat);
+    if (p == std::string::npos) {
+        return "";
+    }
+    p += pat.size();
+    auto e = s.find('"', p);
+    return s.substr(p, e == std::string::npos ? std::string::npos : e - p);
+}
+static int jsonNumField(const std::string &s, const char *key) {
+    std::string pat = "\"" + std::string(key) + "\":";
+    auto p = s.find(pat);
+    if (p == std::string::npos) {
+        return 0;
+    }
+    return atoi(s.c_str() + p + pat.size());
+}
+
 std::string AiInputEngine::animField() const {
     std::ostringstream as;
     as << ",\"anim\":" << animScaleOf(config_);
@@ -715,50 +743,35 @@ std::string AiInputEngine::animField() const {
 }
 
 void AiInputEngine::pushUiState() {
-    if (!flutter_ || !flutter_->running()) {
+    if (!uiBus_.ready()) {
         return;
     }
-    const std::string anim = animField();
     // 预编辑组合文本恒为探针的「语音输入中」直到上屏/取消——不随流式
     // partial 或候选选中项变化（组合文本变长会让光标矩形随换行行进、
     // 窗口跟着跳；候选期替换组合文本偶发把卡片从文末拽回首行）。
     // 流式/候选文本只在卡片里展示，上屏时 commitString 原地替换
+    const double anim = animScaleOf(config_);
     switch (state_) {
     case State::Recording:
-        flutter_->sendUpdate(
-            "{\"state\":\"recording\",\"partial\":\"" +
-            flutterJsonEscape(partial_) + "\",\"elapsed_ms\":" +
-            std::to_string((nowUs() - recordStartUs_) / 1000) + anim + "}");
+        uiBus_.voiceRecording(partial_, (nowUs() - recordStartUs_) / 1000,
+                              anim);
         break;
     case State::Result:
-        flutter_->sendUpdate(
-            "{\"state\":\"result\",\"final\":\"" +
-            flutterJsonEscape(finalText_) + "\",\"timeout_ms\":" +
-            std::to_string(config_.popupTimeoutMs.value()) + anim + "}");
+        uiBus_.voiceResult(finalText_, config_.popupTimeoutMs.value(), anim);
         break;
     case State::Candidates: {
-        std::string arr;
-        for (size_t i = 0; i < candidates_.size(); ++i) {
-            if (i) {
-                arr += ",";
-            }
-            arr += "\"" + flutterJsonEscape(candidates_[i]) + "\"";
-        }
         // hover：鼠标悬停优先，否则键盘方向键选择行；llmDummy=占位档
         // 标记（Dart 给润色行打「Dummy 润色」tag，未实装期可辨识）
         const int hover = uiHoverRow_ >= 0 ? uiHoverRow_ : keyboardRow_;
         const bool llmDummy =
             config_.llmEngine.value() == LlmEngineKind::Dummy;
-        flutter_->sendUpdate(
-            "{\"state\":\"candidates\",\"final\":\"" +
-            flutterJsonEscape(finalText_) + "\",\"candidates\":[" + arr +
-            "],\"hover\":" + std::to_string(hover) +
-            (llmDummy ? ",\"llmDummy\":true" : "") + anim + "}");
+        uiBus_.voiceCandidates(finalText_, candidates_, hover, llmDummy,
+                               anim);
         break;
     }
     case State::Idle:
     case State::Pressing:
-        flutter_->sendUpdate("{\"state\":\"idle\"" + anim + "}");
+        uiBus_.voiceIdle(anim);
         break;
     }
 }
@@ -869,8 +882,9 @@ void AiInputEngine::sendFontToUi() {
             }
             fontResolving_ = false;
             if (json.length() > 4) {
-                flutter_->sendUpdate("{\"state\":\"font\"" + animField() +
-                                     "," + json.substr(1));
+                uiBus_.theme(jsonStrField(json, "path"),
+                             jsonNumField(json, "size"),
+                             animScaleOf(config_));
                 FCITX_INFO() << "AiInput: UI 字体 → " << json;
             }
             return true;
@@ -1347,8 +1361,8 @@ void AiInputEngine::enterIdle() {
     if (popup_) {
         popup_->hide();
     }
-    if (flutter_ && flutter_->running()) {
-flutter_->sendUpdate("{\"state\":\"idle\"" + animField() + "}");
+    if (uiBus_.ready()) {
+        uiBus_.voiceIdle(animScaleOf(config_));
     }
     state_ = State::Idle;
     thresholdTimer_.reset();

@@ -49,10 +49,10 @@ void main() {
     // 状态切换产生过 resize 命令（内在尺寸上报链路活着）
     expect(host.commands.any((c) => c['method'] == 'resize'), isTrue);
 
-    // 点击首行候选 → select 命令（过渡期名称 selectCandidate）
+    // 点击首行候选 → select 命令（v1 名称）
     await tester.tap(find.text('你好，这是语音输入。').first);
     await tester.pump();
-    expect(host.commands.any((c) => c['method'] == 'selectCandidate'), isTrue);
+    expect(host.commands.any((c) => c['method'] == 'select'), isTrue);
 
     // 收尾 idle 到达后卡片收起
     await tester.pump(const Duration(seconds: 2));

@@ -63,7 +63,12 @@ public:
     }
 
     // C++→Dart 状态推送（argsJson 为 update 的 JSON 对象体）
-    void sendUpdate(const std::string &argsJson);
+    // 通用 MethodCall 发送（协议 v1：method 即事件名）；sendUpdate 为
+    // legacy 薄壳（method="update"），仅过渡期存在
+    void sendMethod(const std::string &method, const std::string &argsJson);
+    void sendUpdate(const std::string &argsJson) {
+        sendMethod("update", argsJson);
+    }
 
     // 窗口尺寸：width/height 是物理像素（= 逻辑 × pixelRatio，引擎不再乘）
     void updateMetrics(double width, double height, double pixelRatio);
