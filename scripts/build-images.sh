@@ -8,6 +8,7 @@ TARGETS=("${@:-}")
 if [ ${#TARGETS[@]} -eq 0 ] || [ "${TARGETS[0]}" = "all" ]; then
     TARGETS=(base host build niri kde gnome funasr)
 fi
+# 一次性诊断容器不进 all（按需手动构建）
 
 build() {
     local name="$1" tag="localhost/aiinput-$1"
@@ -42,6 +43,10 @@ for t in "${TARGETS[@]}"; do
         niri|kde|gnome)
             ensure_image base
             ensure_image host
+            build "$t"
+            ;;
+        gtkscale)
+            ensure_image niri
             build "$t"
             ;;
         *) echo "未知目标: $t"; exit 1 ;;

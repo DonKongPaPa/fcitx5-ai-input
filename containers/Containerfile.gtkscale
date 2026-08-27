@@ -1,0 +1,19 @@
+# gtkscale 诊断容器（一次性实验，非测试门控环境）
+# 目的：Xwayland 定位偏移取证——fcitx5-gtk 模块路径下 caret rect 的坐标
+# 空间 vs satellite 0.8.2 顶层 X 窗在 X root 的实际摆位。基于 niri 环境
+# （X 组同栈）追加 X 侧取证工具；fcitx5-gtk 在 base 已含，此处显式确保
+# 可证（诊断结论要能回答"模块在不在、装的是哪个版本"）
+FROM aiinput-niri:latest
+
+USER root
+
+RUN pacman -Syu --noconfirm --needed \
+        fcitx5-gtk \
+        xorg-xwininfo \
+        xorg-xprop \
+        && pacman -Scc --noconfirm
+
+USER testuser
+WORKDIR /home/testuser
+
+CMD ["/bin/bash"]

@@ -1,6 +1,6 @@
 # 原子避坑知识资产 INDEX
 
-共 71 条（wayland 14 · x11 11 · fcitx-api 12 · embedder 5 · app-behavior 4 · container-test 17 · build-deploy 8）。每条一文件：症状/根因/约束规则/来源/验证。
+共 73 条（wayland 14 · x11 13 · fcitx-api 12 · embedder 5 · app-behavior 4 · container-test 17 · build-deploy 8）。每条一文件：症状/根因/约束规则/来源/验证。
 规则：重构动到的模块先过该类目清单；能固化为断言的进对应容器用例。
 再生成：`python3 lab/knowledge/gen.py`（条目定义在脚本 ITEMS 内，加条目只改数据）。
 
@@ -25,8 +25,10 @@
 - [x-error-events-not-silent](x-error-events-not-silent.md) X 错误事件不能静默吞
 - [x-gc-per-window](x-gc-per-window.md) GC 必须随窗口销毁重建
 - [x-argb32-visual](x-argb32-visual.md) 32 位 ARGB visual + colormap 才有透明
-- [x-satellite-root-origin](x-satellite-root-origin.md) satellite 把所有顶层 X 窗摆在根 (0,0)
+- [x-satellite-root-origin](x-satellite-root-origin.md) satellite 顶层 X 窗 root 摆位随版本变：0.3 恒 (0,0)，0.8.2 按合成器布局定位
+- [x-classicui-origin-agnostic](x-classicui-origin-agnostic.md) classicui X 定位原点无关：rect 原样用+只钳 X 屏；窗口缩放走 Xft.dpi/96
 - [x-satellite-parent-bounds](x-satellite-parent-bounds.md) OR 卡片必须钳入聚焦 X 顶层窗范围
+- [x-gtkscale-rect-root-coords](x-gtkscale-rect-root-coords.md) fcitx5-gtk 矩形=X root 坐标（含窗口原点）；钳制框必须用窗口 root 范围
 - [x-satellite-or-no-pointer](x-satellite-or-no-pointer.md) satellite 0.8.2 不向 override-redirect 窗投递指针事件
 - [x-satellite-screen-model](x-satellite-screen-model.md) satellite X 屏=逻辑原点+物理范围
 - [x-active-window-classifier](x-active-window-classifier.md) _NET_ACTIVE_WINDOW 存在⟺聚焦应用是 X 应用
