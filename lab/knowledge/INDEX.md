@@ -1,6 +1,6 @@
 # 原子避坑知识资产 INDEX
 
-共 63 条（wayland 13 · x11 10 · fcitx-api 11 · embedder 5 · app-behavior 4 · container-test 12 · build-deploy 8）。每条一文件：症状/根因/约束规则/来源/验证。
+共 66 条（wayland 13 · x11 11 · fcitx-api 11 · embedder 5 · app-behavior 4 · container-test 14 · build-deploy 8）。每条一文件：症状/根因/约束规则/来源/验证。
 规则：重构动到的模块先过该类目清单；能固化为断言的进对应容器用例。
 再生成：`python3 lab/knowledge/gen.py`（条目定义在脚本 ITEMS 内，加条目只改数据）。
 
@@ -26,6 +26,7 @@
 - [x-argb32-visual](x-argb32-visual.md) 32 位 ARGB visual + colormap 才有透明
 - [x-satellite-root-origin](x-satellite-root-origin.md) satellite 把所有顶层 X 窗摆在根 (0,0)
 - [x-satellite-parent-bounds](x-satellite-parent-bounds.md) OR 卡片必须钳入聚焦 X 顶层窗范围
+- [x-satellite-or-no-pointer](x-satellite-or-no-pointer.md) satellite 0.8.2 不向 override-redirect 窗投递指针事件
 - [x-satellite-screen-model](x-satellite-screen-model.md) satellite X 屏=逻辑原点+物理范围
 - [x-active-window-classifier](x-active-window-classifier.md) _NET_ACTIVE_WINDOW 存在⟺聚焦应用是 X 应用
 - [x-gtk-scrolled-doc-coords](x-gtk-scrolled-doc-coords.md) GTK 滚动文档坐标虚报
@@ -58,6 +59,8 @@
 - [app-qt-dbus-needs-machineid](app-qt-dbus-needs-machineid.md) Qt 的 QDBusConnection 需要 /etc/machine-id
 
 ## 容器与测试
+- [ct-satellite-nested-container](ct-satellite-nested-container.md) xwayland-satellite 可挂嵌套合成器链（容器 X 仿真）
+- [ct-case-config-leak](ct-case-config-leak.md) 用例改配置必须还原到产品默认（不是任意安全值）
 - [proto-json-dumps-space](proto-json-dumps-space.md) python json.dumps 默认冒号后带空格，紧凑解析器全盲
 - [glib288-variant-traps](glib288-variant-traps.md) glib 2.88 GVariant 三个坑（ic-sim 实证）
 - [ct-scale-wildcard-winit](ct-scale-wildcard-winit.md) 嵌套 niri 输出名不吃 output "*" 通配

@@ -72,7 +72,7 @@ addon-test:         ## 快档：无显示状态机（ic-sim 纯 D-Bus 造 IC，a
 surface-test:       ## 快档·根因分析：单场景定位测量（SC=S1..S6，差分 bbox+并排报告）
 	./scripts/run-surface-test.sh ${SC}
 
-gate-merge:         ## 广档·合并前门禁：niri 全套件双 scale（20×2）
+gate-merge:         ## 广档·合并前门禁：niri 全套件双 scale（26×2）
 	./scripts/run-test.sh niri
 
 gate-release:       ## 广档·发版前门禁：三环境全套件（niri+kde+gnome）

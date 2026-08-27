@@ -75,6 +75,14 @@ static void on_activate(GtkApplication *app, gpointer user_data) {
     GtkWidget *win = gtk_application_window_new(app);
     gtk_window_set_title(GTK_WINDOW(win), "aiinput-testapp-gtk");
     gtk_window_set_default_size(GTK_WINDOW(win), 640, 220);
+    /* TESTAPP_GEOMETRY=WxH：覆盖默认窗口尺寸（X 组用例控制父窗几何） */
+    const char *geom = g_getenv("TESTAPP_GEOMETRY");
+    if (geom) {
+        int gw = 0, gh = 0;
+        if (sscanf(geom, "%dx%d", &gw, &gh) == 2 && gw > 0 && gh > 0) {
+            gtk_window_set_default_size(GTK_WINDOW(win), gw, gh);
+        }
+    }
 
     GtkWidget *entry = gtk_entry_new();
     gtk_entry_set_placeholder_text(GTK_ENTRY(entry), "语音输入落点……");
@@ -82,6 +90,13 @@ static void on_activate(GtkApplication *app, gpointer user_data) {
      * 矩形会落到窗口中部，IM popup 跟着挂到窗口中下部——顶部对齐后 popup
      * 紧随标题栏，贴近真实单行输入框的体验 */
     gtk_widget_set_valign(entry, GTK_ALIGN_START);
+    /* TESTAPP_ENTRY_Y=N：entry 顶部留白（GTK 单位）——确定性控制 caret
+     * 在窗口内的纵向位置（X 组末行翻转用例的输入；翻转判据=caret+卡片
+     * 高超出父窗，与输出 scale 无关） */
+    const char *entry_y = g_getenv("TESTAPP_ENTRY_Y");
+    if (entry_y && atoi(entry_y) > 0) {
+        gtk_widget_set_margin_top(entry, atoi(entry_y));
+    }
     gtk_window_set_child(GTK_WINDOW(win), entry);
 
     g_signal_connect(entry, "changed", G_CALLBACK(on_changed), NULL);
