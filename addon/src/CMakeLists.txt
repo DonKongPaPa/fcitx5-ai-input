@@ -21,6 +21,11 @@ target_include_directories(aiinput PRIVATE
     "${CMAKE_CURRENT_SOURCE_DIR}/asr"
     "${CMAKE_CURRENT_SOURCE_DIR}/embedder")
 target_link_libraries(aiinput PRIVATE Fcitx5::Core)
+# 5.0（bookworm 5.0.21）没有 CandidateWord::comment()（5.1 API）——
+# 按检测到的版本出宏，源码里降级
+if(Fcitx5Core_VERSION VERSION_GREATER_EQUAL 5.1)
+    target_compile_definitions(aiinput PRIVATE AIINPUT_FCITX_GE_51=1)
+endif()
 find_package(Fcitx5ModuleDBus CONFIG REQUIRED)
 target_link_libraries(aiinput PRIVATE Fcitx5::Module::DBus)
 find_package(Fcitx5ModuleWayland CONFIG REQUIRED)
