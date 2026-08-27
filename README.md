@@ -53,6 +53,28 @@ bash /usr/lib/fcitx5-aiinput/scripts/fetch-sherpa-models.sh         # 模型 →
 bash /usr/lib/fcitx5-aiinput/scripts/fetch-sherpa-models.sh --model sensevoice
 ```
 
+## 部署环境提示（定位跟随质量的关键）
+
+**输入法环境变量只保留 `XMODIFIERS`，不要全局设置 `GTK_IM_MODULE` / `QT_IM_MODULE`**：
+
+```bash
+# ~/.config/environment.d/ime.conf（推荐的全部内容）
+XMODIFIERS=@im=fcitx
+```
+
+环境变量决定应用走哪条定位路径：
+
+| 应用类型 | 环境要求 | 定位路径 |
+| --- | --- | --- |
+| Wayland 原生 GTK/Qt（ghostty、gnome-text-editor 等） | **不设** IM_MODULE | text-input → 合成器精确定位（卡片直接挂输入光标） |
+| XWayland 应用（WPS、Electron 老应用等） | 保留 `XMODIFIERS` | X 卡片路径（0.4.0 起矩形原样 + X 屏钳制，与 classicui 同构） |
+
+全局设置 `GTK_IM_MODULE=fcitx` 的后果：GTK/Qt 应用被强制走 D-Bus 模块路径，应用上报的光标矩形是**窗口局部坐标**，而 Wayland 不暴露窗口自身位置——多列平铺 / 多屏布局下卡片必然偏移（classicui 同样受限，非本项目缺陷）。修改后需**重新登录**生效。
+
+- 个别 Wayland 应用跟随异常时，可用 `GDK_BACKEND=x11` 启动该应用进精确 X 路径
+- KDE（kwin 无 input-method-v2）下跟随退化为底部居中兜底，属已知限制
+- 常见问题排查（卡片不出现 / 偏移 / 触发键无效 / 路径确认等）见 **[docs/QA.md](docs/QA.md)**
+
 ## 使用
 
 1. 任意输入框获得焦点（任意输入法状态）
