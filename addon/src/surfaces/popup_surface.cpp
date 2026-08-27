@@ -207,6 +207,14 @@ static const wl_pointer_listener kPointerListener = {
 void VoicePopup::popupRectangle(void *data, zwp_input_popup_surface_v2 *,
                                 int32_t x, int32_t y, int32_t w, int32_t h) {
     auto *s = static_cast<VoicePopup *>(data);
+    if (x == s->rectLastX_ && y == s->rectLastY_ && w == s->rectLastW_ &&
+        h == s->rectLastH_) {
+        return; // 同值矩形（mutter 每帧重发）——状态无变化，零处理
+    }
+    s->rectLastX_ = x;
+    s->rectLastY_ = y;
+    s->rectLastW_ = w;
+    s->rectLastH_ = h;
     s->cursorX_ = x;
     s->cursorY_ = y;
     s->cursorW_ = w;
@@ -1051,8 +1059,8 @@ bool VoicePopup::ready() { return pool_ && buffers_[0]; }
 
 void VoicePopup::onConnectionCreated(const std::string &name,
                                      wl_display *display) {
-    // waylandim 的连接名形如 "wayland:<display>"；只有存在
-    // zwp_input_method_manager_v2 的连接才是输入法连接，registry 回调里判断
+    // waylandim 的连接名形如 "wayland:<display>"；同一合成器上 layer/
+    // shm 能力与 IM 协议版本无关（v1-only 合成器见 registry 回调注释）
     std::lock_guard<std::mutex> lock(mutex_);
     if (display_) {
         return; // 已绑定一个连接
@@ -1147,16 +1155,14 @@ void VoicePopup::registryGlobalImpl(void *data, wl_registry *reg, uint32_t name,
         self->layerShell_ = static_cast<zwlr_layer_shell_v1 *>(
             wl_registry_bind(reg, name, &zwlr_layer_shell_v1_interface, lv));
         FCITX_INFO() << "VoicePopup: zwlr_layer_shell_v1 bound v" << lv;
-    } else if (strcmp(iface, "zwp_input_method_manager_v2") == 0) {
-        // 仅作为"这是 waylandim 的 IM 连接"的判据；不绑定第二个 IM
-        // （协议规定一个 seat 只允许一个 input method，waylandim 已 bind）
-        self->isImConnection_ = true;
     }
 
-    // compositor+shm 齐备（且确为 IM 连接）→ 建 shm 池；surface/popup 延迟到
-    // ensurePopup（需要 IC 才能从 waylandim 取 IM proxy）
-    if (self->isImConnection_ && self->compositor_ && self->shm_ &&
-        !self->pool_) {
+    // compositor+shm 齐备即建 shm 池；surface/popup 延迟到 ensurePopup
+    //（需要 IC 才能从 waylandim 取 IM proxy）。不门控 IM-v2 global：
+    // 嵌套 kwin 只广播 input-method v1（v2 缺席），池被卡死会让 popup
+    // 永远 not ready——v1 合成器上 popup 跟随本就不可达（v2 特性），
+    // ensurePopup 取不到 IM proxy 自然降级 layer 路径
+    if (self->compositor_ && self->shm_ && !self->pool_) {
         self->width_ = kDefaultWidth;
         self->height_ = kDefaultHeight;
         size_t stride = self->width_ * 4;
@@ -1607,6 +1613,9 @@ bool VoicePopup::ensurePopup(InputContext *ic, bool atShow) {
     } else if (im_) {
         popup_ = zwp_input_method_v2_get_input_popup_surface(im_, surface_);
         zwp_input_popup_surface_v2_add_listener(popup_, &kPopupListener, this);
+        // 矩形去重状态随 popup 重建重置：合成器对新 popup 会重发同值
+        // 矩形，不去重复位则首个事件被吞、hasCursorRect_ 永不置位
+        rectLastX_ = rectLastY_ = rectLastW_ = rectLastH_ = -1;
         icRef_ = ic->watch();
         // 首次之外的每次 attach 都是重建（hide 已销毁 / classicui 抢过槽）
         popupAttachCount_++;

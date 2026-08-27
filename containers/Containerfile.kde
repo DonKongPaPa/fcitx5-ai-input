@@ -6,6 +6,7 @@ USER root
 
 RUN pacman -Syu --noconfirm --needed \
         kwin \
+        xwayland-satellite chromium python-pillow grim \
         && pacman -Scc --noconfirm
 
 # kwin_wayland 自带 cap_sys_nice 文件能力，rootless 容器缺该能力会 exec EPERM；

@@ -10,8 +10,9 @@ DURATION="${DURATION:-10}"
 MODE="${MODE:-sleep}"
 
 # 1. sway 无头宿主，exec 拉起嵌套 gnome-shell
+#    1080p 与 niri/kde 对齐：X 组与像素用例的坐标/分辨率假设三环境一致
 cat >"$LOG_DIR/sway-config" <<EOF
-output HEADLESS-1 resolution 1280x800
+output HEADLESS-1 resolution 1920x1080
 exec env WLR_BACKENDS=headless sh -c 'WAYLAND_DISPLAY=\$(ls \$XDG_RUNTIME_DIR | grep -E "^wayland-[0-9]+\$" | sort | head -1) exec gnome-shell --wayland --wayland-display gnome-hd --no-x11'
 EOF
 WLR_BACKENDS=headless WLR_LIBINPUT_NO_DEVICES=1 WLR_RENDERER_ALLOW_SOFTWARE=1 \
@@ -61,6 +62,7 @@ echo "gnome 就绪：socket=$GNOME_SOCK（应用） / sway=$CAGE_SOCK（录屏�
 
 # 2. 公共栈；ENABLE_STACK=0 时跳过
 if [ "${ENABLE_STACK:-1}" = "1" ]; then
+    start_xwayland_satellite
     start_audio
     setup_virtual_mic >/dev/null
     start_fcitx5
@@ -75,7 +77,8 @@ fi
 
 # 3.5 用例驱动模式
 if [ "$MODE" = "case" ]; then
-    bash "$SCRIPT_DIR/case-driver.sh"
+    # CASE_DRIVER 可覆盖（冒烟/一次性诊断脚本复用整条环境编排）
+    bash "${CASE_DRIVER:-$SCRIPT_DIR/case-driver.sh}"
     kill "$HOST_PID" 2>/dev/null || true
     cleanup_all
     echo "gnome 用例执行完成"

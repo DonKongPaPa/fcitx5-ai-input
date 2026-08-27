@@ -378,8 +378,10 @@ private:
 
     bool visible_ = false;
     bool patternMode_ = false; // 桥不可用时回退色块测试帧
-    bool isImConnection_ = false; // registry 见到 IM manager 即 waylandim 连接
     int cursorX_ = 0, cursorY_ = 0, cursorW_ = 0, cursorH_ = 0; // 光标矩形
+    // 矩形事件去重：mutter 会每帧重发同值矩形（实测 ~300/s，7 分钟
+    // 12.6 万条日志淹没事件循环、拖死 D-Bus）——同值直接丢
+    int rectLastX_ = -1, rectLastY_ = -1, rectLastW_ = -1, rectLastH_ = -1;
 
     std::unique_ptr<HandlerTableEntry<WaylandConnectionCreated>>
         connHandler_;

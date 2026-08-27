@@ -1,6 +1,6 @@
 # 原子避坑知识资产 INDEX
 
-共 66 条（wayland 13 · x11 11 · fcitx-api 11 · embedder 5 · app-behavior 4 · container-test 14 · build-deploy 8）。每条一文件：症状/根因/约束规则/来源/验证。
+共 71 条（wayland 14 · x11 11 · fcitx-api 12 · embedder 5 · app-behavior 4 · container-test 17 · build-deploy 8）。每条一文件：症状/根因/约束规则/来源/验证。
 规则：重构动到的模块先过该类目清单；能固化为断言的进对应容器用例。
 再生成：`python3 lab/knowledge/gen.py`（条目定义在脚本 ITEMS 内，加条目只改数据）。
 
@@ -18,6 +18,7 @@
 - [wl-rect-latency-unbounded](wl-rect-latency-unbounded.md) 光标矩形延迟无上界，禁用固定截止窗
 - [wl-chromium-rect-only-on-change](wl-chromium-rect-only-on-change.md) chromium 系只在文本/光标变化时报矩形
 - [wl-niri-popup-no-clamp](wl-niri-popup-no-clamp.md) niri 不替 input popup 滑位/钳制
+- [wl-mutter-rect-storm](wl-mutter-rect-storm.md) mutter 每帧重发同值 text_input_rectangle（矩形风暴）
 
 ## x11 / satellite
 - [x-cw-valueorder](x-cw-valueorder.md) xcb CreateWindow 值列表必须按 CW 位序
@@ -33,6 +34,7 @@
 - [x-xshm-works](x-xshm-works.md) MIT-SHM 在 satellite 下可用
 
 ## fcitx5 API
+- [fc-kwin-im-v1-only-pool-gate](fc-kwin-im-v1-only-pool-gate.md) 嵌套 kwin 只有 input-method v1——shm 池门控被卡死
 - [fc-xcb-interface-target](fc-xcb-interface-target.md) Fcitx5::Module::XCB 是 INTERFACE 目标
 - [fc-setconfig-string-values](fc-setconfig-string-values.md) D-Bus SetConfig 的值必须是字符串
 - [fc-config-section-append](fc-config-section-append.md) 配置文件追加键不能落进节内
@@ -60,6 +62,9 @@
 
 ## 容器与测试
 - [ct-satellite-nested-container](ct-satellite-nested-container.md) xwayland-satellite 可挂嵌套合成器链（容器 X 仿真）
+- [ct-grep-q-sigpipe](ct-grep-q-sigpipe.md) printf|grep -q 早退撞 SIGPIPE——pipefail 下大窗口恒假败
+- [ct-bash-or-and-precedence](ct-bash-or-and-precedence.md) bash {A&&B||C&&D} 左结合拆散双档断言
+- [ct-env-capability-matrix](ct-env-capability-matrix.md) 合成器能力矩阵：popup 与指针注入是两个独立维度
 - [ct-case-config-leak](ct-case-config-leak.md) 用例改配置必须还原到产品默认（不是任意安全值）
 - [proto-json-dumps-space](proto-json-dumps-space.md) python json.dumps 默认冒号后带空格，紧凑解析器全盲
 - [glib288-variant-traps](glib288-variant-traps.md) glib 2.88 GVariant 三个坑（ic-sim 实证）
