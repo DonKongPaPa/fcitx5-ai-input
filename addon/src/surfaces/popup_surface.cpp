@@ -140,10 +140,14 @@ void VoicePopup::surfaceLeave(void *data, wl_surface *, wl_output *o) {
 static const wl_surface_listener kSurfaceListener = {
     /* .enter = */ &VoicePopup::surfaceEnter,
     /* .leave = */ &VoicePopup::surfaceLeave,
+#ifdef WL_SURFACE_PREFERRED_BUFFER_SCALE_SINCE_VERSION
     /* .preferred_buffer_scale = */ // v5 槽空即 abort（libwayland 行为）
     [](void *, wl_surface *, int32_t) {},
     /* .preferred_buffer_transform = */
     [](void *, wl_surface *, uint32_t) {},
+#endif
+    // 老 libwayland（bookworm）listener 只有 2 槽——多初始化器直接编译
+    // 错误，按协议宏有无裁剪
 };
 
 void VoicePopup::xdgLogicalPos(void *data, zxdg_output_v1 *xo, int32_t x,
@@ -684,7 +688,18 @@ bool VoicePopup::focusedX11WindowLocked() {
         }
         auto name = xcb->call<IXCBModule::mainDisplay>();
         FCITX_INFO() << "VoicePopup: [x11diag] xcb 主显示=\"" << name << "\"";
-        if (name.empty() || !xcb->call<IXCBModule::isXWayland>(name)) {
+        if (name.empty()) {
+            xBroken_ = true;
+            return false;
+        }
+#if !defined(AIINPUT_FCITX_GE_51)
+        // fcitx5 5.0 无 IXCBModule::isXWayland（5.1 API）——退化为不判：
+        // 5.0 目标（bookworm）典型是 X 会话，X 路径本就是正路
+        constexpr bool isXWayland = true;
+#else
+        const bool isXWayland = xcb->call<IXCBModule::isXWayland>(name);
+#endif
+        if (!isXWayland) {
             xBroken_ = true;
             return false;
         }

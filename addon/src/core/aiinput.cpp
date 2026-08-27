@@ -652,7 +652,13 @@ void AiInputEngine::update(UserInterfaceComponent component,
             auto &w = list->candidate(i);
             std::string label = list->label(i).toString();
             std::string text = w.text().toString();
+#if defined(AIINPUT_FCITX_GE_51)
             std::string comment = w.comment().toString();
+#else
+            // fcitx5 5.0 无 CandidateWord::comment()——面板候选注释
+            //（如拼音注音）降级为空，正文不受影响
+            std::string comment;
+#endif
             if (!cands.empty()) cands += ",";
             cands += "{\"label\":\"" + flutterJsonEscape(label) +
                      "\",\"text\":\"" + flutterJsonEscape(text);

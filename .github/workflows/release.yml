@@ -134,7 +134,7 @@ jobs:
             - **Arch**: `pacman -U fcitx5-ai-input-*.pkg.tar.zst`
             - **Debian**: `apt install ./fcitx5-ai-input_*.deb`
             - **Fedora**: `dnf install fcitx5-ai-input-*.rpm`
-            - **其他**: 解压 tarball 后 `sudo bash install.sh`（需 gcc/cmake/fcitx5-dev/wayland-dev）
+            - **其他**: 解压 tarball 后 `sudo bash install.sh`（需 gcc/cmake/fcitx5-dev/wayland-dev/libxcb-dev）
 
             ### 依赖
             fcitx5 ≥ 5.0、pulseaudio-utils（parec 采集）。语音服务可选：

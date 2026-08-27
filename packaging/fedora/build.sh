@@ -7,7 +7,7 @@ VERSION="${VERSION:-0.1.0}"
 export SRC VERSION
 
 dnf -y -q install cmake gcc-c++ make gettext wayland-devel fontconfig-devel \
-    fcitx5-devel fcitx5 pulseaudio-utils dbus-daemon dbus-tools rpm-build findutils >/dev/null 2>&1 \
+    libxcb-devel fcitx5-devel fcitx5 pulseaudio-utils dbus-daemon dbus-tools rpm-build findutils >/dev/null 2>&1 \
     || { echo "!! 依赖安装失败"; dnf -q search fcitx5 | head; exit 1; }
 
 bash "$SRC/packaging/common/stage.sh"
