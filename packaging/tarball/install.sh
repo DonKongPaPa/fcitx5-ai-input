@@ -7,7 +7,7 @@ set -euo pipefail
 HERE="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 PREFIX="${PREFIX:-/usr}"
 
-echo ">> 构建 addon（需要 gcc cmake fcitx5-dev wayland-dev fontconfig-dev gettext）"
+echo ">> 构建 addon（需要 gcc cmake fcitx5-dev wayland-dev fontconfig-dev libxcb-dev gettext）"
 cmake -S "$HERE/addon" -B /tmp/aiinput-build -DCMAKE_BUILD_TYPE=Release \
       -DCMAKE_INSTALL_PREFIX="$PREFIX" \
       -DFLUTTER_ENGINE_LIBRARY="$HERE/engine/libflutter_engine.so" \

@@ -13,6 +13,7 @@ apt-get install -y -qq --no-install-recommends \
     libfcitx5core-dev libfcitx5utils-dev libfcitx5config-dev \
     fcitx5-modules-dev fcitx5 libwayland-dev libwayland-bin \
     libfontconfig1-dev pulseaudio-utils libglib2.0-bin \
+    libxcb1-dev libxcb-shm0-dev \
     >/dev/null 2>&1 || { echo "!! 依赖安装失败"; apt-cache search fcitx5 | head -10; exit 1; }
 
 bash "$SRC/packaging/common/stage.sh"

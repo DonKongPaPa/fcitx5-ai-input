@@ -38,7 +38,7 @@ pacman -U fcitx5-ai-input-*.pkg.tar.zst
 apt install ./fcitx5-ai-input_*.deb
 # Fedora
 dnf install fcitx5-ai-input-*.rpm
-# 其他（需 gcc/cmake/fcitx5-dev/wayland-dev/fontconfig-dev）
+# 其他（需 gcc/cmake/fcitx5-dev/wayland-dev/fontconfig-dev/libxcb-dev）
 tar xf fcitx5-ai-input-*.tar.* && cd fcitx5-ai-input-* && sudo bash install.sh
 ```
 

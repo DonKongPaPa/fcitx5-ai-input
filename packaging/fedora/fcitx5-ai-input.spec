@@ -37,6 +37,8 @@ cp -a %{_stage_src}/usr %{buildroot}/
 %{_libdir}/fcitx5-aiinput/funasr-server/server.py
 %{_libdir}/fcitx5-aiinput/funasr-server/funasr-serve.sh
 /usr/share/fcitx5/addon/aiinput.conf
+/usr/share/fcitx5-aiinput/backends/asr-dummy.py
+/usr/share/fcitx5-aiinput/backends/refine-dummy.py
 /usr/share/fcitx5-aiinput/flutter/flutter_assets
 /usr/share/fcitx5-aiinput/flutter/icudtl.dat
 /usr/share/doc/fcitx5-ai-input/LICENSE
