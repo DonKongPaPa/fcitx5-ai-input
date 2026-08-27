@@ -118,14 +118,17 @@ jobs:
             模型脚本下载）+ SenseVoice 松手重识别；可选 FunASR 服务档
             （31 语种）/ GGUF 本地档。
 
-            ### 本版要点
-            - 统一会话卡片：录音流式文字完整换行，松手**原位冻结**成
-              「识别结果」候选，LLM 润色行延后推入（润色版/识别结果双 tag）
-            - 内在尺寸架构：内容自然撑开、窗口跟随——任何字体/缩放
-              不会出现溢出与截断
-            - 预编辑恒显「语音输入中」：卡片全程锚定光标处不跳动
-            - 动画速率三挡（configtool 热改）；长文本流式期不掉帧
-            - `Esc`/`Backspace` 取消；configtool 热改设置
+            ### 本版要点（v0.4.0）
+            - **Xwayland 定位重做（与 classicui 同构）**：光标矩形原样
+              落位 + 只钳 X 屏，多显示器/分数 scale 下卡片贴住光标；
+              修复卡片被父窗钳制推出应用窗外的问题
+            - **协议 v1 重构**：UI/ASR/LLM 润色三通道统一 envelope；
+              ASR 与润色支持进程外 stdio 后端（backends/ 参照实现）
+            - **部署指南**：环境变量只留 `XMODIFIERS`（GTK/Qt 走
+              text-input 精确定位）——见 README「部署环境提示」与
+              docs/QA.md 排查集（10 条现象→处置）
+            - **测试矩阵**：niri/KDE/GNOME 三合成器 ×双 scale ×26 例
+              容器端到端（含 Xwayland 仿真组），Flutter 构建全链镜像化
 
             ### 安装
             - **Arch**: `pacman -U fcitx5-ai-input-*.pkg.tar.zst`
@@ -135,5 +138,5 @@ jobs:
 
             ### 依赖
             fcitx5 ≥ 5.0、pulseaudio-utils（parec 采集）。语音服务可选：
-            configtool → Voice Input → 模型部署（FunASRAutoStart + 设备/量化档）。
+            configtool → 模型部署（FunASRAutoStart + 设备/量化档）。
           files: dist/*
