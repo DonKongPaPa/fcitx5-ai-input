@@ -116,6 +116,28 @@ start_fcitx5() {
     # (配置由 run-test.sh 在启动前写入 ~/.config/fcitx5/profile)
 }
 
+# Xwayland 层：satellite 作为当前合成器（$WAYLAND_DISPLAY）的 wayland
+# 客户端拉起 X 服务，成功则 export DISPLAY——必须在 start_fcitx5 之前
+# 调用（xcb 模块要吃到 DISPLAY）。X 组用例依赖；无 satellite 的镜像
+# 调用是无害 no-op（X 组按 DISPLAY 判空跳过）
+start_xwayland_satellite() {
+    command -v xwayland-satellite >/dev/null 2>&1 || return 0
+    xwayland-satellite >"$LOG_DIR/satellite.log" 2>&1 &
+    local disp="" i
+    for i in $(seq 1 30); do
+        disp="$(ls /tmp/.X11-unix 2>/dev/null | grep -oP '^X\K\d+' | head -1 || true)"
+        [ -n "$disp" ] && break
+        sleep 0.5
+    done
+    if [ -n "$disp" ]; then
+        export DISPLAY=":$disp"
+        echo "xwayland-satellite 就绪：DISPLAY=$DISPLAY"
+    else
+        echo "警告：satellite 未出 X socket（X 组用例将跳过）"
+        tail -5 "$LOG_DIR/satellite.log" >&2 || true
+    fi
+}
+
 # 通用收尾：杀掉本会话拉起的所有后台进程
 cleanup_all() {
     jobs -p | xargs -r kill 2>/dev/null || true

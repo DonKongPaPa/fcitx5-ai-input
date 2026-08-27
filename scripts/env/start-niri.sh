@@ -49,27 +49,8 @@ export WAYLAND_DISPLAY="$NIRI_SOCK"
 export CAGE_SOCK="$(ls "$XDG_RUNTIME_DIR" | grep -E '^wayland-[0-9]+$' | grep -v "^$NIRI_SOCK$" | head -1)"
 echo "niri 就绪：socket=$NIRI_SOCK（应用） / sway=$CAGE_SOCK（录屏，1080p）"
 
-# 1.5 Xwayland 层：satellite 作为嵌套 niri 的 wayland 客户端拉起 X 服务，
-#     DISPLAY 导出给 fcitx5（xcb 模块连接）与 X 用例进程。
-#     X 组用例（WPS/ghostty 同型拓扑：X 窗 + DBus IC）依赖此层
-if command -v xwayland-satellite >/dev/null 2>&1; then
-    xwayland-satellite >"$LOG_DIR/satellite.log" 2>&1 &
-    SATELLITE_PID=$!
-    X_DISP=""
-    for _ in $(seq 1 30); do
-        X_DISP="$(ls /tmp/.X11-unix 2>/dev/null | grep -oP '^X\K\d+' | head -1 || true)"
-        [ -n "$X_DISP" ] && break
-        kill -0 "$SATELLITE_PID" 2>/dev/null || break
-        sleep 0.5
-    done
-    if [ -n "$X_DISP" ]; then
-        export DISPLAY=":$X_DISP"
-        echo "xwayland-satellite 就绪：DISPLAY=$DISPLAY"
-    else
-        echo "警告：satellite 未出 X socket（X 组用例将跳过）"
-        tail -5 "$LOG_DIR/satellite.log" >&2 || true
-    fi
-fi
+# 1.5 Xwayland 层（satellite→DISPLAY；X 组用例依赖，详见 common.sh）
+start_xwayland_satellite
 
 # 2. 公共栈（音频/虚拟麦克风/fcitx5）；ENABLE_STACK=0 时跳过（M2 仅验证合成器+录屏）
 if [ "${ENABLE_STACK:-1}" = "1" ]; then
