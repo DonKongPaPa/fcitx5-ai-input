@@ -39,7 +39,9 @@ say "== gtkscale 诊断 scale=$SCALE GDK_SCALE=$GDKS 逻辑输出 ${LOGW}x${LOGH
     gtk-query-immodules-4.0 --list 2>/dev/null || ls /usr/lib/gtk-4.0/4.0.0/immodules/
 } >>"$SUM" 2>&1
 
-# A1 模块路径：X testapp + 打字（可见文字，caret 在末尾）
+# A1 模块路径：X testapp（空框 caret 在 entry 左缘，位置确定性——X 路径
+# 打字注入不可用：InjectKey 的 forwardKey 依赖 im 模块合成 X 键事件，
+# 实测未到达 GTK（疑 send_event 被 GTK 丢弃），与定位验证无关）
 LOG_MARK=$(wc -l <"$FCITX_LOG" 2>/dev/null || echo 0)
 GDK_BACKEND=x11 GTK_IM_MODULE=fcitx GDK_SCALE=$GDKS TEST_TIMEOUT=300 \
     "$DIST_BIN/testapp-gtk" >"$LOG_DIR/gtkscale-app-a.log" 2>&1 &
@@ -47,14 +49,6 @@ sleep 3
 timeout 10 "$DIST_BIN/virtpoint" move $((LOGW / 2)) 225 "$LOGW" "$LOGH" 2>/dev/null || true
 timeout 10 "$DIST_BIN/virtpoint" click left 2>/dev/null || true
 sleep 0.5
-# InjectKey 才走真实管线转发到应用（SimulateKey 只喂热键状态机，不进 app）
-for ch in a b c d e f g h; do
-    call InjectKey "$ch" true >/dev/null 2>&1 || true
-    sleep 0.05
-    call InjectKey "$ch" false >/dev/null 2>&1 || true
-    sleep 0.08
-done
-sleep 0.6
 
 # A2 触发前几何：X root 侧 + niri 屏幕侧
 niri msg windows >"$OUT_DIR/niri-windows-before.txt" 2>"$LOG_DIR/niri-msg.err" || true

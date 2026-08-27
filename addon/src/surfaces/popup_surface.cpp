@@ -633,10 +633,9 @@ bool VoicePopup::rectIsXPhysical(const Rect &rect) {
     return rect.left() > maxW + 2 || rect.top() > maxH + 2;
 }
 
-// 刷新聚焦 X 顶层窗几何（持锁）。satellite 把所有顶层 X 窗摆在根
-// (0,0)——窗口局部坐标即 X 根坐标，卡片越出父窗范围时 satellite 拒绝
-// 父子化、映成独立顶层窗被 niri 平铺到别处（0.3.0.39 实测卡片跑对面
-// 显示器）：父窗边界才是钳制首要边界，X 屏只作几何不可得时兜底
+// 刷新聚焦 X 顶层窗几何（持锁）。仅作建窗日志观测（父窗=）——satellite
+// 0.8.2 把顶层窗位置同步成合成器布局位置（实测非 root (0,0)），窗口边界
+// 与 root 坐标无固定关系，不参与卡片摆位（x11CardPosLocked 只钳屏幕）
 void VoicePopup::queryFocusGeometryLocked() {
     xFocusW_ = xFocusH_ = 0;
     if (!xconn_ || xroot_ == XCB_WINDOW_NONE) {
@@ -862,51 +861,31 @@ void VoicePopup::moveX11WindowLocked(const Rect &rect) {
                     << rect.top() << "）";
 }
 
-// X 卡片落点：caret 下方放不下翻上方、水平钳入 caret 所在输出的 X 区段
-//（satellite 不替我们滑——ghostty 末行输入卡片出屏的实测）
+// X 卡片落点：classicui 同构（xcbinputwindow.cpp）——rect 已是 X root 物理
+// 坐标（fcitx5-gtk 用 XTranslateCoordinates 上报，含窗口原点与 GDK_SCALE
+// 换算），root 的 OR 子窗直接摆 root 坐标即贴光标。只钳 X 屏，且屏幕几
+// 何必须取 X 服务器自己的 root——wayland 输出 mode 在卫星合成器下可小
+// 于 X 屏（实测嵌套 niri 输出 956 ≠ satellite X 屏 1920，X 屏连接时定死
+// 不随输出变），输出段不能当钳制框；多输出 X 屏的逐屏段化（randr crtc，
+// classicui 同款）待宿主多屏需要时再加。不钳父窗：satellite 0.8.2 顶层
+// 窗位置随合成器布局回写，窗口边界不是 root 区段（0.3.0.40 曾按「窗口
+// 在 (0,0)」钳父窗，窗口平铺在右半屏时卡片被推出窗外）；越出窗口但不
+// 出屏的 OR 窗 satellite 正常呈现（classicui 候选窗常态如此）。下方放
+// 不下翻上方（satellite 不替我们滑——ghostty 末行输入卡片出屏的实测）
 std::pair<int, int> VoicePopup::x11CardPosLocked(const Rect &rect, int cardW,
                                                  int cardH) {
     const int gap = static_cast<int>(8 * scale() + 0.5);
     int x = rect.left();
     int y = rect.top() + rect.height() + gap;
-    // 含 caret 的输出 X 区段：位置=逻辑原点、范围=物理尺寸
-    const OutputGeom *g = nullptr;
-    for (const auto &kv : outputs_) {
-        if (kv.second.containsXPoint(rect.left(), rect.top())) {
-            g = &kv.second;
-            break;
-        }
-    }
-    if (g && cardW > 0 && cardH > 0) {
-        const int rx0 = g->logicalX, ry0 = g->logicalY;
-        const int rx1 = g->logicalX + g->physW, ry1 = g->logicalY + g->physH;
-        x = std::clamp(x, rx0 + kGapX11,
-                       std::max(rx0 + kGapX11, rx1 - cardW - kGapX11));
-        if (y + cardH > ry1 - kGapX11) {
-            y = std::max(ry0 + kGapX11, rect.top() - cardH - gap);
-        }
-    }
-    // 父窗硬界（首要）：聚焦 X 顶层窗自身范围。satellite 父子化要求
-    // 卡片落在父窗内；越出（GTK 滚动文档虚报 rect 超窗高、末行放不下）
-    // → 独立顶层窗 → niri 平铺抢焦/乱放。先翻上方再钳入窗界。X 屏
-    // （root）只在窗口几何不可得时兜底——高浮动窗可超出 X 屏，但其
-    // 弹层随窗面滚动，按窗界钳才正确
-    queryFocusGeometryLocked();
-    if (xFocusW_ > 0 && xFocusH_ > 0 && cardW > 0 && cardH > 0) {
-        if (y + cardH > xFocusH_ - kGapX11) {
-            y = std::max(kGapX11, rect.top() - cardH - gap);
-        }
-        x = std::clamp(x, kGapX11,
-                       std::max(kGapX11, xFocusW_ - cardW - kGapX11));
-        y = std::clamp(y, kGapX11,
-                       std::max(kGapX11, xFocusH_ - cardH - kGapX11));
-    } else if (xRootW_ > 0 && xRootH_ > 0 && cardW > 0 && cardH > 0) {
+    if (xRootW_ > 0 && xRootH_ > 0 && cardW > 0 && cardH > 0) {
         if (y + cardH > xRootH_ - kGapX11) {
             y = std::max(kGapX11, rect.top() - cardH - gap);
         }
         x = std::clamp(x, kGapX11, std::max(kGapX11, xRootW_ - cardW - kGapX11));
         y = std::clamp(y, kGapX11, std::max(kGapX11, xRootH_ - cardH - kGapX11));
     }
+    // 父窗几何仅刷新供建窗日志观测（父窗=），不参与摆位
+    queryFocusGeometryLocked();
     return {x, y};
 }
 

@@ -1029,10 +1029,10 @@ XSCALE="${NIRI_TEST_SCALE:-2.0}"
 XLOG_W=$(python3 -c "print(int(1920/float('$XSCALE')))")
 XLOG_H=$(python3 -c "print(int(1080/float('$XSCALE')))")
 # GDK_SCALE 让 GTK 逻辑单位=scale×物理（WPS 同型）；ENTRY_Y 按 GTK 单位
-# 给到 caret 物理位置 ~880（父窗 ~1050 物理高，卡片 190×scale 物理——
-# 两档都溢出父窗触发翻转）
+# 给到 caret 物理位置 ~980——两档 scale 下卡片（114/228 物理高）都放不进
+# X 屏（1080）下方，触发翻上方（父窗钳制已删，翻转按屏幕判）
 XGDK_SCALE=$(python3 -c "print(int(float('$XSCALE')))")
-XENTRY_Y=$(python3 -c "print(int(880/float('$XSCALE')))")
+XENTRY_Y=$(python3 -c "print(int(980/float('$XSCALE')))")
 x_app() {  # x_app <日志名> [额外env...]
     local log="$1"; shift
     env "$@" GDK_BACKEND=x11 GTK_IM_MODULE=fcitx GDK_SCALE=$XGDK_SCALE \
@@ -1094,7 +1094,7 @@ x2_pairs="$(grep -a 'X OR 卡片跟随' <<<"$x2_win" | grep -oP '跟随 \K[0-9]+
 x2_n="$(grep -ac 'X OR 卡片跟随' <<<"$x2_win" || true)"
 x2_errs="$(grep -ac 'X 错误' <<<"$x2_win" || true)"
 # rect 序列 x=120/400/700、y=300→500：断言 y 单调升（两档 scale 都不触
-# 底钳）且 x 不回退（scale 2.0 卡片 888 物理宽会被父窗钳平——钳平合法）
+# 底钳）且 x 不回退（卡片只钳 X 屏 [8,1920-cardW-8]，888 宽在屏内不钳）
 x2_ok=0
 [ "$x2_n" -ge 3 ] && [ "$x2_errs" -eq 0 ] && {
     mapfile -t x2_xy <<<"$x2_pairs"
@@ -1104,7 +1104,7 @@ x2_ok=0
     [ "$x2_x3" -ge "$x2_x1" ] && x2_ok=1
 }
 if [ "$x2_ok" = 1 ]; then
-    record x2-xwayland-follow pass "X 卡片几何引擎：rect 递进→跟随（y $x2_y1→$x2_y3，x $x2_x1→$x2_x3 含钳制），零 X 错误"
+    record x2-xwayland-follow pass "X 卡片几何引擎：rect 递进→跟随原样（y $x2_y1→$x2_y3，x $x2_x1→$x2_x3），零 X 错误"
 else
     record x2-xwayland-follow fail "n=$x2_n xerr=$x2_errs xy=[$(printf '%s ' "${x2_xy[@]:0:3}")]"
 fi

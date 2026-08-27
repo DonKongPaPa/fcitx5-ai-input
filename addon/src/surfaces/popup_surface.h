@@ -312,7 +312,7 @@ private:
     // 聚焦应用是否 X 应用：_NET_ACTIVE_WINDOW 存在（satellite 在 wayland
     // 聚焦时清空它——FocusIn 的 IC 即聚焦应用，无需 program/WM_CLASS）
     bool focusedX11WindowLocked();
-    // 刷新聚焦 X 顶层窗几何到 xFocusW_/H_（卡片钳制的父窗边界）
+    // 刷新聚焦 X 顶层窗几何到 xFocusW_/H_（仅建窗日志观测，不参与摆位）
     void queryFocusGeometryLocked();
     // 矩形是否为 X 物理坐标（超出全部输出逻辑范围——X 应用铁证）
     bool rectIsXPhysical(const Rect &rect);
