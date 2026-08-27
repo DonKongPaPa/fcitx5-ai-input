@@ -18,13 +18,16 @@
 //              configtool UiAnimSpeed 热改即时生效；font 消息同样携带）
 //   Dart→C++ : invokeMethod('ready')
 //              invokeMethod('resize', {w, h})     // 含阴影余量的整窗尺寸
-//              invokeMethod('selectCandidate', {index})
-//              invokeMethod('hoverChanged', {row}) // 测试观测用
+//              invokeMethod('select', {index, panel?})  // panel=true 走输入法候选
+//              invokeMethod('hover', {row})       // 测试观测用
 import 'dart:async';
+import 'dart:convert';
 import 'dart:io';
 
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
+
+import 'mock_host.dart';
 
 const double kMaxW = 420;
 // 卡片阴影余量：快照区比卡片四周各大这么多（BoxShadow blur10+spread1
@@ -48,6 +51,25 @@ Future<void> main() async {
   final loader = FontLoader('NotoSansSC')
     ..addFont(rootBundle.load('assets/fonts/NotoSansSC-Regular.otf'));
   await loader.load();
+  // 传输选择（协议 v1，lab/spec/protocol.md）：默认嵌入态 channel；
+  // UI_TRANSPORT=mock + UI_REPLAY=<jsonl> 时用回放宿主驱动（试验田/
+  // flutter run 演示），UI 发出的命令由 MockHost 记录打印
+  final env = Platform.environment;
+  if (env['UI_TRANSPORT'] == 'mock') {
+    final script = env['UI_REPLAY'] ?? '';
+    final host = MockHost();
+    if (script.isNotEmpty && File(script).existsSync()) {
+      final lines = File(script).readAsLinesSync();
+      final envelopes = lines
+          .where((l) => l.trim().isNotEmpty)
+          .map((l) => Map<String, dynamic>.from(
+              const JsonDecoder().convert(l) as Map))
+          .toList();
+      unawaited(host.play(MockHost.fromEnvelopes(envelopes)));
+    }
+    runApp(VoiceUiApp(transport: host));
+    return;
+  }
   runApp(const VoiceUiApp());
 }
 
@@ -77,11 +99,37 @@ class SessionData {
   });
 }
 
+
+/// IM 候选面板数据（panel/update 事件——pinyin/rime 等引擎的候选窗）
+class PanelData {
+  final List<PanelCandidate> candidates;
+  final int cursor;
+  final bool isVertical;
+  final String auxUp;
+  final String imName;
+  const PanelData({
+    this.candidates = const [],
+    this.cursor = -1,
+    this.isVertical = false,
+    this.auxUp = '',
+    this.imName = '',
+  });
+}
+
+class PanelCandidate {
+  final String label;
+  final String text;
+  final String comment;
+  const PanelCandidate(this.label, this.text, {this.comment = ''});
+}
+
 // ---------------------------------------------------------------------------
 // App 根
 // ---------------------------------------------------------------------------
 class VoiceUiApp extends StatelessWidget {
-  const VoiceUiApp({super.key});
+  const VoiceUiApp({super.key, this.transport});
+
+  final UiTransport? transport; // null=嵌入态默认 channel
 
   @override
   Widget build(BuildContext context) {
@@ -95,21 +143,21 @@ class VoiceUiApp extends StatelessWidget {
         fontFamily: 'NotoSansSC',
         colorScheme: ColorScheme.fromSeed(seedColor: const Color(0xFF6750A4)),
       ),
-      home: const VoiceUiHome(),
+      home: VoiceUiHome(transport: transport ?? const ChannelTransport()),
     );
   }
 }
 
 class VoiceUiHome extends StatefulWidget {
-  const VoiceUiHome({super.key});
+  const VoiceUiHome({super.key, this.transport = const ChannelTransport()});
+
+  final UiTransport transport;
 
   @override
   State<VoiceUiHome> createState() => _VoiceUiHomeState();
 }
 
 class _VoiceUiHomeState extends State<VoiceUiHome> {
-  // GTK runner 下跑（开发调试）时无 C++ 对端，channel 调用静默失败
-  static const _ch = MethodChannel('fcitx5/flutterui', JSONMethodCodec());
   SessionData _data = const SessionData();
   Timer? _ticker;
   int _localElapsed = 0;
@@ -117,6 +165,7 @@ class _VoiceUiHomeState extends State<VoiceUiHome> {
   double _fontScale = 1.0; // size/12 基准
   double _animScale = kDefaultAnimScale; // 动画速率挡位系数
   int _mouseHover = -1; // 鼠标悬停行（本地状态；键盘选择走 data.hover）
+  PanelData? _panel; // IM 候选面板（panel/update 事件驱动；null=隐藏）
   Size _lastReported = Size.zero;
   final GlobalKey _cardKey = GlobalKey(); // 卡片实际尺寸回读（布局后）
   // 内容实尺寸（VoicePanel 自然尺寸）：窗口上报的度量源。AnimatedSize
@@ -124,14 +173,14 @@ class _VoiceUiHomeState extends State<VoiceUiHome> {
   // 行的命中区伸出可见卡片之外（卡片下方仍能悬停到行）
   final GlobalKey _panelKey = GlobalKey();
 
-  void _invoke(String method, [dynamic args]) {
-    _ch.invokeMethod(method, args).catchError((_) => null);
+  void _invoke(String method, [Map<String, dynamic>? args]) {
+    widget.transport.send(method, args ?? const {});
   }
 
   @override
   void initState() {
     super.initState();
-    _ch.setMethodCallHandler(_onCall);
+    widget.transport.attach(_onTransportMessage);
     _invoke('ready');
     // 持久帧回调：每帧布局完成后回读卡片尺寸、变化即上报。不能挂在
     // build 的 post-frame 上——AnimatedSize 等动画只在 render 层逐帧
@@ -171,23 +220,19 @@ class _VoiceUiHomeState extends State<VoiceUiHome> {
     super.dispose();
   }
 
-  // C++→Dart：update{...}（字段同旧 TCP 协议）
-  Future<dynamic> _onCall(MethodCall call) async {
-    if (call.method != 'update') return null;
-    final msg = (call.arguments as Map?)?.cast<String, dynamic>() ?? {};
-    // 动画挡位随任意消息到达（update/font 均携带）
-    final animScale = (msg['anim'] as num?)?.toDouble();
+  // 宿主→UI 消息入口（协议 v1 单契约；legacy 'update' wire 已随 addon
+  // 发射器切换删除）
+  void _onTransportMessage(String method, Map<String, dynamic> args) {
+    final animScale = (args['anim'] as num?)?.toDouble();
     if (animScale != null) _animScale = animScale;
-    // 字体跟随（C++ fontconfig 解析后下发）
-    if (msg['state'] == 'font') {
-      await _applyFont(msg['path'] as String? ?? '',
-          (msg['size'] as num?)?.toDouble() ?? 12);
-      return null;
-    }
-    switch (msg['state'] as String? ?? 'idle') {
-      case 'recording':
-        _localElapsed = (msg['elapsed_ms'] as num?)?.toInt() ?? 0;
-        var partial = msg['partial'] as String? ?? '';
+    switch (method) {
+      case 'theme':
+        _applyFont(args['font_path'] as String? ?? '',
+            (args['font_size'] as num?)?.toDouble() ?? 12);
+        break;
+      case 'voice/recording':
+        _localElapsed = (args['elapsed_ms'] as num?)?.toInt() ?? 0;
+        var partial = args['partial'] as String? ?? '';
         _ticker?.cancel();
         _ticker = Timer.periodic(const Duration(milliseconds: 100), (_) {
           _localElapsed += 100;
@@ -203,34 +248,65 @@ class _VoiceUiHomeState extends State<VoiceUiHome> {
           elapsedMs: _localElapsed,
         ));
         break;
-      case 'result':
+      case 'voice/result':
         _ticker?.cancel();
         _update(SessionData(
           state: UiState.result,
-          resultText: msg['final'] as String? ?? '',
-          timeoutMs: (msg['timeout_ms'] as num?)?.toInt() ?? 1500,
+          resultText: args['final'] as String? ?? '',
+          timeoutMs: (args['timeout_ms'] as num?)?.toInt() ?? 1500,
         ));
         break;
-      case 'candidates':
+      case 'voice/candidates':
         _ticker?.cancel();
-        final int msgHover = (msg['hover'] as num?)?.toInt() ?? -1;
+        final int msgHover = (args['hover'] as num?)?.toInt() ?? -1;
         // hover 值 ≠ 本地悬停 = 键盘改了选择（或新会话）→ 悬停让位，
         // 方向键接管显示；鼠标再次移动经 onHover 重新接管
         _mouseHover = msgHover == _mouseHover ? _mouseHover : -1;
         _update(SessionData(
           state: UiState.candidates,
-          resultText: msg['final'] as String? ?? '',
-          candidates: (msg['candidates'] as List?)?.cast<String>() ?? const [],
+          resultText: args['final'] as String? ?? '',
+          candidates:
+              (args['candidates'] as List?)?.cast<String>() ?? const [],
           hover: msgHover,
-          llmDummy: msg['llmDummy'] == true,
+          llmDummy: args['llm_dummy'] == true,
         ));
         break;
-      default:
+      case 'voice/idle':
         _ticker?.cancel();
         _mouseHover = -1;
         _update(const SessionData());
+        break;
+      case 'panel/update':
+        _ticker?.cancel();
+        _mouseHover = -1;
+        final cands = (args['candidates'] as List? ?? const [])
+            .map((c) => PanelCandidate(
+                (c as Map)['label'] as String? ?? '',
+                c['text'] as String? ?? '',
+                comment: c['comment'] as String? ?? ''))
+            .toList();
+        setState(() => _panel = PanelData(
+            candidates: cands,
+            cursor: (args['cursor'] as num?)?.toInt() ?? -1,
+            isVertical: args['layout'] == 'vertical',
+            auxUp: args['aux_up'] as String? ?? '',
+            imName: args['im_name'] as String? ?? ''));
+        break;
+      case 'panel/hide':
+        _ticker?.cancel();
+        setState(() => _panel = null);
+        break;
+      default:
+        // 协议约定：未知 method 忽略，向前兼容
+        break;
     }
-    return null;
+  }
+
+  void _selectPanelCandidate(int index) {
+    if (_panel == null || index < 0 || index >= _panel!.candidates.length) {
+      return;
+    }
+    _invoke('select', {'index': index, 'panel': true});
   }
 
   void _update(SessionData d) {
@@ -270,12 +346,12 @@ class _VoiceUiHomeState extends State<VoiceUiHome> {
     }
     if (_mouseHover != row) {
       setState(() => _mouseHover = row);
-      _invoke('hoverChanged', {'row': row});
+      _invoke('hover', {'row': row});
     }
   }
 
   void _selectCandidate(int index) {
-    _invoke('selectCandidate', {'index': index});
+    _invoke('select', {'index': index});
   }
 
   @override
@@ -341,6 +417,10 @@ class _VoiceUiHomeState extends State<VoiceUiHome> {
                       animScale: _animScale,
                       onHover: _onHoverRow,
                       onSelect: _selectCandidate,
+                      panel: _panel,
+                      onPanelSelect: _selectPanelCandidate,
+                      fontScale: _fontScale,
+                      sysFontFamily: _sysFontFamily,
                       ),
                     ),
                   ),
@@ -364,6 +444,10 @@ class VoicePanel extends StatelessWidget {
   final double animScale; // 全局动画速率挡位系数
   final ValueChanged<int> onHover;
   final ValueChanged<int> onSelect;
+  final PanelData? panel; // IM 候选面板（null=无）
+  final ValueChanged<int>? onPanelSelect;
+  final double fontScale;
+  final String? sysFontFamily;
   const VoicePanel({
     super.key,
     required this.data,
@@ -371,6 +455,10 @@ class VoicePanel extends StatelessWidget {
     required this.animScale,
     required this.onHover,
     required this.onSelect,
+    this.panel,
+    this.onPanelSelect,
+    this.fontScale = 1.0,
+    this.sysFontFamily,
   });
 
   @override
@@ -399,7 +487,14 @@ class VoicePanel extends StatelessWidget {
             // 只在 会话↔空闲 间做整体切换，状态间过渡由 _SessionBody
             // 内部的局部动画完成（文字本体不重建、不闪烁）
             key: ValueKey(data.state == UiState.idle ? 'idle' : 'session'),
-            child: data.state == UiState.idle
+            child: panel != null
+                ? CandidatePanel(
+                    data: panel!,
+                    onSelect: onPanelSelect ?? (_) {},
+                    animScale: animScale,
+                    fontScale: fontScale,
+                    sysFontFamily: sysFontFamily)
+                : data.state == UiState.idle
                 ? const _IdleBody()
                 : _SessionBody(
                     data: data,
@@ -698,6 +793,78 @@ class _SessionBody extends StatelessWidget {
 }
 
 // —— 空闲态（理论上不可见；保留占位避免空帧）——
+
+/// IM 候选面板（classicui 等价渲染）：水平/竖排候选列表，标签+文本+
+/// 高亮+点击选择。视觉上与语音卡片共用 VoicePanel 容器（阴影/圆角）。
+class CandidatePanel extends StatelessWidget {
+  const CandidatePanel({
+    super.key,
+    required this.data,
+    required this.onSelect,
+    required this.animScale,
+    this.fontScale = 1.0,
+    this.sysFontFamily,
+  });
+
+  final PanelData data;
+  final ValueChanged<int> onSelect;
+  final double animScale;
+  final double fontScale;
+  final String? sysFontFamily;
+
+  @override
+  Widget build(BuildContext context) {
+    final cs = Theme.of(context).colorScheme;
+    final fam = sysFontFamily ?? 'NotoSansSC';
+    final cursor = data.cursor;
+    final children = <Widget>[];
+    for (int i = 0; i < data.candidates.length; i++) {
+      final c = data.candidates[i];
+      final selected = i == cursor;
+      children.add(_candidateRow(cs, fam, c, i, selected));
+    }
+    if (data.isVertical) {
+      return Column(
+          mainAxisSize: MainAxisSize.min, crossAxisAlignment: CrossAxisAlignment.start, children: children);
+    }
+    return Wrap(spacing: 4, runSpacing: 2, children: children);
+  }
+
+  Widget _candidateRow(ColorScheme cs, String fam, PanelCandidate c, int index, bool selected) {
+    return GestureDetector(
+      onTap: () => onSelect(index),
+      child: Container(
+        padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 3),
+        decoration: BoxDecoration(
+          color: selected ? cs.primaryContainer : Colors.transparent,
+          borderRadius: BorderRadius.circular(4),
+        ),
+        child: Row(mainAxisSize: MainAxisSize.min, children: [
+          Text(c.label,
+              style: TextStyle(
+                  fontFamily: fam,
+                  fontSize: 13 * fontScale,
+                  color: selected ? cs.onPrimaryContainer : cs.onSurfaceVariant)),
+          const SizedBox(width: 3),
+          Text(c.text,
+              style: TextStyle(
+                  fontFamily: fam,
+                  fontSize: 14 * fontScale,
+                  color: selected ? cs.onPrimaryContainer : cs.onSurface)),
+          if (c.comment.isNotEmpty) ...[
+            const SizedBox(width: 3),
+            Text(c.comment,
+                style: TextStyle(
+                    fontFamily: fam,
+                    fontSize: 11 * fontScale,
+                    color: cs.onSurfaceVariant)),
+          ],
+        ]),
+      ),
+    );
+  }
+}
+
 class _IdleBody extends StatelessWidget {
   const _IdleBody();
 

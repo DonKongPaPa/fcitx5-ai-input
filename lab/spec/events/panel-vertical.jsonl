@@ -1,0 +1,4 @@
+{"_comment":"竖排布局候选（classicui Vertical 模式数据形状）"}
+{"v":1,"channel":"ui","dir":"out","seq":1,"method":"hello","args":{"proto":1,"caps":["vertical"]}}
+{"v":1,"channel":"ui","dir":"out","seq":2,"method":"panel/update","args":{"preedit":[{"text":"shuju","underline":true}],"candidates":[{"label":"1.","text":"数据"},{"label":"2.","text":"输据"},{"label":"3.","text":"书局"},{"label":"4.","text":"束句"},{"label":"5.","text":"薯菊"}],"cursor":2,"layout":"vertical","has_prev":false,"has_next":false,"page":0,"im_name":"pinyin"},"_delay_ms":100}
+{"v":1,"channel":"ui","dir":"out","seq":3,"method":"panel/hide","args":{},"_delay_ms":600}

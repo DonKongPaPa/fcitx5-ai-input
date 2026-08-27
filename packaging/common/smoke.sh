@@ -32,6 +32,9 @@ check "flutter 资产在位" '[ -d /usr/share/fcitx5-aiinput/flutter/flutter_ass
 check "引擎 .so 在位（rpath 目标）" 'find /usr/lib* -path "*fcitx5-aiinput*" -name libflutter_engine.so 2>/dev/null | grep -q .' 
 check "funasr 服务脚本在位" 'find /usr/lib* -path "*fcitx5-aiinput*" -name server.py 2>/dev/null | grep -q .'
 check "addon 模块已安装" 'find /usr/lib* -name aiinput.so 2>/dev/null | grep -q .'
+# 惰性绑定下漏链的外部符号在无 X 的容器里测不出（符号从未被解析），
+# 上机一调即 symbol lookup error 崩 fcitx5（XWayland 换算的 xcb 死法）
+check "aiinput.so 无未解析符号（ldd -r）" '! ldd -r "$(find /usr/lib* -name aiinput.so 2>/dev/null | head -1)" 2>&1 | grep -q "undefined symbol"'
 
 if [ "$FAIL" -eq 0 ]; then
     echo "[smoke] 全部通过 ✓"

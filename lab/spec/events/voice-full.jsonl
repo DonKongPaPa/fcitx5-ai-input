@@ -1,0 +1,12 @@
+{"_comment":"语音全状态流：录音流式→候选→选择→idle"}
+{"v":1,"channel":"ui","dir":"out","seq":1,"method":"hello","args":{"proto":1,"caps":["paging","preedit"]}}
+{"v":1,"channel":"ui","dir":"out","seq":2,"method":"theme","args":{"font_path":"/usr/share/fonts/noto-cjk/NotoSansCJK-Regular.ttc","font_family":"Noto Sans CJK SC","font_size":16,"anim":3.0}}
+{"v":1,"channel":"ui","dir":"out","seq":3,"method":"voice/recording","args":{"partial":"","elapsed_ms":0},"_delay_ms":100}
+{"v":1,"channel":"ui","dir":"out","seq":4,"method":"voice/recording","args":{"partial":"你","elapsed_ms":800},"_delay_ms":700}
+{"v":1,"channel":"ui","dir":"out","seq":5,"method":"voice/recording","args":{"partial":"你好","elapsed_ms":1500},"_delay_ms":600}
+{"v":1,"channel":"ui","dir":"out","seq":6,"method":"voice/recording","args":{"partial":"你好这是","elapsed_ms":2300},"_delay_ms":600}
+{"v":1,"channel":"ui","dir":"out","seq":7,"method":"voice/recording","args":{"partial":"你好这是语音","elapsed_ms":3100},"_delay_ms":600}
+{"v":1,"channel":"ui","dir":"out","seq":8,"method":"voice/recording","args":{"partial":"你好这是语音输入","elapsed_ms":3900},"_delay_ms":600}
+{"v":1,"channel":"ui","dir":"out","seq":9,"method":"voice/candidates","args":{"final":"你好，这是语音输入。","candidates":["你好，这是语音输入。","你好这是语音输入"],"hover":-1,"llm_dummy":true},"_delay_ms":400}
+{"v":1,"channel":"ui","dir":"in","seq":10,"method":"select","args":{"index":0},"_delay_ms":800}
+{"v":1,"channel":"ui","dir":"out","seq":11,"method":"voice/idle","args":{},"_delay_ms":1500}

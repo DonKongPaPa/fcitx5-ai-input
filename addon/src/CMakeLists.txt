@@ -1,17 +1,38 @@
 add_library(aiinput MODULE)
+# 模块拆分蓝图（lab/spec/protocol.md §重构）：
+# core=会话状态机/按键/配置  hub=协议发射  surfaces=定位三传输
+# asr=识别后端  embedder=Flutter raw embedder
 target_sources(aiinput PRIVATE
-    aiinput.cpp
-    popup_surface.cpp
-    flutter_engine.cpp
-    funasr_ws_engine.cpp
-    funasr_local_engine.cpp
-    sherpa_engine.cpp
+    core/aiinput.cpp
+    hub/ui_bus.cpp
+    hub/stdio_backend.cpp
+    surfaces/popup_surface.cpp
+    embedder/flutter_engine.cpp
+    asr/funasr_ws_engine.cpp
+    asr/funasr_local_engine.cpp
+    asr/sherpa_engine.cpp
+    asr/stdio_engine.cpp
 )
+target_include_directories(aiinput PRIVATE
+    "${CMAKE_CURRENT_SOURCE_DIR}"
+    "${CMAKE_CURRENT_SOURCE_DIR}/core"
+    "${CMAKE_CURRENT_SOURCE_DIR}/hub"
+    "${CMAKE_CURRENT_SOURCE_DIR}/surfaces"
+    "${CMAKE_CURRENT_SOURCE_DIR}/asr"
+    "${CMAKE_CURRENT_SOURCE_DIR}/embedder")
 target_link_libraries(aiinput PRIVATE Fcitx5::Core)
 find_package(Fcitx5ModuleDBus CONFIG REQUIRED)
 target_link_libraries(aiinput PRIVATE Fcitx5::Module::DBus)
 find_package(Fcitx5ModuleWayland CONFIG REQUIRED)
 target_link_libraries(aiinput PRIVATE Fcitx5::Module::Wayland)
+# XWayland 矩形换算：xcb 主显示判定（isXWayland）+ 独立 xcb 连接查
+# _NET_ACTIVE_WINDOW/WM_CLASS/输出区段（无 X 环境自动跳过）。
+# 坑：Fcitx5::Module::XCB 是 INTERFACE 目标只给头文件路径，libxcb
+# 必须显式链——惰性绑定下漏链在无 X 的容器里测不出（符号从未解析），
+# 上机一调 xcb_connect 即 symbol lookup error 崩掉 fcitx5
+find_package(Fcitx5ModuleXCB CONFIG REQUIRED)
+target_link_libraries(aiinput PRIVATE Fcitx5::Module::XCB)
+# libxcb 链接在下方 fontconfig 的 PkgConfig 初始化之后统一声明
 
 # —— Flutter raw embedder 引擎（进程内嵌入，软渲染）——
 # 头文件 vendor 在 addon/third_party/；libflutter_engine.so 由
@@ -50,6 +71,8 @@ target_link_libraries(aiinput PRIVATE pthread)
 find_package(PkgConfig REQUIRED)
 pkg_check_modules(FONTCONFIG REQUIRED IMPORTED_TARGET fontconfig)
 target_link_libraries(aiinput PRIVATE PkgConfig::FONTCONFIG)
+pkg_check_modules(XCB REQUIRED IMPORTED_TARGET xcb xcb-shm)
+target_link_libraries(aiinput PRIVATE PkgConfig::XCB)
 
 # input-method-v2 协议（wlroots/fcitx5 扩展，不在 wayland-protocols 包内）
 find_program(WAYLAND_SCANNER_EXECUTABLE wayland-scanner REQUIRED)
@@ -128,3 +151,9 @@ if(AIINPUT_FLUTTER_ASSETS_DIR AND EXISTS "${AIINPUT_FLUTTER_ASSETS_DIR}/flutter_
             DESTINATION "${CMAKE_INSTALL_DATADIR}/fcitx5-aiinput/flutter"
             OPTIONAL)
 endif()
+
+# v1 协议 stdio 后端脚本（P6：asr/refine 进程外；StdioAsrCmd/StdioRefineCmd
+# 默认指向此安装路径）。参照实现 + 可直接替换成真实后端
+install(FILES "${CMAKE_CURRENT_SOURCE_DIR}/../../backends/asr-dummy.py"
+              "${CMAKE_CURRENT_SOURCE_DIR}/../../backends/refine-dummy.py"
+        DESTINATION "${CMAKE_INSTALL_DATADIR}/fcitx5-aiinput/backends")

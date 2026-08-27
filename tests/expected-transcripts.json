@@ -1,5 +1,0 @@
-{
-  "_comment": "真实语音样本的识别基准（FunASR 引擎接入后钉住，f6-test.sh 断言依据）。来源：用户真实录音 语音测试集/*.flac 的 16k 派生 wav；由 FunASR MLT(GPU) 与 GGUF 双档首次识别并人工核对。若模型/服务升级导致结果变化，先人工复核再更新此文件。",
-  "中文测试-16k.wav": "你好，这是一段语音测试。",
-  "英语测试-16k.wav": "This is an English voice input test."
-}

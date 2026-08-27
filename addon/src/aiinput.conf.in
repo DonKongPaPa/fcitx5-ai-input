@@ -1,6 +1,6 @@
 [Addon]
 Name=AI Input
-Category=Module
+Category=UI
 Version=@PROJECT_VERSION@
 Type=SharedLibrary
 Library=aiinput

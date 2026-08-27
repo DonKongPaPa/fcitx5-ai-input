@@ -37,6 +37,7 @@ dependencies:
 
 
 dev_dependencies:
+  fake_async: any
   flutter_test:
     sdk: flutter
 

@@ -1,0 +1,7 @@
+{"_comment":"字体/动画挡位热改：录制中切字号与 anim"}
+{"v":1,"channel":"ui","dir":"out","seq":1,"method":"hello","args":{"proto":1,"caps":[]}}
+{"v":1,"channel":"ui","dir":"out","seq":2,"method":"theme","args":{"font_size":16,"anim":3.0}}
+{"v":1,"channel":"ui","dir":"out","seq":3,"method":"voice/recording","args":{"partial":"字体切换前","elapsed_ms":1000},"_delay_ms":100}
+{"v":1,"channel":"ui","dir":"out","seq":4,"method":"theme","args":{"font_path":"/usr/share/fonts/noto-cjk/NotoSansCJK-Regular.ttc","font_size":24,"anim":1.0},"_delay_ms":500}
+{"v":1,"channel":"ui","dir":"out","seq":5,"method":"voice/recording","args":{"partial":"字体切换后","elapsed_ms":2000},"_delay_ms":400}
+{"v":1,"channel":"ui","dir":"out","seq":6,"method":"voice/idle","args":{},"_delay_ms":400}

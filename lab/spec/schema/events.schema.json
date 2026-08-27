@@ -1,0 +1,253 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://github.com/DonKongPaPa/fcitx5-ai-input/events.schema.json",
+  "title": "UI Protocol v1 事件参数",
+  "description": "按 channel+dir+method 校验 args；未知 method 放行（向前兼容原则）",
+  "type": "object",
+  "allOf": [
+    {
+      "if": {
+        "properties": { "channel": { "const": "ui" }, "dir": { "const": "out" }, "method": { "const": "hello" } },
+        "required": ["channel", "dir", "method"]
+      },
+      "then": {
+        "properties": { "args": { "$ref": "#/$defs/hello" } }
+      }
+    },
+    {
+      "if": {
+        "properties": { "channel": { "const": "ui" }, "dir": { "const": "out" }, "method": { "const": "theme" } },
+        "required": ["channel", "dir", "method"]
+      },
+      "then": { "properties": { "args": { "$ref": "#/$defs/theme" } } }
+    },
+    {
+      "if": {
+        "properties": { "channel": { "const": "ui" }, "dir": { "const": "out" }, "method": { "const": "voice/recording" } },
+        "required": ["channel", "dir", "method"]
+      },
+      "then": {
+        "properties": {
+          "args": {
+            "type": "object",
+            "required": ["partial", "elapsed_ms"],
+            "properties": {
+              "partial": { "type": "string" },
+              "elapsed_ms": { "type": "integer", "minimum": 0 }
+            }
+          }
+        }
+      }
+    },
+    {
+      "if": {
+        "properties": { "channel": { "const": "ui" }, "dir": { "const": "out" }, "method": { "const": "voice/result" } },
+        "required": ["channel", "dir", "method"]
+      },
+      "then": {
+        "properties": {
+          "args": {
+            "type": "object",
+            "required": ["final", "timeout_ms"],
+            "properties": {
+              "final": { "type": "string" },
+              "timeout_ms": { "type": "integer", "minimum": 0 }
+            }
+          }
+        }
+      }
+    },
+    {
+      "if": {
+        "properties": { "channel": { "const": "ui" }, "dir": { "const": "out" }, "method": { "const": "voice/candidates" } },
+        "required": ["channel", "dir", "method"]
+      },
+      "then": {
+        "properties": {
+          "args": {
+            "type": "object",
+            "required": ["final", "candidates", "hover"],
+            "properties": {
+              "final": { "type": "string" },
+              "candidates": { "type": "array", "items": { "type": "string" }, "minItems": 1 },
+              "hover": { "type": "integer", "minimum": -1 },
+              "llm_dummy": { "type": "boolean" }
+            }
+          }
+        }
+      }
+    },
+    {
+      "if": {
+        "properties": { "channel": { "const": "ui" }, "dir": { "const": "out" }, "method": { "const": "voice/idle" } },
+        "required": ["channel", "dir", "method"]
+      },
+      "then": { "properties": { "args": { "type": "object", "additionalProperties": false } } }
+    },
+    {
+      "if": {
+        "properties": { "channel": { "const": "ui" }, "dir": { "const": "out" }, "method": { "const": "panel/update" } },
+        "required": ["channel", "dir", "method"]
+      },
+      "then": { "properties": { "args": { "$ref": "#/$defs/panel_update" } } }
+    },
+    {
+      "if": {
+        "properties": { "channel": { "const": "ui" }, "dir": { "const": "out" }, "method": { "const": "panel/caret" } },
+        "required": ["channel", "dir", "method"]
+      },
+      "then": {
+        "properties": {
+          "args": {
+            "type": "object",
+            "required": ["rect", "space"],
+            "properties": {
+              "rect": { "$ref": "#/$defs/rect" },
+              "space": { "enum": ["window-local", "output"] }
+            }
+          }
+        }
+      }
+    },
+    {
+      "if": {
+        "properties": { "channel": { "const": "ui" }, "dir": { "const": "in" } },
+        "required": ["channel", "dir"]
+      },
+      "then": {
+        "properties": {
+          "args": {
+            "oneOf": [
+              { "type": "object", "properties": { "index": { "type": "integer", "minimum": 0 } }, "required": ["index"], "additionalProperties": false },
+              { "type": "object", "properties": { "row": { "type": "integer" } }, "required": ["row"], "additionalProperties": false },
+              { "type": "object", "properties": { "w": { "type": "integer" }, "h": { "type": "integer" } }, "required": ["w", "h"], "additionalProperties": false },
+              { "type": "object", "properties": { "action": { "type": "string" }, "index": { "type": "integer" } }, "required": ["action"], "additionalProperties": false },
+              { "type": "object", "properties": { "delta": { "type": "integer" }, "page": { "type": "integer" }, "focus": { "type": "boolean" } }, "additionalProperties": false },
+              { "type": "object", "additionalProperties": false }
+            ]
+          }
+        }
+      }
+    },
+    {
+      "if": {
+        "properties": { "channel": { "const": "asr" }, "dir": { "const": "out" } },
+        "required": ["channel", "dir"]
+      },
+      "then": {
+        "properties": {
+          "args": {
+            "type": "object",
+            "properties": {
+              "cfg": { "type": "object" },
+              "streaming": { "type": "boolean" }
+            },
+            "additionalProperties": false
+          }
+        }
+      }
+    },
+    {
+      "if": {
+        "properties": { "channel": { "const": "asr" }, "dir": { "const": "in" }, "method": { "pattern": "^asr/(partial|final)$" } },
+        "required": ["channel", "dir", "method"]
+      },
+      "then": {
+        "properties": {
+          "args": {
+            "type": "object",
+            "required": ["text"],
+            "properties": { "text": { "type": "string" } },
+            "additionalProperties": false
+          }
+        }
+      }
+    },
+    {
+      "if": {
+        "properties": { "channel": { "const": "refine" }, "dir": { "const": "in" } },
+        "required": ["channel", "dir"]
+      },
+      "then": {
+        "properties": {
+          "args": {
+            "type": "object",
+            "required": ["candidates", "engine_tag"],
+            "properties": {
+              "candidates": { "type": "array", "items": { "type": "string" }, "minItems": 1 },
+              "engine_tag": { "type": "string" }
+            }
+          }
+        }
+      }
+    }
+  ],
+  "$defs": {
+    "hello": {
+      "type": "object",
+      "required": ["proto"],
+      "properties": {
+        "proto": { "type": "integer", "const": 1 },
+        "caps": { "type": "array", "items": { "enum": ["paging", "vertical", "preedit", "actionable"] } }
+      }
+    },
+    "theme": {
+      "type": "object",
+      "required": ["font_size", "anim"],
+      "properties": {
+        "font_path": { "type": "string" },
+        "font_family": { "type": "string" },
+        "font_size": { "type": "number", "exclusiveMinimum": 0 },
+        "anim": { "type": "number", "exclusiveMinimum": 0 },
+        "scale": { "type": "number", "exclusiveMinimum": 0 }
+      }
+    },
+    "rect": {
+      "type": "object",
+      "required": ["x", "y", "w", "h"],
+      "properties": {
+        "x": { "type": "integer" },
+        "y": { "type": "integer" },
+        "w": { "type": "integer", "minimum": 0 },
+        "h": { "type": "integer", "minimum": 0 }
+      }
+    },
+    "panel_update": {
+      "type": "object",
+      "required": ["candidates", "layout"],
+      "properties": {
+        "preedit": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "required": ["text"],
+            "properties": {
+              "text": { "type": "string" },
+              "underline": { "type": "boolean" }
+            }
+          }
+        },
+        "aux_up": { "type": "string" },
+        "aux_down": { "type": "string" },
+        "candidates": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "required": ["label", "text"],
+            "properties": {
+              "label": { "type": "string" },
+              "text": { "type": "string" },
+              "comment": { "type": "string" }
+            }
+          }
+        },
+        "cursor": { "type": "integer", "minimum": -1 },
+        "layout": { "enum": ["horizontal", "vertical"] },
+        "has_prev": { "type": "boolean" },
+        "has_next": { "type": "boolean" },
+        "page": { "type": "integer", "minimum": 0 },
+        "im_name": { "type": "string" }
+      }
+    }
+  }
+}

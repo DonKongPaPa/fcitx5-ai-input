@@ -1,30 +1,32 @@
 #!/usr/bin/env bash
-# 构建 addon（编译容器）+ Flutter JIT 资产（宿主 SDK——须与
-# .cache/flutter-embedder/libflutter_engine.so 的引擎 hash 一致）+ testapp，
-# 产物装入 artifacts/dist/
+# 构建 addon（编译容器）+ Flutter JIT 资产（镜像 SDK——与
+# .cache/flutter-embedder/libflutter_engine.so 的引擎 hash 同源，均为
+# aiinput-build 镜像钉住的 3.47.0）+ testapp，产物装入 artifacts/dist/
 set -euo pipefail
 
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 IMAGE="${BUILD_IMAGE:-localhost/aiinput-build:latest}"
 
+podman image exists "$IMAGE" || { echo "!! 先 make image-build"; exit 1; }
 mkdir -p "$ROOT/artifacts/dist"
 
-# —— Flutter 资产（宿主）：flutter build bundle（JIT）——
-# 引擎 .so 是按宿主 SDK 的 engine hash 下载的（fetch-flutter-embedder.sh），
-# kernel_blob 必须同一 SDK 产出，所以 flutter 构建留在宿主、不进容器
+# —— Flutter 资产（镜像 SDK）：flutter build bundle（JIT）+ ICU ——
+# kernel_blob/icudtl.dat 必须与运行引擎同 SDK 产出——宿主 SDK 版本漂移
+# 曾导致 kernel(3.44) 与 goldens(3.47) 分叉，flutter 构建全部进镜像
 "$ROOT/scripts/fetch-sherpa-runtime.sh"
 "$ROOT/scripts/fetch-flutter-embedder.sh"
-(
-    cd "$ROOT/flutter"
-    flutter pub get >/dev/null
-    flutter build bundle
-)
+podman run --rm --userns=keep-id \
+    -v "$ROOT/flutter:/work" -w /work \
+    "$IMAGE" \
+    bash -c 'flutter pub get >/dev/null 2>&1 || flutter pub get; flutter build bundle'
 FLUTTER_STAGE="$ROOT/artifacts/dist/share/fcitx5-aiinput/flutter"
 rm -rf "$FLUTTER_STAGE"
 mkdir -p "$FLUTTER_STAGE"
 cp -r "$ROOT/flutter/build/flutter_assets" "$FLUTTER_STAGE/"
-ICU="$("$ROOT/scripts/flutter-icu-path.sh")"
-cp "$ICU" "$FLUTTER_STAGE/icudtl.dat"
+podman run --rm --userns=keep-id \
+    -v "$FLUTTER_STAGE:/out" \
+    "$IMAGE" \
+    cp /opt/flutter/bin/cache/artifacts/engine/linux-x64/icudtl.dat /out/
 
 # —— addon + testapp（编译容器）——
 podman run --rm \
