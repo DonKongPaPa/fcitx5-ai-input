@@ -16,14 +16,14 @@ permissions:
 jobs:
   # Flutter JIT 资产 + raw embedder 引擎只构建/下载一次（四路复用）。
   # flutter-version 必须钉死：引擎 .so 与 kernel_blob 的引擎 hash 必须一致
-  #（3.44.8 = engine 0cd610717b，见 scripts/fetch-flutter-embedder.sh）
+  #（3.47.0 = engine 5f7762567，见 scripts/fetch-flutter-embedder.sh——与 aiinput-build 镜像同 SDK）
   flutter-bundle:
     runs-on: ubuntu-22.04
     steps:
       - uses: actions/checkout@v4
       - uses: subosito/flutter-action@v2
         with:
-          flutter-version: 3.44.8
+          flutter-version: 3.47.0
           channel: stable
           cache: true
       - run: flutter --version
