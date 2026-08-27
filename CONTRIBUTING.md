@@ -41,7 +41,7 @@ make test ENV=niri
 - **scale 矩阵**：`make test` 默认两轮（scale 1.0 正常 + 2.0 放大，各自独立报告）；`NIRI_TEST_SCALE=x` 单档、`SCALE_MATRIX="1.0 1.5 2.0"` 自定义。用例内坐标全部经 virtpoint extent 归一化（分辨率无关），像素断言用比例值
 - **确定性触发**：测试经 D-Bus 测试钩子（`org.fcitx.AiInput.Test` 的 `SimulateKey` / `InjectKey` / `State` / `Candidates` / `Trigger`）直达 addon 状态机，不依赖真实 ASR；真实音频用例经虚拟麦（`play_to_mic`）喂 wav
 - `SimulateKey` 只喂状态机；`InjectKey` 走真实事件管线（验证拦截/透传语义）；裸字母键在 keyboard-us 下不会到达应用文本框（只有组合文本会）——需要应用侧文本变化时用触发键/候选上屏或拼音组合
-- **三组结构（S+C 2026-08-26 重构 37→20；X 组 2026-08-27 增）**：S 组 s1-s5 = 部署后运行检查（模块/引擎/版本/基本会话 E2E/HealthCheck，`SUITE=smoke` 单独跑）；C 组 c1-c15 = corner case 集中轮（键盘语义、IC 生命周期、看门狗、失焦自愈、定位矩阵、引擎档）；**X 组 x1-x6 = Xwayland 仿真**（`SUITE=x` 单跑，all 默认含）——容器内 xwayland-satellite + `GDK_BACKEND=x11` testapp 复现 WPS/ghostty 拓扑（X 窗 + DBus IC + X OR 卡片），覆盖历史 8 类 X bug：路径进入/几何跟随（ic-sim 驱动 rect 序列）/末行翻转+卡死链/GC 生命周期/ARGB 黑边/键盘交互（OR 指针=satellite 上游限制，留能力探测）。完整 26 例仅在 niri 达成，kde/gnome 镜像缺 chromium/virtpoint/satellite 的用例自动记"pass（跳过）"
+- **三组结构（S+C 2026-08-26 重构 37→20；X 组 2026-08-27 增）**：S 组 s1-s5 = 部署后运行检查（模块/引擎/版本/基本会话 E2E/HealthCheck，`SUITE=smoke` 单独跑）；C 组 c1-c15 = corner case 集中轮（键盘语义、IC 生命周期、看门狗、失焦自愈、定位矩阵、引擎档）；**X 组 x1-x6 = Xwayland 仿真**（`SUITE=x` 单跑，all 默认含）——容器内 xwayland-satellite + `GDK_BACKEND=x11` testapp 复现 WPS/ghostty 拓扑（X 窗 + DBus IC + X OR 卡片），覆盖历史 8 类 X bug：路径进入/几何跟随（ic-sim 驱动 rect 序列）/末行翻转+卡死链/GC 生命周期/ARGB 黑边/键盘交互（OR 指针=satellite 上游限制，留能力探测）。三环境均 26 例全跑（2026-08-27 起）：kde/gnome 镜像已含 satellite/chromium/grim；断言按合成器能力矩阵分档（popup=niri+mutter、指针注入=仅 niri，wayland-info 实测）——各环境跑真实可达行为，档位注记进用例 actual
 - 性能采样：容器内 `/proc` 轻量采样器（自身开销 <1%）随套件全程运行 → `perf.csv`
 - `make baseline` 把通过用例的录屏存为基准；之后失败用例的 HTML 报告会并排播放「本次 vs 基准」；`make compare` 生成历史运行对比页
 
