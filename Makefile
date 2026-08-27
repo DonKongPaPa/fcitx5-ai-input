@@ -31,6 +31,10 @@ image-gnome:
 image-funasr:
 	./scripts/build-images.sh funasr
 
+# 一次性诊断容器（X 定位偏移取证）：scripts/run-gtkscale.sh
+image-gtkscale:
+	./scripts/build-images.sh gtkscale
+
 build:
 	./scripts/build.sh
 

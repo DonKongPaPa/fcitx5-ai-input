@@ -145,6 +145,9 @@ tag `vX.Y.Z` 后 GitHub Actions `Release` workflow（`workflow_dispatch` 传 ver
   bbox + HTML 并排报告 + 标注图素材）。场景 S1-S6 见
   scripts/env/surface-driver.sh；vision 二次测量按
   lab/surface/vision-probe.md 中性模板（防暗示纪律）
+- `scripts/run-gtkscale.sh`：X 定位偏移诊断容器（gtkscale 镜像 = niri 栈 +
+  xwininfo/xprop；双 scale 跑 gtkscale-driver：rect 坐标空间/父窗 root
+  原点/卡片落点取证，无模块对照）。一次性诊断工具，不进门禁
 
 ### 快档 / 广档触发规则
 
