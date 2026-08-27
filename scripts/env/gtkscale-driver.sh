@@ -108,4 +108,43 @@ B_CARD=$(tail -n +$((LOG_MARK_B + 1)) "$FCITX_LOG" | grep -ac "X OR 卡片窗" |
 say "无模块对照：卡片窗日志数=$B_CARD（0 ⟹ A 阶段 rect 的唯一来源是 fcitx5-gtk 模块）"
 pkill -f testapp-gtk 2>/dev/null || true
 
+# C classicui 对照：同一 X 场景跑 pinyin+classicui 候选窗，实测其定位/缩放。
+#    源码依据（fcitx5 xcbinputwindow.cpp/xcbui.cpp）：候选窗=root 的 OR 子窗、
+#    x=cursorRect.left() 原样用、只钳 X 屏幕矩形（无父窗钳制）；窗口缩放=
+#    Xft.dpi/96（isXWayland 时明确跳过逐屏 DPI 只认 Xft.dpi）
+LOG_MARK_C=$(wc -l <"$FCITX_LOG" 2>/dev/null || echo 0)
+GDK_BACKEND=x11 GTK_IM_MODULE=fcitx GDK_SCALE=$GDKS TEST_TIMEOUT=180 \
+    "$DIST_BIN/testapp-gtk" >"$LOG_DIR/gtkscale-app-c.log" 2>&1 &
+sleep 3
+timeout 10 "$DIST_BIN/virtpoint" move $((LOGW / 2)) 225 "$LOGW" "$LOGH" 2>/dev/null || true
+timeout 10 "$DIST_BIN/virtpoint" click left 2>/dev/null || true
+sleep 0.5
+# Xft.dpi=scale×96 喂给 classicui（RESOURCE_MANAGER 属性；无 xrdb 故用 xprop）
+xprop -root -f RESOURCE_MANAGER 8s -set RESOURCE_MANAGER $'Xft.dpi:\t'"$((GDKS * 96))" || true
+sleep 0.8
+printf 'setim pinyin\n' | timeout 15 "$DIST_BIN/ic-sim" >>"$LOG_DIR/gtkscale-c-ic-sim.log" 2>&1 || true
+sleep 0.5
+for ch in n i h a o; do
+    call InjectKey "$ch" true >/dev/null 2>&1 || true
+    sleep 0.05
+    call InjectKey "$ch" false >/dev/null 2>&1 || true
+    sleep 0.1
+done
+sleep 1.2
+xwininfo -root -tree >"$OUT_DIR/xwininfo-tree-classicui.txt" 2>&1 || true
+CLWID="$(grep -oP '0x[0-9a-f]+ "Fcitx5 Input Window"' "$OUT_DIR/xwininfo-tree-classicui.txt" 2>/dev/null | grep -oP '^0x[0-9a-f]+' || true)"
+[ -n "$CLWID" ] && xwininfo -id "$CLWID" -stats >"$OUT_DIR/xwininfo-classicui.txt" 2>&1 || true
+AWID_C="$(xprop -root _NET_ACTIVE_WINDOW 2>/dev/null | grep -oP 'window id # \K0x[0-9a-f]+' || true)"
+[ -n "$AWID_C" ] && xwininfo -id "$AWID_C" -stats >"$OUT_DIR/xwininfo-app-classicui.txt" 2>&1 || true
+WAYLAND_DISPLAY="$CAGE_SOCK" grim "$OUT_DIR/gtkscale-classicui-$SCALE.png" 2>>"$LOG_DIR/grim.log" || true
+say "classicui 对照：候选窗 id=$CLWID app=$AWID_C（几何行↓）"
+[ -s "$OUT_DIR/xwininfo-classicui.txt" ] && grep -E "Absolute upper-left|^  Width|^  Height" "$OUT_DIR/xwininfo-classicui.txt" | tee -a "$SUM" || true
+# 还原输入法并清理
+printf 'setim keyboard-us\n' | timeout 15 "$DIST_BIN/ic-sim" >>"$LOG_DIR/gtkscale-c-ic-sim.log" 2>&1 || true
+call InjectKey "Escape" true >/dev/null 2>&1 || true
+sleep 0.05
+call InjectKey "Escape" false >/dev/null 2>&1 || true
+sleep 0.5
+pkill -f testapp-gtk 2>/dev/null || true
+
 say "== 诊断采集完成（scale=$SCALE）=="
