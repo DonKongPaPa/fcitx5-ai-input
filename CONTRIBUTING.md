@@ -169,3 +169,12 @@ tag `vX.Y.Z` 后 GitHub Actions `Release` workflow（`workflow_dispatch` 传 ver
 - 基础镜像变更（`containers/Containerfile.base`）波及全部下游镜像：
   重建 base 后 `make images` 重建链再跑 gate-merge（镜像级改动可能把
   静默惰性的用例腿变真实——如 +fcitx5-chinese-addons 激活 c7 抢槽腿）
+
+### 本地残留清理
+
+套件每轮报告（含录屏/截图）与本地打包产物会持续累积，管线自清理：
+`run-test.sh` 每轮末裁剪 `artifacts/reports` 只留最新 10 轮
+（`KEEP_REPORTS=N` 覆盖）。手动清理用 `make clean`（安全档：报告/打包
+产物裁剪 + 残留概览）；`make clean CLEAN_ARGS=--all` 连 aiinput 镜像/
+容器一起清（删后首次 `make test` 会自动重建镜像链，耗时数分钟）。
+详见 `scripts/cleanup.sh`——只碰本项目对象，其他项目的 podman 数据不动。

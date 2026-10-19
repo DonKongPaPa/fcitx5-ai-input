@@ -5,16 +5,16 @@
 // addon 写入 zwp_input_popup_surface_v2 的 shm buffer。
 //
 // 尺寸策略（收窄卡片：与文本框等宽过于抢眼）：
-//   会话三态（录音/结果/候选）是同一张卡片、同一套公式：宽度
-//   clamp(单行实测, 360, 420)；高度 = 头部 + 行基数 + 换行增量（长文本
-//   软换行完整显示，不截断不滚动；0.95 悲观测量防溢出）。录音中的
-//   流式 partial 即主文本行，结束时原位过渡为候选「原始版」行。
+//   会话三态（录音/结果/候选）是同一张卡片：宽度由自然布局实测、外层
+//   约束 [360, 420]（窄内容撑下限、长单行换行）；高度 = 自然布局实测，
+//   长文本软换行完整显示，尺寸一步到位无过渡动画（裁剪式过渡=截断）。
+//   录音中的流式 partial 即主文本行，结束时原位过渡为候选「原始版」行。
 //   实际窗口尺寸 = 卡片 + 四周 kShadowPad 阴影余量，变化时回发 resize。
 //
 // 协议（channel 'fcitx5/flutterui'，JSONMethodCodec）：
 //   C++→Dart : MethodCall('update', {state, partial, elapsed_ms, final,
 //                 timeout_ms, candidates, hover, anim})
-//              anim = 动画速率挡位系数（慢 1.8/标准 1.0/快 0.6，
+//              anim = 动画速率挡位系数（快 1.0/标准 1.6/慢 3.0，
 //              configtool UiAnimSpeed 热改即时生效；font 消息同样携带）
 //   Dart→C++ : invokeMethod('ready')
 //              invokeMethod('resize', {w, h})     // 含阴影余量的整窗尺寸
@@ -38,7 +38,8 @@ const double kShadowPad = 12;
 const double kGrowthSlack = 0;
 
 // 全局动画时长：基准毫秒 × 挡位系数（与 C++ animScaleOf 对应：快 1.0/
-// 标准 1.6/慢 3.0，默认慢速——挡位由 C++ 随每条 update/font 消息下发）
+// 标准 1.6/慢 3.0，默认慢速——挡位由 C++ 随每条 update/font 消息下发；
+// 此值仅兜底消息未携带 anim 的场景）
 const double kDefaultAnimScale = 3.0;
 Duration animDurOf(double scale, int baseMs) =>
     Duration(milliseconds: (baseMs * scale).round());
@@ -168,9 +169,9 @@ class _VoiceUiHomeState extends State<VoiceUiHome> {
   PanelData? _panel; // IM 候选面板（panel/update 事件驱动；null=隐藏）
   Size _lastReported = Size.zero;
   final GlobalKey _cardKey = GlobalKey(); // 卡片实际尺寸回读（布局后）
-  // 内容实尺寸（VoicePanel 自然尺寸）：窗口上报的度量源。AnimatedSize
-  // 的盒子是"动画中的视觉裁剪"，会滞留在中间值——曾致窗口比内容小、
-  // 行的命中区伸出可见卡片之外（卡片下方仍能悬停到行）
+  // 内容实尺寸（VoicePanel 自然尺寸）：窗口上报的度量源。动画盒子会
+  // 滞留在中间值——曾致窗口比内容小、行的命中区伸出可见卡片之外
+  //（卡片下方仍能悬停到行）
   final GlobalKey _panelKey = GlobalKey();
 
   void _invoke(String method, [Map<String, dynamic>? args]) {
@@ -183,9 +184,9 @@ class _VoiceUiHomeState extends State<VoiceUiHome> {
     widget.transport.attach(_onTransportMessage);
     _invoke('ready');
     // 持久帧回调：每帧布局完成后回读卡片尺寸、变化即上报。不能挂在
-    // build 的 post-frame 上——AnimatedSize 等动画只在 render 层逐帧
-    // 进行不触发 build，最终尺寸曾因此漏报（展开形态被旧窗口裁掉，
-    // 直到下一次 setState 才"神奇恢复"）
+    // build 的 post-frame 上——隐式动画（AnimatedSwitcher 等）只在
+    // render 层逐帧进行不触发 build，最终尺寸曾因此漏报（展开形态被
+    // 旧窗口裁掉，直到下一次 setState 才"神奇恢复"）
     WidgetsBinding.instance.addPersistentFrameCallback((_) {
       if (!mounted) return;
       var ro = _panelKey.currentContext?.findRenderObject();
@@ -234,8 +235,10 @@ class _VoiceUiHomeState extends State<VoiceUiHome> {
         _localElapsed = (args['elapsed_ms'] as num?)?.toInt() ?? 0;
         var partial = args['partial'] as String? ?? '';
         _ticker?.cancel();
-        _ticker = Timer.periodic(const Duration(milliseconds: 100), (_) {
-          _localElapsed += 100;
+        // 计时显示 mm:ss 粒度 1s，250ms tick 足够——100ms 的 10Hz 全卡
+        // 重建只是软件渲染下的无谓整帧重绘负载
+        _ticker = Timer.periodic(const Duration(milliseconds: 250), (_) {
+          _localElapsed += 250;
           _update(SessionData(
             state: UiState.recording,
             partial: partial,
@@ -396,32 +399,29 @@ class _VoiceUiHomeState extends State<VoiceUiHome> {
                 padding: const EdgeInsets.only(top: kShadowPad),
                 child: KeyedSubtree(
                 key: _cardKey,
-                child: AnimatedSize(
-                  // 卡片尺寸动画（视觉过渡）：child 自然尺寸布局，
-                  // AnimatedSize 只裁显不约束
-                  duration: animDurOf(_animScale, 220),
-                  curve: Curves.easeOutCubic,
-                  alignment: Alignment.topCenter,
-                  child: ConstrainedBox(
-                    // 宽度治理（纯几何）：窄内容撑到下限、长单行在上限
-                    // 换行——与字体无关
-                    constraints: BoxConstraints(
-                      minWidth: 360 * _fontScale,
-                      maxWidth: 420 * _fontScale,
-                    ),
-                    child: KeyedSubtree(
-                      key: _panelKey,
-                      child: VoicePanel(
-                      data: _data,
-                      mouseHover: _mouseHover,
-                      animScale: _animScale,
-                      onHover: _onHoverRow,
-                      onSelect: _selectCandidate,
-                      panel: _panel,
-                      onPanelSelect: _selectPanelCandidate,
-                      fontScale: _fontScale,
-                      sysFontFamily: _sysFontFamily,
-                      ),
+                // 卡片尺寸禁止过渡动画（硬约束）：尺寸动画靠裁剪内容实现
+                // 平滑——录音态流式 partial 逐条重定向 morph，卡片长时间
+                // 处于中间裁剪态 = "文字奇怪截断"+"一卡一卡"。尺寸必须
+                // 一步到位，状态切换的观感由内容层淡入淡出承担
+                child: ConstrainedBox(
+                  // 宽度治理（纯几何）：窄内容撑到下限、长单行在上限
+                  // 换行——与字体无关
+                  constraints: BoxConstraints(
+                    minWidth: 360 * _fontScale,
+                    maxWidth: 420 * _fontScale,
+                  ),
+                  child: KeyedSubtree(
+                    key: _panelKey,
+                    child: VoicePanel(
+                    data: _data,
+                    mouseHover: _mouseHover,
+                    animScale: _animScale,
+                    onHover: _onHoverRow,
+                    onSelect: _selectCandidate,
+                    panel: _panel,
+                    onPanelSelect: _selectPanelCandidate,
+                    fontScale: _fontScale,
+                    sysFontFamily: _sysFontFamily,
                     ),
                   ),
                 ),
@@ -476,8 +476,8 @@ class VoicePanel extends StatelessWidget {
       ),
       child: ClipRRect(
         borderRadius: BorderRadius.circular(14),
-        // 状态间内容过渡（录音指示器 → 结果 → 候选）：尺寸变化由外层
-        // AnimatedSize 平滑衔接，这里补内容层的淡入淡出
+        // 状态间内容过渡（录音指示器 → 结果 → 候选）：尺寸一步到位
+        //（外层禁过渡动画，见 build），这里做内容层的淡入淡出
         child: AnimatedSwitcher(
           duration: animDurOf(animScale, 180),
           switchInCurve: Curves.easeOut,
@@ -515,10 +515,10 @@ String _fmtMs(int ms) {
 }
 
 // —— 会话卡片（录音/结果/候选同一张卡片，连续形变）——
-// 状态切换内容一次到位（徽标/tag/头部各自淡入淡出），尺寸变化全靠外层
-// 唯一的 AnimatedSize 形变——新尺寸中途到达会重新定向（可打断），卡片
-// 不重建、不分拍增长。行为自绘顶对齐（不用 ListTile：其多行内容的
-// 垂直居中会让 padding-top 漂移）；头部固定槽，内容差异不再顶动下方行。
+// 状态切换内容一次到位（徽标/tag/头部各自淡入淡出），尺寸一步到位
+//（外层禁尺寸过渡，见 build 的硬约束注释）。行为自绘顶对齐（不用
+// ListTile：其多行内容的垂直居中会让 padding-top 漂移）；头部固定槽，
+// 内容差异不再顶动下方行。
 class _SessionBody extends StatelessWidget {
   final SessionData data;
   final int mouseHover; // 鼠标悬停行（-1=无）
@@ -652,7 +652,7 @@ class _SessionBody extends StatelessWidget {
             ),
           ),
         ),
-        // —— 文本区（尺寸变化统一由外层 AnimatedSize 形变，单一可打断）——
+        // —— 文本区（尺寸一步到位，观感过渡由各行的淡入淡出承担）——
         Column(
           crossAxisAlignment: CrossAxisAlignment.stretch,
           mainAxisSize: MainAxisSize.min,

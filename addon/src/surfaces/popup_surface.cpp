@@ -1537,9 +1537,7 @@ bool VoicePopup::ensurePopup(InputContext *ic, bool atShow) {
         // resize 消息里设（尺寸不变就不再发），切应用重建 surface 后
         // destination 缺失 → 物理缓冲按原尺寸显示（放大 scale 倍）+
         // 指针坐标落在物理空间全越界 → 候选框鼠标失灵
-        if (logicalW_ > 0 && logicalH_ > 0) {
-            wp_viewport_set_destination(viewport_, logicalW_, logicalH_);
-        }
+        syncViewportLocked();
     }
     if (fsManager_) {
         fscale_ = wp_fractional_scale_manager_v1_get_fractional_scale(
@@ -1927,11 +1925,16 @@ void VoicePopup::setLogicalSize(int w, int h) {
 
 // viewport destination 必须与「匹配尺寸的 buffer」同一 commit 下发：
 // 提前改 destination 而表面仍是旧 buffer 的 1-2 帧内，合成器会把旧
-// buffer 拉伸到新逻辑尺寸（resize/移动时的跳闪即此）。所有 commit 前
-// 调本函数（池尺寸在 setLogicalSize/scale 变化时已同步重建）
+// buffer 拉伸到新逻辑尺寸（resize/移动时的跳闪即此）。destination 一律
+// 从**本次所附 buffer 的物理池尺寸**反推（逻辑尺寸在 resize 消息与引擎
+// metrics 生效之间有 1-2 帧窗口，旧尺寸帧若按新逻辑设 destination 即
+// 拉伸闪烁）——所有 commit 前调本函数
 void VoicePopup::syncViewportLocked() {
-    if (viewport_ && logicalW_ > 0 && logicalH_ > 0) {
-        wp_viewport_set_destination(viewport_, logicalW_, logicalH_);
+    if (viewport_ && width_ > 0 && height_ > 0) {
+        const double sc = scale();
+        wp_viewport_set_destination(
+            viewport_, static_cast<int>(width_ / sc + 0.5),
+            static_cast<int>(height_ / sc + 0.5));
     }
 }
 

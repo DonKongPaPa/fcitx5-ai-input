@@ -38,8 +38,8 @@ void main() {
     expect(events, isNotEmpty);
     unawaited(host.play(events));
     // candidates 事件在累计 ~3.6s 到达；idle 已放宽到 +1500ms。定量推进：
-    // 3.8s 候选已到、+800ms 让 AnimatedSize（慢速挡 ~660ms）长完——
-    // 不能用 pumpAndSettle（会把时钟推过 idle）
+    // 3.8s 候选已到、+800ms 留内容层淡入淡出收尾（尺寸无过渡动画，
+    // 一步到位）——不能用 pumpAndSettle（会把时钟推过 idle）
     await tester.pump(const Duration(milliseconds: 3800));
     await tester.pump(const Duration(milliseconds: 800));
 

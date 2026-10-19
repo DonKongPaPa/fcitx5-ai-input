@@ -7,12 +7,13 @@
 #   make shell ENV=niri    # 交互式进入环境容器调试
 #   make baseline ENV=niri # 将通过用例录屏存为本地基准
 #   make compare           # 汇总历史报告生成方案对比页
+#   make clean             # 测试残留清理（报告/打包产物裁剪；--images 深度清）
 
 ENV ?= niri
 RUN_ID ?=
 
 .PHONY: images image-base image-build image-niri image-kde image-gnome image-funasr \
-        build test test-all shell envcheck baseline report compare \
+        build test test-all shell envcheck baseline report compare clean \
         ui-test proto-test addon-test surface-test gate-merge gate-release
 
 images:
@@ -63,6 +64,11 @@ report:
 
 compare:
 	python3 scripts/compare.py
+
+# 本地残留清理（安全档：报告/打包产物按保留数裁剪；深度清镜像用
+# `make clean CLEAN_ARGS=--all`，镜像删后 make test 自动重建链）
+clean:
+	./scripts/cleanup.sh ${CLEAN_ARGS}
 
 ui-test:            ## 快档：UI 层 flutter test+golden+回放（aiinput-build 容器）
 	./scripts/run-ui-test.sh

@@ -89,4 +89,9 @@ for SCALE in $SCALES; do
     T1=$(date +%s)
     python3 "$ROOT/scripts/report.py" "$RUN_ID" "$ENV_NAME" "$IMAGE" "$((T1 - T0))"
     echo ">> 报告：$OUT/report.html（scale=$SCALE）"
+    # 报告保留策略（管线自清理）：只留最新 KEEP_REPORTS 轮（默认 10），
+    # 录屏/截图取证每轮可达数十 MB，无上限会滚成 GB 级残留
+    KEEP_REPORTS="${KEEP_REPORTS:-10}"
+    ls -1 "$ROOT/artifacts/reports" | sort | head -n "-$KEEP_REPORTS" \
+        | while read -r old; do rm -rf "$ROOT/artifacts/reports/$old"; done
 done
