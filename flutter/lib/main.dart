@@ -403,25 +403,43 @@ class _VoiceUiHomeState extends State<VoiceUiHome> {
                 // 平滑——录音态流式 partial 逐条重定向 morph，卡片长时间
                 // 处于中间裁剪态 = "文字奇怪截断"+"一卡一卡"。尺寸必须
                 // 一步到位，状态切换的观感由内容层淡入淡出承担
-                child: ConstrainedBox(
+                // 出现过渡（idle→会话）用淡入+轻微上浮：opacity/Transform
+                // 不改布局尺寸，窗口尺寸上报不受影响（裁剪零风险）；
+                // key 换届重放——只在窗口出现时播，流式生长不重播
+                child: TweenAnimationBuilder<double>(
+                  key: ValueKey(
+                      _data.state == UiState.idle ? 'idle' : 'session'),
+                  tween: Tween(begin: 0, end: 1),
+                  duration: animDurOf(_animScale, 160),
+                  curve: Curves.easeOutCubic,
+                  builder: (_, v, child) => Opacity(
+                    opacity: v,
+                    child: Transform.scale(
+                      scale: 0.97 + 0.03 * v,
+                      alignment: Alignment.topCenter,
+                      child: child,
+                    ),
+                  ),
+                  child: ConstrainedBox(
                   // 宽度治理（纯几何）：窄内容撑到下限、长单行在上限
                   // 换行——与字体无关
                   constraints: BoxConstraints(
                     minWidth: 360 * _fontScale,
                     maxWidth: 420 * _fontScale,
                   ),
-                  child: KeyedSubtree(
-                    key: _panelKey,
-                    child: VoicePanel(
-                    data: _data,
-                    mouseHover: _mouseHover,
-                    animScale: _animScale,
-                    onHover: _onHoverRow,
-                    onSelect: _selectCandidate,
-                    panel: _panel,
-                    onPanelSelect: _selectPanelCandidate,
-                    fontScale: _fontScale,
-                    sysFontFamily: _sysFontFamily,
+                    child: KeyedSubtree(
+                      key: _panelKey,
+                      child: VoicePanel(
+                      data: _data,
+                      mouseHover: _mouseHover,
+                      animScale: _animScale,
+                      onHover: _onHoverRow,
+                      onSelect: _selectCandidate,
+                      panel: _panel,
+                      onPanelSelect: _selectPanelCandidate,
+                      fontScale: _fontScale,
+                      sysFontFamily: _sysFontFamily,
+                      ),
                     ),
                   ),
                 ),
