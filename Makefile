@@ -36,6 +36,10 @@ image-funasr:
 image-gtkscale:
 	./scripts/build-images.sh gtkscale
 
+# 基线镜像缓存（save 后重建链免重拉）：ARGS=save|load|list
+image-cache:
+	./scripts/image-cache.sh ${ARGS}
+
 build:
 	./scripts/build.sh
 

@@ -219,6 +219,10 @@ void VoicePopup::popupRectangle(void *data, zwp_input_popup_surface_v2 *,
     s->rectLastY_ = y;
     s->rectLastW_ = w;
     s->rectLastH_ = h;
+    // 矩形变化观测（横移归属判定锚点：应用何时改报 caret——preedit
+    // 出现/清除、用户打字；同值已被上方去重，此处只记真变化）
+    FCITX_INFO() << "VoicePopup: 光标矩形变化 → " << x << "," << y << " "
+                 << w << "x" << h;
     s->cursorX_ = x;
     s->cursorY_ = y;
     s->cursorW_ = w;
@@ -1235,14 +1239,16 @@ void VoicePopup::beginPreeditProbe(InputContext *ic) {
     if (!ic || preeditProbeActive_) {
         return;
     }
-    // 可见组合文本「语音输入中」逐字打出：每字一次组合变化=每字一次
-    // 报文机会（一次性整串 set 只有一次组合变化，报文可有可无）。
-    // preedit 永不入文、且全程恒为这五个字（流式/候选文本只在卡片里
-    // 展示）——组合长度恒定，光标矩形不随识别进度行进，卡片稳定锚在
-    // 开始位置。上屏时 commitString 按协议替换 preedit（自清洁）
+    // 可见组合文本「语音输入中」**全串一次成型**：caret 只前进一次，卡片
+    // 只横移一步（逐字打出曾让 caret 5 步右移 ≈ 100ms/步，卡片跟着一步步
+    // 挪——"候选窗横向移动一顿一顿"的根源）。后续探针节拍重发同一全串：
+    // 应用侧同值多半忽略（视觉零扰动），组合变化报文机会保留——首报可能
+    // 在 popup 跟踪就绪前到达而丢失（chromium 系只在文本变化时报矩形）。
+    // preedit 永不入文、全程恒为这五个字（流式/候选文本只在卡片里展示）
+    // ——组合长度恒定，光标矩形不随识别进度行进。上屏时 commitString 按
+    // 协议替换 preedit（自清洁）
     static const char *const kProbe = "\u8bed\u97f3\u8f93\u5165\u4e2d"; // 语音输入中
-    Text preedit(std::string(kProbe, 3)); // 首字「语」
-    ic->inputPanel().setClientPreedit(preedit);
+    ic->inputPanel().setClientPreedit(Text(std::string(kProbe, 15)));
     // updatePreedit 才会把 client preedit 推给应用（UpdatePreeditEvent →
     // waylandim）；updateUserInterface 只刷新 UI 插件、不送达应用
     ic->updatePreedit();
@@ -1250,7 +1256,7 @@ void VoicePopup::beginPreeditProbe(InputContext *ic) {
     probeTypingIdx_ = 1;
     probeTypeTimer_.reset();
     typeProbeNext(ic);
-    FCITX_INFO() << "VoicePopup: 预输入探针已置（可见组合文本，逼应用重报光标矩形）";
+    FCITX_INFO() << "VoicePopup: 预输入探针已置（全串成型+重复报文机会，逼应用重报光标矩形）";
 }
 
 void VoicePopup::typeProbeNext(InputContext *ic) {
@@ -1270,13 +1276,12 @@ void VoicePopup::typeProbeNext(InputContext *ic) {
             std::lock_guard<std::mutex> lock(mutex_);
             probeTypeTimer_.reset();
             if (auto *ic2 = icRef_.get()) {
-                // 矩形到也不停链：探针五个字打完（视觉完整性），
-                // partial 在队列里等
                 if (preeditProbeActive_ && probeTypingIdx_ == idx && idx < 5) {
                     probeTypingIdx_ = idx + 1;
-                    std::string txt(std::string(kProbe, (idx + 1) * 3));
-                    ic2->inputPanel().setClientPreedit(Text(txt));
-                    ic2->updatePreedit(); // 每字一次组合变化=报文机会
+                    // 重发同一全串（见 beginPreeditProbe：caret 不动）
+                    ic2->inputPanel().setClientPreedit(
+                        Text(std::string(kProbe, 15)));
+                    ic2->updatePreedit();
                     typeProbeNext(ic2);
                 }
             }
@@ -1955,15 +1960,17 @@ void VoicePopup::pushFrameBGRA(const uint8_t *bgra, int w, int h) {
         return;
     }
     if (w != width_ || h != height_) {
-        // 池振荡防护：resize 消息已把逻辑/池更新到目标物理尺寸，而引擎
-        // metrics 尚未生效时按**旧尺寸**出帧——此时把池缩回去会让窗口
-        // 抖一下再长回（偶发 UI 截断的另一半根因）。旧尺寸迟到帧直接
-        // 丢弃，等 metrics 更新后的新尺寸帧
+        // 过渡帧丢弃（原子切换）：resize 消息已更新逻辑目标而引擎
+        // metrics 尚未生效的 1-3 帧窗口里，引擎仍按**旧尺寸**渲染——
+        // 新内容被旧池边界裁掉再跳变，是纵向生长"卡一顿"观感的我们侧
+        // 分量。只接受与目标物理尺寸一致的帧：到达即换池+上屏一步到位，
+        // 中间态旧帧直接丢（内容停在上一个完整卡片几帧，无裁剪残影）。
+        // X11 路径同语义（不符直接丢，见下方 x11Mode_ 分支）
         const double sc = scale();
         const int pw = static_cast<int>(logicalW_ * sc + 0.5);
         const int ph = static_cast<int>(logicalH_ * sc + 0.5);
-        if (width_ == pw && height_ == ph && (w != pw || h != ph)) {
-            return; // 池已在目标位，这是迟到帧
+        if (w != pw || h != ph) {
+            return;
         }
         resizeLocked(w, h);
     }

@@ -170,12 +170,19 @@ tag `vX.Y.Z` 后 GitHub Actions `Release` workflow（`workflow_dispatch` 传 ver
   重建 base 后 `make images` 重建链再跑 gate-merge（镜像级改动可能把
   静默惰性的用例腿变真实——如 +fcitx5-chinese-addons 激活 c7 抢槽腿）
 
-### 本地残留清理
+### 本地残留清理与镜像基线
 
 套件每轮报告（含录屏/截图）与本地打包产物会持续累积，管线自清理：
 `run-test.sh` 每轮末裁剪 `artifacts/reports` 只留最新 10 轮
 （`KEEP_REPORTS=N` 覆盖）。手动清理用 `make clean`（安全档：报告/打包
-产物裁剪 + 残留概览）；`make clean CLEAN_ARGS=--all` 连 aiinput 镜像/
-容器一起清（删后首次 `make test` 会自动重建镜像链——docker.io 拉取在
-本机网络下可达半小时级，深度清理慎用）。
+产物裁剪 + 残留概览）；`make clean CLEAN_ARGS=--all` 连镜像滚动 tag 一起
+摘（有日期基线 tag 的镜像保留基线，`DELETE_BASELINE=1` 全删）。
+
+镜像基线（重建免重拉）：每次 `build-images.sh` 成功即同时打
+`aiinput-<name>:YYYYMMDD` 基线 tag；镜像缺失时按 基线 tag → 缓存 tar →
+现场构建 的顺序恢复。跨机/全清场景用 `scripts/image-cache.sh save|load`
+（podman save 到 `~/.local/share/aiinput-image-cache`，每镜像一个 tar）。
+基础 OS 镜像缺失时自动经 docker.m.daocloud.io 预拉（docker.io 直连本机
+~40KB/s，daocloud 分钟级）；本地打包容器构建依赖设 `AIINPUT_CN_MIRROR=1`
+切国内源（arch=tuna / debian=tuna / fedora=ustc），CI 不设此变量走官方源。
 详见 `scripts/cleanup.sh`——只碰本项目对象，其他项目的 podman 数据不动。

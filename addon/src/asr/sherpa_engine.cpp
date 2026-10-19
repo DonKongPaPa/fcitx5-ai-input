@@ -78,6 +78,67 @@ std::string resolveSherpaModelDir(const AiInputConfig *config) {
     return "/usr/share/fcitx5-aiinput/models/sherpa-paraformer";
 }
 
+// SenseVoice 中英切换边界伪影修复（宿主 journal 实证 2026-10-19：
+// 「做一个 baseline 版本」→ 离线「baselineline版本」、「Flutter」→「flattter」）。
+// 只动 ASCII 字母段，CJK 字节不参与。
+static std::string fixSenseVoiceArtifacts(const std::string &s) {
+    std::string out;
+    out.reserve(s.size());
+    auto isAsciiAlpha = [](unsigned char c) {
+        return c < 128 && std::isalpha(c);
+    };
+    size_t i = 0;
+    while (i < s.size()) {
+        if (!isAsciiAlpha(static_cast<unsigned char>(s[i]))) {
+            out += s[i++];
+            continue;
+        }
+        size_t j = i;
+        while (j < s.size() && isAsciiAlpha(static_cast<unsigned char>(s[j]))) {
+            ++j;
+        }
+        std::string run = s.substr(i, j - i);
+        // 后缀复读收敛：A+B 且 B 是 A 的非空真后缀 → A（baselineline =
+        // baseline+line）。模型跨 zh→en 边界把词尾音节重发一次；真说了
+        // 两个词会有空格，无空格粘合是伪影铁证。迭代收敛多层粘合
+        bool collapsed = true;
+        while (collapsed && run.size() >= 4) {
+            collapsed = false;
+            for (size_t len = run.size() / 2; len >= 2; --len) {
+                const size_t aLen = run.size() - len;
+                if (aLen >= len &&
+                    run.compare(aLen, len, run, aLen - len, len) == 0) {
+                    run.resize(aLen);
+                    collapsed = true;
+                    break;
+                }
+            }
+        }
+        // 三连同字母收敛为 1（flattter 的 ttt；合法双连如 letter 不动）
+        std::string r2;
+        r2.reserve(run.size());
+        for (size_t k = 0; k < run.size();) {
+            size_t m = k;
+            while (m < run.size() && run[m] == run[k]) {
+                ++m;
+            }
+            if (m - k >= 3) {
+                r2 += run[k];
+            } else {
+                r2.append(run, k, m - k);
+            }
+            k = m;
+        }
+        if (r2 != s.substr(i, j - i)) {
+            FCITX_INFO() << "Sherpa: SenseVoice 边界伪影修复 「"
+                         << s.substr(i, j - i) << "」→「" << r2 << "」";
+        }
+        out += r2;
+        i = j;
+    }
+    return out;
+}
+
 void SherpaOnnxEngine::initOfflineRecognizer(const AiInputConfig *config) {
     const std::string dir = config->senseVoiceDir.value();
     // 进程级缓存（与流式 recognizer 同纪律）：键 = 目录；失败不缓存
@@ -351,6 +412,9 @@ void SherpaOnnxEngine::stop() {
                                 std::chrono::steady_clock::now() - t1)
                                 .count();
             sessionAudio_.clear();
+            if (!sv.empty()) {
+                sv = fixSenseVoiceArtifacts(sv);
+            }
             if (!sv.empty() && !hadPartial && sv.size() <= 3) {
                 FCITX_INFO() << "Sherpa: SenseVoice final（" << ms
                              << "ms）流式全程无输出，丢弃噪声幻觉「" << sv

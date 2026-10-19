@@ -10,6 +10,10 @@ export SRC VERSION
 # 冒烟需要构建依赖 + git（tarball 源码含 .git 时走 git archive）
 if command -v apt-get >/dev/null 2>&1; then
     export DEBIAN_FRONTEND=noninteractive
+    # 国内源 opt-in（本地容器构建用；CI 不设此变量走官方源）
+    if [ "${AIINPUT_CN_MIRROR:-0}" = 1 ] && [ -f /etc/apt/sources.list.d/debian.sources ]; then
+        sed -i 's|deb.debian.org|mirrors.tuna.tsinghua.edu.cn|g' /etc/apt/sources.list.d/debian.sources
+    fi
     apt-get update -qq >/dev/null 2>&1
     apt-get install -y -qq --no-install-recommends         build-essential cmake pkg-config gettext git dbus         libfcitx5core-dev libfcitx5utils-dev libfcitx5config-dev         fcitx5-modules-dev fcitx5 libwayland-dev libwayland-bin         libfontconfig1-dev pulseaudio-utils libglib2.0-bin         libxcb1-dev libxcb-shm0-dev libxcb-ewmh-dev >/dev/null 2>&1 || true
 fi

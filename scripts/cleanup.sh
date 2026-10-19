@@ -2,8 +2,8 @@
 # 本地测试残留清理（镜像/容器/报告/打包产物）。用法：
 #   cleanup.sh                # 安全档：残留概览 + 报告/打包产物按保留数裁剪
 #   cleanup.sh --containers   # + 清掉 aiinput 相关退出容器与孤儿 run 进程
-#   cleanup.sh --images       # + 删除全部 localhost/aiinput-* 镜像（下次
-#                             #   make test 会自动重建链，耗时数分钟）
+#   cleanup.sh --images       # + 清理镜像（有日期基线 tag 的只摘 :latest
+#                             #   滚动 tag，基线保留；DELETE_BASELINE=1 全删）
 #   cleanup.sh --all          # 上述全部 + 报告全清
 #   KEEP_REPORTS=N KEEP_PACKAGES=N 自定义保留数（默认 10 / 4）
 # 只碰本项目（aiinput）对象；其他项目的容器/镜像/数据不动。
@@ -58,10 +58,22 @@ if command -v podman >/dev/null 2>&1; then
             || echo ">> 无 aiinput 容器"
     fi
     if [ "$MODE_IMAGES" = 1 ] || [ "$ALL" = 1 ]; then
+        # 基线保留策略：有日期基线 tag 的镜像只摘 :latest（重建链可秒级
+        # 复用），无基线的才整删。全删用 DELETE_BASELINE=1
         imgs=$(podman images --format '{{.ID}} {{.Repository}}:{{.Tag}}' 2>/dev/null \
             | awk '$2 ~ /^localhost\/aiinput-/ {print $1}' | sort -u)
-        [ -n "$imgs" ] && { echo ">> 删除镜像: $(echo "$imgs" | wc -l) 个"; podman rmi -f $imgs >/dev/null; } \
-            || echo ">> 无 aiinput 镜像"
+        [ -n "$imgs" ] || { echo ">> 无 aiinput 镜像"; }
+        for id in $imgs; do
+            tags=$(podman images --format '{{.Repository}}:{{.Tag}}' --noheading \
+                --filter "id=$id" 2>/dev/null | grep '^localhost/aiinput-' || true)
+            if echo "$tags" | grep -qv ':latest$' && [ "${DELETE_BASELINE:-0}" != 1 ]; then
+                podman rmi "$tags" >/dev/null 2>&1 || true
+                echo ">> 摘除滚动 tag（基线保留）: $(echo "$tags" | tr '\n' ' ')"
+            else
+                podman rmi -f "$id" >/dev/null 2>&1 || true
+                echo ">> 删除镜像 $id"
+            fi
+        done
     fi
 fi
 

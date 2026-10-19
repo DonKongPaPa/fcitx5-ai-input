@@ -346,7 +346,7 @@ private:
                                // "top"），true=底部居中（默认）
     int popupAttachCount_ = 0; // popup 模式 attach 计数（>1 即重建）
     bool preeditProbeActive_ = false; // 预输入探针是否在挂
-    int probeTypingIdx_ = 0; // 探针逐字进度（5=打完）
+    int probeTypingIdx_ = 0; // 探针节拍计数（5=结束；全串一次成型，节拍只重发同值）
     std::unique_ptr<EventSourceTime> probeTypeTimer_;
     // 应用级跟随知识（进程生命周期）：矩形事件或上屏记账成功过的程序
     // 名集合——重聚焦产生新 IC 时凭此首下即跟随（Electron 的 text-input
