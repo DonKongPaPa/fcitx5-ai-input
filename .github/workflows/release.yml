@@ -134,7 +134,7 @@ jobs:
               容器端到端（含 Xwayland 仿真组），Flutter 构建全链镜像化
 
             ### 安装
-            - **Arch**: `curl -fsLo install.sh https://donkongpapa.github.io/fcitx5-ai-input/install.sh && sh install.sh`（加仓库源，之后随 `pacman -Syu` 自动更新；或手动 `pacman -U fcitx5-ai-input-*.pkg.tar.zst`）
+            - **Arch**: `curl -fsLo install.sh https://donkongpapa.github.io/fcitx5-ai-input/install.sh && sh install.sh` 加仓库源（GPG 签名），然后 `sudo pacman -Syu fcitx5-ai-input` 即装即更；手动加仓库/装包步骤见 README「安装」段
             - **Debian**: `apt install ./fcitx5-ai-input_*.deb`
             - **Fedora**: `dnf install fcitx5-ai-input-*.rpm`
             - **其他**: 解压 tarball 后 `sudo bash install.sh`（需 gcc/cmake/fcitx5-dev/wayland-dev/libxcb-dev）
