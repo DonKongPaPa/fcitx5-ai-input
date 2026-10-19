@@ -32,7 +32,11 @@ Linux 语音输入，长在 fcitx5 里：**按住右 Ctrl 说话，松开出字*
  Releases 页下载对应发行版包（或从源码构建，见[贡献指南](CONTRIBUTING.md)）：
 
 ```bash
-# Arch
+# Arch（推荐：加 pacman 仓库源，之后随 -Syu 自动更新；包 GPG 签名）
+curl -fsLo install.sh https://donkongpapa.github.io/fcitx5-ai-input/install.sh
+less install.sh   # 先过目：写 /etc/pacman.d/fcitx5-ai-input.conf + 导入签名钥
+sh install.sh
+# Arch（手动装单版，不建仓库源）
 pacman -U fcitx5-ai-input-*.pkg.tar.zst
 # Debian
 apt install ./fcitx5-ai-input_*.deb
