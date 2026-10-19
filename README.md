@@ -29,37 +29,74 @@ Linux 语音输入，长在 fcitx5 里：**按住右 Ctrl 说话，松开出字*
 
 ## 安装
 
- Releases 页下载对应发行版包（或从源码构建，见[贡献指南](CONTRIBUTING.md)）：
+ Releases 页下载对应发行版包（或从源码构建，见[贡献指南](CONTRIBUTING.md)）。
+
+### Arch
+
+一条命令（想先过目就把 `| sh` 换成 `| less`）：
 
 ```bash
-# Arch（推荐：加 pacman 仓库源，之后随 -Syu 自动更新；包 GPG 签名）
-curl -fsLo install.sh https://donkongpapa.github.io/fcitx5-ai-input/install.sh
-less install.sh   # 先过目：写 /etc/pacman.d/fcitx5-ai-input.conf + 导入签名钥
-sh install.sh
-# Debian
-apt install ./fcitx5-ai-input_*.deb
-# Fedora
-dnf install fcitx5-ai-input-*.rpm
-# 其他（需 gcc/cmake/fcitx5-dev/wayland-dev/fontconfig-dev/libxcb-dev）
-tar xf fcitx5-ai-input-*.tar.* && cd fcitx5-ai-input-* && sudo bash install.sh
+curl -fsSL https://donkongpapa.github.io/fcitx5-ai-input/install.sh | sh
 ```
 
-**Arch 手动加仓库**（不跑 install.sh 的等价步骤）：
+或手动逐步，每块一条，直接粘贴运行——
+
+导入仓库签名钥并本地签信任：
 
 ```bash
-# 1. 导入并本地签信任仓库签名钥
 curl -fsSL https://donkongpapa.github.io/fcitx5-ai-input/repo-key.asc | sudo pacman-key --add -
+```
+
+```bash
 sudo pacman-key --lsign-key ABB4052808368FBEB41859420D91C18B512BAAD1
-# 2. /etc/pacman.conf 末尾追加：
-#    [fcitx5-ai-input]
-#    SigLevel = Required
-#    Server = https://donkongpapa.github.io/fcitx5-ai-input/x86_64
-#    CacheServer = https://github.com/DonKongPaPa/fcitx5-ai-input/releases/download/pacman-repo
-# 3. 安装（会连带装 fcitx5-ai-input-keyring，此后换钥随 -Syu 自动到达）
+```
+
+写仓库配置（重复执行会写重复行，install.sh 自带去重）：
+
+```bash
+sudo tee /etc/pacman.d/fcitx5-ai-input.conf <<'EOF'
+[fcitx5-ai-input]
+SigLevel = Required
+Server = https://donkongpapa.github.io/fcitx5-ai-input/x86_64
+CacheServer = https://github.com/DonKongPaPa/fcitx5-ai-input/releases/download/pacman-repo
+EOF
+```
+
+```bash
+echo 'Include = /etc/pacman.d/fcitx5-ai-input.conf' | sudo tee -a /etc/pacman.conf
+```
+
+安装（连带装 fcitx5-ai-input-keyring，此后换钥随 -Syu 自动到达）：
+
+```bash
 sudo pacman -Syu fcitx5-ai-input
 ```
 
-不建仓库源、手动装单版：Releases 页下载后 `sudo pacman -U fcitx5-ai-input-*.pkg.tar.zst fcitx5-ai-input-keyring-*.pkg.tar.zst`（同事务装两包满足依赖）。
+不建仓库源、手动装单版（Releases 页下载后两包同事务满足依赖）：
+
+```bash
+sudo pacman -U fcitx5-ai-input-*.pkg.tar.zst fcitx5-ai-input-keyring-*.pkg.tar.zst
+```
+
+### Debian
+
+```bash
+sudo apt install ./fcitx5-ai-input_*.deb
+```
+
+### Fedora
+
+```bash
+sudo dnf install fcitx5-ai-input-*.rpm
+```
+
+### 其他
+
+需 gcc/cmake/fcitx5-dev/wayland-dev/fontconfig-dev/libxcb-dev：
+
+```bash
+tar xf fcitx5-ai-input-*.tar.* && cd fcitx5-ai-input-* && sudo bash install.sh
+```
 
 安装后重启 fcitx5 即生效（模块自动加载，无需添加输入法）。
 
