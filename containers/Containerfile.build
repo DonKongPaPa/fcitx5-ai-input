@@ -20,7 +20,10 @@ RUN pacman -Syu --noconfirm --needed \
 ARG FLUTTER_VERSION=3.47.0
 ARG FLUTTER_SHA256=26cd99d3d94b1367e6b50535a18aeef0282c10a535bbe3ec493534dcdab75296
 ARG FLUTTER_MIRROR=https://storage.flutter-io.cn/flutter_infra_release/releases
-RUN curl -fsSL -o /tmp/flutter.tar.xz \
+# curl --retry：GB 级 SDK 下载对国内链路中途断流常见（错误 18 只报一半字节），
+# 无重试时整个镜像构建作废
+RUN curl -fsSL --retry 5 --retry-all-errors --retry-delay 3 --connect-timeout 30 \
+        -o /tmp/flutter.tar.xz \
         "${FLUTTER_MIRROR}/stable/linux/flutter_linux_${FLUTTER_VERSION}-stable.tar.xz" \
     && echo "${FLUTTER_SHA256}  /tmp/flutter.tar.xz" | sha256sum -c - \
     && tar -xJf /tmp/flutter.tar.xz -C /opt/ \

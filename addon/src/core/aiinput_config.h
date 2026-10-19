@@ -63,9 +63,25 @@ FCITX_CONFIGURATION(
         "单次录音硬上限（秒，10-600）：到点自动结束并识别。防触发键松开"
         "事件丢失（焦点被抢等）导致会话卡死",
         60};
+    // 松键不等于声音到位：pipewire→parec 投递延迟 + libc stdio 缓冲 +
+    // 人手松键时机，合计可吞尾部一个短词（宿主实测「方式」整词丢失，
+    // 400ms 仍丢——上限提到 700；再不够用户可 configtool 调到 1000）
+    Option<int> tailPaddingMs{
+        this, "TailPaddingMs",
+        "松键后的尾音采集宽限（毫秒，100-1500）：在此期间继续收音再出结果",
+        700};
 
     // —— 组2 语音引擎 ——
     // —— Sherpa CPU 流式引擎（RSS ~412MB/首字 ~0.07s/0 显存）——
+    Option<bool> sessionLog{
+        this, "SessionLog",
+        "会话证据落盘：~/.local/state/fcitx5-aiinput/sessions/sessions.jsonl"
+        "（流式/离线双路文本+partial 序列+时长，排查漏字/截断用）",
+        true};
+    Option<bool> sessionDumpAudio{
+        this, "SessionDumpAudio",
+        "会话音频留档（wav，与 sessions.jsonl 同目录；含说话内容，注意隐私）",
+        true};
     Option<std::string> sherpaModelDir{
         this, "SherpaModelDir",
         "Sherpa 模型目录（含 encoder.int8.onnx/decoder.int8.onnx/tokens.txt；"

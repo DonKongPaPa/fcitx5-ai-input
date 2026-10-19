@@ -6,6 +6,11 @@ SRC="${SRC:-/work}"
 VERSION="${VERSION:-0.1.0}"
 export SRC VERSION
 
+# 国内源 opt-in（本地容器构建用；CI 不设此变量走官方源）
+if [ "${AIINPUT_CN_MIRROR:-0}" = 1 ] && [ -f /etc/apt/sources.list.d/debian.sources ]; then
+    sed -i 's|deb.debian.org|mirrors.tuna.tsinghua.edu.cn|g' /etc/apt/sources.list.d/debian.sources
+fi
+
 export DEBIAN_FRONTEND=noninteractive
 apt-get update -qq >/dev/null 2>&1
 apt-get install -y -qq --no-install-recommends \

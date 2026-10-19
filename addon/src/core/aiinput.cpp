@@ -1341,11 +1341,12 @@ void AiInputEngine::beginRecording(InputContext *ic) {
 void AiInputEngine::finishRecording() {
     finishRequested_ = true;
     uiNotify("recording-stop");
-    // 尾音宽限：parec/PulseAudio 链路还有 ~200-300ms 已采音频在路上，
-    // 且解码需要时间追平——立刻 stop 会截掉松开前的内容（漏字）。
-    // 期间保持 Recording（partial 继续推进），350ms 后取 final
+    // 尾音宽限（TailPaddingMs，默认 400ms）：parec/pipewire 链路已采音频
+    // 在路上（投递延迟 + stdio 缓冲），松键即 stop 会截掉尾部内容（宿主
+    // 实测短词整词丢失）。期间保持 Recording（partial 继续推进）
+    const int pad = std::clamp(config_.tailPaddingMs.value(), 100, 1500);
     tailTimer_ = instance_->eventLoop().addTimeEvent(
-        CLOCK_MONOTONIC, nowUs() + 350000, 0,
+        CLOCK_MONOTONIC, nowUs() + static_cast<uint64_t>(pad) * 1000, 0,
         [this](EventSourceTime *, uint64_t) {
             if (state_ == State::Recording && asr_) {
                 asr_->stop(); // 触发 onFinish（stop 内含管道 drain）
@@ -1365,6 +1366,35 @@ void AiInputEngine::onAsrPartial(const std::string &text) {
         return;
     }
     partial_ = text;
+    // 合流节流（120ms）：流式引擎 ~100ms 一窗、字数 1-3 字地蹦，每条
+    // partial 都推 UI = 卡片高频小幅生长（"生硬"观感：连续小台阶抖动）。
+    // 合成批间让台阶幅度变大、频率变低，配合尺寸原子切换观感是"稳稳
+    // 长一格"；收尾帧必须直推（尾巴不能等）
+    const auto now = nowUs();
+    if (now - lastPartialPushUs_ < 120'000 && !text.empty()) {
+        partialPushPending_ = true;
+        if (!partialPushTimer_) {
+            partialPushTimer_ = instance_->eventLoop().addTimeEvent(
+                CLOCK_MONOTONIC,
+                lastPartialPushUs_ + 120'000, 0,
+                [this](EventSourceTime *, uint64_t) {
+                    partialPushTimer_.reset();
+                    if (partialPushPending_ && state_ == State::Recording) {
+                        partialPushPending_ = false;
+                        pushUiState();
+                        uiNotify("partial", partial_);
+                        lastPartialPushUs_ = nowUs();
+                    }
+                    return false;
+                });
+            if (partialPushTimer_) {
+                partialPushTimer_->setOneShot();
+            }
+        }
+        return;
+    }
+    partialPushPending_ = false;
+    lastPartialPushUs_ = now;
     pushUiState();
     uiNotify("partial", text);
 }

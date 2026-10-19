@@ -24,6 +24,11 @@ output "*" {
 output "Winit" {
     scale $SCALE
 }
+// Important Hotkeys 面板占据右半屏，污染录屏与视觉断言（镜像里的
+// ~/.config/niri 不生效——本文件经 -c 全量替换默认配置）
+hotkey-overlay {
+    skip-at-startup
+}
 KDL
 cat > "$LOG_DIR/sway-config" <<EOF
 output HEADLESS-1 resolution 1920x1080

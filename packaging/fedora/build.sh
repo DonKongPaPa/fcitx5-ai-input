@@ -6,6 +6,11 @@ SRC="${SRC:-/work}"
 VERSION="${VERSION:-0.1.0}"
 export SRC VERSION
 
+# 国内源 opt-in（本地容器构建用；CI 不设此变量走官方源）
+if [ "${AIINPUT_CN_MIRROR:-0}" = 1 ]; then
+    sed -i 's|^metalink=|#metalink=|; s|^#baseurl=http://download.example/pub/fedora/linux|baseurl=https://mirrors.ustc.edu.cn/fedora|' /etc/yum.repos.d/fedora.repo /etc/yum.repos.d/fedora-updates.repo 2>/dev/null || true
+fi
+
 dnf -y -q install cmake gcc-c++ make gettext wayland-devel fontconfig-devel \
     libxcb-devel fcitx5-devel fcitx5 pulseaudio-utils dbus-daemon dbus-tools rpm-build findutils >/dev/null 2>&1 \
     || { echo "!! 依赖安装失败"; dnf -q search fcitx5 | head; exit 1; }

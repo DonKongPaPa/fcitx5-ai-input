@@ -9,6 +9,11 @@ SRC="${SRC:-/work}"
 VERSION="${VERSION:-0.1.0}"
 export SRC VERSION
 
+# 国内源 opt-in（本地容器构建用；CI 不设此变量走官方源）
+if [ "${AIINPUT_CN_MIRROR:-0}" = 1 ] && ! grep -q tuna /etc/pacman.d/mirrorlist 2>/dev/null; then
+    printf 'Server = https://mirrors.tuna.tsinghua.edu.cn/archlinux/$repo/os/$arch\n' > /etc/pacman.d/mirrorlist
+fi
+
 pacman -Syu --noconfirm --needed cmake gcc wayland fontconfig fcitx5 libpulse dbus zstd \
     >/dev/null 2>&1 || { echo "!! 依赖安装失败"; exit 1; }
 pacman -Scc --noconfirm >/dev/null 2>&1 || true

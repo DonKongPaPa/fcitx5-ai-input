@@ -73,17 +73,27 @@ public:
         ev_.reset();
         // 尾音 drain：先把管道里未读走的音频全部读出（继续回调引擎，
         // 否则松键瞬间的数百毫秒语音被直接丢弃——sherpa final 缺尾字
-        // 的根因），SIGTERM 后再读一轮子进程退出前的余量
+        // 的根因），SIGTERM 后有界循环排空到进程退场（单次再读会漏掉
+        // parec 临终写出的缓冲余量）
         if (fd_ >= 0) {
             drainPipe();
         }
         if (pid_ > 0) {
             kill(pid_, SIGTERM);
-            if (fd_ >= 0) {
-                drainPipe();
+            for (int i = 0; i < 20 && pid_ > 0; ++i) { // 200ms 上界
+                if (fd_ >= 0) {
+                    drainPipe();
+                }
+                if (waitpid(pid_, nullptr, WNOHANG) == pid_) {
+                    pid_ = -1;
+                } else {
+                    usleep(10'000);
+                }
             }
-            waitpid(pid_, nullptr, WNOHANG);
-            pid_ = -1;
+            if (pid_ > 0) {
+                waitpid(pid_, nullptr, WNOHANG);
+                pid_ = -1;
+            }
         }
         if (fd_ >= 0) {
             ::close(fd_);
