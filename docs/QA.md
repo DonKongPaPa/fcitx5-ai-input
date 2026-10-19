@@ -104,3 +104,13 @@ DISPLAY=:0 xprop -root _NET_ACTIVE_WINDOW   # 非 0x0 ⟺ 当前聚焦的是 X �
 
 - **底部整行缺失、数百毫秒后自己补全**：resize 跟进延迟（Dart 上报新尺寸 → 引擎 metrics 生效有 1-2 帧窗口，引擎缓冲仍按旧尺寸渲染，超出部分被裁）。属结构性瞬时现象，慢速机器上更明显；持续整段缺失才是 bug（查 journal `FlutterEngine: frame` 尺寸与 Dart `resize` 消息是否收敛）。
 - **右缘半个字形被切、永不恢复**：长无空格西文串（URL/长数字）超出 420 逻辑宽上限且无断行点——软换行无处可断，按行溢出绘制被卡片圆角裁剪。避免依赖即可，后续可考虑溢出省略策略。
+
+## Q12 说的词没上屏（尾部漏字/截断）
+
+**取证（0.4.3 起）**：每次会话自动落盘 `~/.local/state/fcitx5-aiinput/sessions/`——`sessions.jsonl` 记流式/离线双路 final + partial 序列 + 时长，`SessionDumpAudio`（默认开）同时留 wav 音频。反馈问题时跑：
+
+```bash
+scripts/collect-host-logs.sh today   # 或 "-2 hours"，产物在 artifacts/hostlogs/
+```
+
+**对账逻辑**：wav 里有这个词而两路文本都没有 → 音频进了引擎、模型漏识别（模型层， SenseVoice 边界伪影同源，看 journal「边界伪影修复」行）；wav 里就没有 → 采集链路丢音（调大 `TailPaddingMs`，默认 400ms；仍丢则查 pipewire 的 source 链是否有降噪/回声消除在吞尾音）。

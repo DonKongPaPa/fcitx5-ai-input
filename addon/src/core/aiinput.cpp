@@ -1341,11 +1341,12 @@ void AiInputEngine::beginRecording(InputContext *ic) {
 void AiInputEngine::finishRecording() {
     finishRequested_ = true;
     uiNotify("recording-stop");
-    // 尾音宽限：parec/PulseAudio 链路还有 ~200-300ms 已采音频在路上，
-    // 且解码需要时间追平——立刻 stop 会截掉松开前的内容（漏字）。
-    // 期间保持 Recording（partial 继续推进），350ms 后取 final
+    // 尾音宽限（TailPaddingMs，默认 400ms）：parec/pipewire 链路已采音频
+    // 在路上（投递延迟 + stdio 缓冲），松键即 stop 会截掉尾部内容（宿主
+    // 实测短词整词丢失）。期间保持 Recording（partial 继续推进）
+    const int pad = std::clamp(config_.tailPaddingMs.value(), 100, 1000);
     tailTimer_ = instance_->eventLoop().addTimeEvent(
-        CLOCK_MONOTONIC, nowUs() + 350000, 0,
+        CLOCK_MONOTONIC, nowUs() + static_cast<uint64_t>(pad) * 1000, 0,
         [this](EventSourceTime *, uint64_t) {
             if (state_ == State::Recording && asr_) {
                 asr_->stop(); // 触发 onFinish（stop 内含管道 drain）

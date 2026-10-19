@@ -39,6 +39,8 @@ private:
     void finishSession(const std::string &text);
     void teardownAll();
     void initOfflineRecognizer(const AiInputConfig *config);
+    void writeSessionEvidence(const std::string &streaming,
+                              const std::string &offline, bool fixed);
 
     EventLoop *loop_ = nullptr;
     const AiInputConfig *config_ = nullptr;
@@ -51,6 +53,7 @@ private:
     void *stream_ = nullptr;
     std::vector<float> pending_; // s16→float 攒 ~100ms（1600 样本）
     std::string lastPartial_;
+    std::vector<std::string> partials_; // 会话 partial 序列（证据落盘用）
     bool firstChunk_ = true; // 首块延迟诊断（漏字定位）
     std::chrono::steady_clock::time_point startedAt_;
 
@@ -59,6 +62,7 @@ private:
     // stop() 时对整段会话缓冲离线重识别出 final。
     void *offlineRec_ = nullptr; // 进程级缓存（同 recognizer_ 纪律）
     std::vector<float> sessionAudio_; // 会话全量音频（含尾部宽限）
+    bool evidenceFixed_ = false; // 本次离线结果发生过伪影修复（证据字段）
 };
 
 } // namespace fcitx

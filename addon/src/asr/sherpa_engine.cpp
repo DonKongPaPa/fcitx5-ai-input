@@ -8,9 +8,12 @@
 #include "sherpa-onnx/c-api.h"
 
 #include <chrono>
+#include <cerrno>
+#include <cstdio>
 #include <cstdlib>
-#include <dirent.h>
 #include <cstring>
+#include <dirent.h>
+#include <sys/stat.h>
 
 namespace fcitx {
 
@@ -275,6 +278,11 @@ void SherpaOnnxEngine::start(EventLoop *loop, const AiInputConfig *config,
             const auto *r = SherpaOnnxGetOnlineStreamResult(rec, st);
             if (r && r->text && r->text != lastPartial_) {
                 lastPartial_ = r->text;
+                // partial 序列留档（尾部截断类问题的取证：最后一帧
+                // partial 止于何处 vs final 止于何处）
+                if (partials_.size() < 60) {
+                    partials_.push_back(lastPartial_);
+                }
                 cbs_.onPartial(lastPartial_);
             }
             if (r) {
@@ -379,6 +387,7 @@ void SherpaOnnxEngine::stop() {
     }
     const auto *r = SherpaOnnxGetOnlineStreamResult(rec, st);
     std::string text = r && r->text ? r->text : lastPartial_;
+    const std::string streamingText = text; // 证据：离线替换前的流式原文
     // teardownAll 会清 lastPartial_，先记下本会话流式是否出过字
     // （全程无字 + 离线极短 = 对房间噪声的幻觉，如误触按键时的「我.」）
     const bool hadPartial = !lastPartial_.empty() || !text.empty();
@@ -389,6 +398,7 @@ void SherpaOnnxEngine::stop() {
     teardownAll();
     // SenseVoice 整段重识别（配置了目录才启用）：混说/标点/尾音完整度
     // 显著优于流式 final，失败/空结果回落流式文本
+    std::string offlineUsed; // 证据：实际采用的离线结果（空=未启用/失败）
     if (offlineRec_ && sessionAudio_.size() >= 1600) {
         const auto t1 = std::chrono::steady_clock::now();
         auto *ost = SherpaOnnxCreateOfflineStream(
@@ -411,9 +421,10 @@ void SherpaOnnxEngine::stop() {
                                 std::chrono::milliseconds>(
                                 std::chrono::steady_clock::now() - t1)
                                 .count();
-            sessionAudio_.clear();
             if (!sv.empty()) {
-                sv = fixSenseVoiceArtifacts(sv);
+                const std::string fixedText = fixSenseVoiceArtifacts(sv);
+                evidenceFixed_ = fixedText != sv;
+                sv = fixedText;
             }
             if (!sv.empty() && !hadPartial && sv.size() <= 3) {
                 FCITX_INFO() << "Sherpa: SenseVoice final（" << ms
@@ -423,6 +434,7 @@ void SherpaOnnxEngine::stop() {
                 FCITX_INFO() << "Sherpa: SenseVoice final（" << ms
                              << "ms）流式「" << text << "」→ 离线「" << sv
                              << "」";
+                offlineUsed = sv;
                 text = sv;
             } else {
                 FCITX_INFO() << "Sherpa: SenseVoice final 空（" << ms
@@ -430,6 +442,11 @@ void SherpaOnnxEngine::stop() {
             }
         }
     }
+    // 会话证据落盘（在 finishSession 前：partials_/sessionAudio_ 尚在）
+    writeSessionEvidence(streamingText, offlineUsed, evidenceFixed_);
+    partials_.clear();
+    sessionAudio_.clear();
+    evidenceFixed_ = false;
     finishSession(text);
 }
 
@@ -438,6 +455,154 @@ void SherpaOnnxEngine::cancel() {
     teardownAll();
     sessionAudio_.clear();
     finished_ = true;
+}
+
+// —— 会话证据落盘（排查漏字/截断的"周全日志收集"）——
+// ~/.local/state/fcitx5-aiinput/sessions/sessions.jsonl（一行一会话）+
+// 可选 wav 音频留档。字段：双路 final、partial 序列、时长、样本数——
+// 「说了 X 却没上屏」类反馈凭它对账（音频在不在引擎视野内一步定位）
+namespace {
+
+std::string evidenceJsonEscape(const std::string &s) {
+    std::string out;
+    out.reserve(s.size() + 8);
+    for (unsigned char c : s) {
+        switch (c) {
+        case '"': out += "\\\""; break;
+        case '\\': out += "\\\\"; break;
+        case '\n': out += "\\n"; break;
+        case '\r': out += "\\r"; break;
+        case '\t': out += "\\t"; break;
+        default:
+            if (c < 0x20) {
+                char buf[8];
+                snprintf(buf, sizeof(buf), "\\u%04x", c);
+                out += buf;
+            } else {
+                out += static_cast<char>(c);
+            }
+        }
+    }
+    return out;
+}
+
+std::string evidenceStateDir() {
+    const char *state = getenv("XDG_STATE_HOME");
+    std::string base = state && *state ? state : [] {
+        const char *home = getenv("HOME");
+        return home && *home ? std::string(home) + "/.local/state"
+                             : std::string("/tmp");
+    }();
+    return base + "/fcitx5-aiinput/sessions";
+}
+
+// 逐级 mkdir（base/fcitx5-aiinput/sessions）
+bool evidenceEnsureDir(const std::string &path) {
+    std::string cur;
+    for (size_t i = 0; i <= path.size(); ++i) {
+        if (i == path.size() || path[i] == '/') {
+            cur = path.substr(0, i);
+            if (!cur.empty() && mkdir(cur.c_str(), 0755) != 0 && errno != EEXIST) {
+                return false;
+            }
+        }
+    }
+    return true;
+}
+
+bool evidenceWriteWav(const std::string &path, const std::vector<float> &pcm) {
+    const uint32_t sampleRate = 16000;
+    const uint32_t dataBytes = static_cast<uint32_t>(pcm.size()) * 2;
+    std::vector<int16_t> s16(pcm.size());
+    for (size_t i = 0; i < pcm.size(); ++i) {
+        float v = pcm[i];
+        v = v < -1.f ? -1.f : (v > 1.f ? 1.f : v);
+        s16[i] = static_cast<int16_t>(v * 32767.f);
+    }
+    FILE *f = fopen(path.c_str(), "wb");
+    if (!f) {
+        return false;
+    }
+    const uint8_t hdr[44] = {
+        'R', 'I', 'F', 'F', 0, 0, 0, 0, 'W', 'A', 'V', 'E',
+        'f', 'm', 't', ' ', 16, 0, 0, 0, 1, 0, 1, 0,
+        0x80, 0x3E, 0, 0, 0, 0, 0, 0, 2, 0, 16, 0,
+        'd', 'a', 't', 'a'};
+    auto wrU32 = [&f](uint32_t v) {
+        uint8_t b[4] = {uint8_t(v), uint8_t(v >> 8), uint8_t(v >> 16),
+                        uint8_t(v >> 24)};
+        fwrite(b, 1, 4, f);
+    };
+    fwrite(hdr, 1, sizeof(hdr), f);
+    wrU32(36 + dataBytes);          // RIFF size（覆盖占位）
+    fseek(f, 4, SEEK_SET);
+    wrU32(36 + dataBytes);
+    fseek(f, 24, SEEK_SET);
+    wrU32(sampleRate);              // 采样率
+    wrU32(sampleRate * 2);          // 字节率
+    fseek(f, 0, SEEK_END);
+    fwrite(s16.data(), 2, s16.size(), f);
+    const bool ok = ferror(f) == 0;
+    fclose(f);
+    return ok;
+}
+
+} // namespace
+
+void SherpaOnnxEngine::writeSessionEvidence(const std::string &streaming,
+                                            const std::string &offline,
+                                            bool fixed) {
+    if (!config_ || !config_->sessionLog.value()) {
+        return;
+    }
+    const std::string dir = evidenceStateDir();
+    if (!evidenceEnsureDir(dir)) {
+        return;
+    }
+    const auto nowMs = std::chrono::duration_cast<std::chrono::milliseconds>(
+                           std::chrono::system_clock::now().time_since_epoch())
+                           .count();
+    const auto durMs = std::chrono::duration_cast<std::chrono::milliseconds>(
+                           std::chrono::steady_clock::now() - startedAt_)
+                           .count();
+    // 音频留档（先于清空）；留档成功才在 jsonl 里引用文件名
+    std::string audioFile;
+    if (config_->sessionDumpAudio.value() && !sessionAudio_.empty()) {
+        audioFile = std::to_string(nowMs) + ".wav";
+        if (!evidenceWriteWav(dir + "/" + audioFile, sessionAudio_)) {
+            audioFile.clear();
+        }
+    }
+    const std::string modelDir = resolveSherpaModelDir(config_);
+    const char *arch =
+        findModelFile(modelDir, "joiner", false).empty() ? "paraformer"
+                                                         : "zipformer";
+    std::string json;
+    json.reserve(256 + partials_.size() * 16);
+    json += "{\"ts_ms\":" + std::to_string(nowMs);
+    json += ",\"dur_ms\":" + std::to_string(durMs);
+    json += ",\"samples\":" + std::to_string(sessionAudio_.size());
+    json += ",\"engine\":\"sherpa-" + std::string(arch) + "\"";
+    if (!audioFile.empty()) {
+        json += ",\"audio\":\"" + audioFile + "\"";
+    }
+    json += ",\"partials\":[";
+    for (size_t i = 0; i < partials_.size(); ++i) {
+        if (i) {
+            json += ",";
+        }
+        json += "\"" + evidenceJsonEscape(partials_[i]) + "\"";
+    }
+    json += "]";
+    json += ",\"streaming\":\"" + evidenceJsonEscape(streaming) + "\"";
+    json += ",\"offline\":\"" + evidenceJsonEscape(offline) + "\"";
+    json += ",\"artifact_fix\":" + std::string(fixed ? "true" : "false");
+    json += "}\n";
+    FILE *f = fopen((dir + "/sessions.jsonl").c_str(), "a");
+    if (f) {
+        fwrite(json.data(), 1, json.size(), f);
+        fclose(f);
+    }
 }
 
 void SherpaOnnxEngine::finishSession(const std::string &text) {
