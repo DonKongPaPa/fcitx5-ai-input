@@ -176,5 +176,6 @@ tag `vX.Y.Z` 后 GitHub Actions `Release` workflow（`workflow_dispatch` 传 ver
 `run-test.sh` 每轮末裁剪 `artifacts/reports` 只留最新 10 轮
 （`KEEP_REPORTS=N` 覆盖）。手动清理用 `make clean`（安全档：报告/打包
 产物裁剪 + 残留概览）；`make clean CLEAN_ARGS=--all` 连 aiinput 镜像/
-容器一起清（删后首次 `make test` 会自动重建镜像链，耗时数分钟）。
+容器一起清（删后首次 `make test` 会自动重建镜像链——docker.io 拉取在
+本机网络下可达半小时级，深度清理慎用）。
 详见 `scripts/cleanup.sh`——只碰本项目对象，其他项目的 podman 数据不动。
