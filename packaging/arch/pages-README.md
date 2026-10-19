@@ -31,3 +31,11 @@ CacheServer = https://github.com/DonKongPaPa/fcitx5-ai-input/releases/download/p
 ```
 
 3. `sudo pacman -Syu fcitx5-ai-input`（之后随 `-Syu` 自动更新）
+
+## 签名钥维护
+
+仓库自带 `fcitx5-ai-input-keyring` 包（主包依赖它）：每次安装/升级自动把
+最新签名钥导入 pacman keyring 并本地签信任（libalpm hook 跑
+`pacman-key --populate`）。**换钥/轮换对仓库用户无感**——keyring 包先到，
+签名随后切换。只有不走仓库源、手动 `pacman -U` 的用户在换钥后需要重跑
+一次上面的接入步骤。

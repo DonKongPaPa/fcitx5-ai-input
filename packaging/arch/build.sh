@@ -24,6 +24,35 @@ STAGE="$SRC/packaging/out/stage"
 PKG="$SRC/artifacts/packages/fcitx5-ai-input-$VERSION-1-x86_64.pkg.tar.zst"
 mkdir -p "$SRC/artifacts/packages"
 
+# —— keyring 包：仓库签名钥的常规分发渠道。install.sh 只做首次引导导入；
+#    此后换钥/吊销随本包升级（PostTransaction hook 跑 pacman-key --populate）
+#    自动到达，用户无需任何手动步骤。
+KEYRING_VER="${KEYRING_VER:-20261019}"
+KEYRING_PKG="$SRC/artifacts/packages/fcitx5-ai-input-keyring-$KEYRING_VER-1-any.pkg.tar.zst"
+KSTAGE="$SRC/packaging/out/keyring-stage"
+rm -rf "$KSTAGE"
+mkdir -p "$KSTAGE/usr/share/pacman/keyrings" "$KSTAGE/usr/share/libalpm/hooks"
+# 注意：绝不能把吊销证书打进 keyring（否则全网视钥为已吊销）——.rev 只离线备份
+gpg --dearmor --output "$KSTAGE/usr/share/pacman/keyrings/fcitx5-ai-input.gpg" \
+    "$SRC/packaging/arch/repo-key.asc"
+install -m 644 "$SRC/packaging/arch/fcitx5-ai-input-keyring.hook" \
+    "$KSTAGE/usr/share/libalpm/hooks/fcitx5-ai-input-keyring.hook"
+cd "$KSTAGE"
+{
+    echo "pkgname = fcitx5-ai-input-keyring"
+    echo "pkgver = $KEYRING_VER-1"
+    echo "pkgdesc = PGP keys for the fcitx5-ai-input pacman repository"
+    echo "url = https://github.com/DonKongPaPa/fcitx5-ai-input"
+    echo "builddate = $(date +%s)"
+    echo "packager = CI <ci@invalid>"
+    echo "size = $(du -sb "$KSTAGE" | cut -f1)"
+    echo "arch = any"
+    echo "license = MIT"
+} > .PKGINFO
+tar --zstd -cf "$KEYRING_PKG" .PKGINFO usr
+rm .PKGINFO
+echo ">> 产物: $KEYRING_PKG ($(du -h "$KEYRING_PKG" | cut -f1))"
+
 cd "$STAGE"
 {
     echo "pkgname = fcitx5-ai-input"
@@ -37,11 +66,15 @@ cd "$STAGE"
     echo "license = MIT"
     echo "depend = fcitx5"
     echo "depend = libpulse"
+    echo "depend = fcitx5-ai-input-keyring"
 } > .PKGINFO
 tar --zstd -cf "$PKG" .PKGINFO usr
 rm .PKGINFO
 echo ">> 产物: $PKG ($(du -h "$PKG" | cut -f1))"
 
-# 安装 + 冒烟
-pacman -U --noconfirm "$PKG" >/dev/null
+# 安装 + 冒烟（同事务装两包满足依赖；顺带实证 keyring hook 的 populate）
+pacman-key --init >/dev/null 2>&1 || true
+pacman -U --noconfirm "$KEYRING_PKG" "$PKG" >/dev/null
+test -f /usr/share/pacman/keyrings/fcitx5-ai-input.gpg
+pacman-key --list-keys fcitx5-ai-input | grep -q '\[full\]'
 bash "$SRC/packaging/common/smoke.sh"
