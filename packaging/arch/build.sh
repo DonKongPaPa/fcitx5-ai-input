@@ -35,6 +35,10 @@ mkdir -p "$KSTAGE/usr/share/pacman/keyrings" "$KSTAGE/usr/share/libalpm/hooks"
 # 注意：绝不能把吊销证书打进 keyring（否则全网视钥为已吊销）——.rev 只离线备份
 gpg --dearmor --output "$KSTAGE/usr/share/pacman/keyrings/fcitx5-ai-input.gpg" \
     "$SRC/packaging/arch/repo-key.asc"
+# -trusted 文件是 populate 做 lsign 的依据：没有它钥只到 [unknown]，
+# SigLevel=Required 下 db 验签过不了（pacman-key 只信 -trusted 列出的指纹）
+printf '%s:6:\n' "$(cat "$SRC/packaging/arch/repo-key-fingerprint")" \
+    > "$KSTAGE/usr/share/pacman/keyrings/fcitx5-ai-input-trusted"
 install -m 644 "$SRC/packaging/arch/fcitx5-ai-input-keyring.hook" \
     "$KSTAGE/usr/share/libalpm/hooks/fcitx5-ai-input-keyring.hook"
 cd "$KSTAGE"
@@ -76,5 +80,6 @@ echo ">> 产物: $PKG ($(du -h "$PKG" | cut -f1))"
 pacman-key --init >/dev/null 2>&1 || true
 pacman -U --noconfirm "$KEYRING_PKG" "$PKG" >/dev/null
 test -f /usr/share/pacman/keyrings/fcitx5-ai-input.gpg
-pacman-key --list-keys fcitx5-ai-input | grep -q '\[full\]'
+# -trusted:6 走 ownertrust ultimate；install.sh 引导走 lsign full——两者都是可信
+pacman-key --list-keys fcitx5-ai-input | grep -Eq '\[(full|ultimate)\]'
 bash "$SRC/packaging/common/smoke.sh"
