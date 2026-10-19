@@ -1860,6 +1860,10 @@ void VoicePopup::resizeLocked(int w, int h) {
         }
         width_ = w;
         height_ = h;
+        // 新页面必须清零：池内存是上次会话/上一帧的脏数据，引擎新帧
+        // 未到而合成器先重绘（挪窗/重定位逼出）时，脏页被当画面扫出
+        // ——卡片下方闪过旧内容残影（用户实测"一两帧白色"）
+        memset(pixels_, 0, poolCapacity_);
         for (int i = 0; i < 2; ++i) {
             buffers_[i] = wl_shm_pool_create_buffer(
                 pool_, i * bufSize, w, h, stride, WL_SHM_FORMAT_ARGB8888);
@@ -1885,6 +1889,7 @@ void VoicePopup::resizeLocked(int w, int h) {
     ftruncate(poolFd_, poolCapacity_);
     pixels_ = static_cast<uint8_t *>(
         mmap(nullptr, poolCapacity_, PROT_READ | PROT_WRITE, MAP_SHARED, poolFd_, 0));
+    memset(pixels_, 0, poolCapacity_); // 新映射清零（memfd 内容未定义语义）
     pool_ = wl_shm_create_pool(shm_, poolFd_, poolCapacity_);
     for (int i = 0; i < 2; ++i) {
         buffers_[i] = wl_shm_pool_create_buffer(

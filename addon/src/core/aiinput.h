@@ -202,7 +202,10 @@ private:
     TrackableObjectReference<InputContext> sessionIcRef_;
     bool toggleReleased_ = false; // Toggle 模式：起始按的键已松开
     std::unique_ptr<EventSourceTime> thresholdTimer_;
-    std::unique_ptr<EventSourceTime> tailTimer_; // 松开后尾音宽限 350ms
+    std::unique_ptr<EventSourceTime> tailTimer_; // 松开后尾音采集宽限（TailPaddingMs）
+    std::unique_ptr<EventSourceTime> partialPushTimer_; // partial 合流节拍
+    bool partialPushPending_ = false;
+    uint64_t lastPartialPushUs_ = 0;
     std::unique_ptr<EventSourceTime> resultTimer_;
     std::unique_ptr<EventSourceTime> recWatchdogTimer_;  // 录音硬上限
     std::unique_ptr<EventSourceTime> recHardStopTimer_;  // 识别挂起兜底
