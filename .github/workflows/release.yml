@@ -92,6 +92,9 @@ jobs:
           retention-days: 3
 
   release:
+    # 只在 tag 触发时建正式 release——workflow_dispatch 用于引导发布
+    # pacman 仓库（pacman-repo/publish-pacman-repo），不该以分支名建 release
+    if: startsWith(github.ref, 'refs/tags/v')
     needs: [flutter-bundle, package]
     runs-on: ubuntu-latest
     steps:
@@ -131,7 +134,7 @@ jobs:
               容器端到端（含 Xwayland 仿真组），Flutter 构建全链镜像化
 
             ### 安装
-            - **Arch**: `pacman -U fcitx5-ai-input-*.pkg.tar.zst`
+            - **Arch**: `curl -fsSL https://donkongpapa.github.io/fcitx5-ai-input/install.sh | sh`（加仓库源，GPG 签名），之后 `sudo pacman -Syu fcitx5-ai-input` 即装即更；手动逐步见 README「安装」段
             - **Debian**: `apt install ./fcitx5-ai-input_*.deb`
             - **Fedora**: `dnf install fcitx5-ai-input-*.rpm`
             - **其他**: 解压 tarball 后 `sudo bash install.sh`（需 gcc/cmake/fcitx5-dev/wayland-dev/libxcb-dev）
@@ -140,3 +143,63 @@ jobs:
             fcitx5 ≥ 5.0、pulseaudio-utils（parec 采集）。语音服务可选：
             configtool → 模型部署（FunASRAutoStart + 设备/量化档）。
           files: dist/*
+
+  # pacman 仓库（GPG 签名）：db 发布到 GitHub Pages（主源，小文件），
+  # 包+.sig 追加到滚动 release pacman-repo（CacheServer 源，大文件走
+  # Release 带宽）。tag 发版与 workflow_dispatch（引导发布）都会跑；
+  # 正式 release 则只留给 tag（见上方 release job 守卫）。
+  pacman-repo:
+    needs: [package]
+    runs-on: ubuntu-latest
+    container:
+      image: docker.io/library/archlinux:base-devel
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/download-artifact@v4
+        with:
+          name: pkg-arch
+          path: pkg-dl
+      - name: 组 repo db + Pages 发布树
+        # 不用 github.workspace：容器里它展开 /home/runner/... 而实际挂载
+        # 在 /__w/...（同 package job 的坑）
+        env:
+          PACMAN_REPO_SIGNING_KEY: ${{ secrets.PACMAN_REPO_SIGNING_KEY }}
+        run: |
+          bash scripts/repo-publish.sh pages-dist pkg-dl/*.pkg.tar.zst
+      - uses: actions/upload-artifact@v4
+        with:
+          name: pages-repo
+          path: pages-dist/
+          retention-days: 3
+
+  publish-pacman-repo:
+    needs: [pacman-repo]
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+      pages: write
+      id-token: write
+    concurrency:
+      group: pacman-repo-publish
+      cancel-in-progress: false
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          name: pages-repo
+          path: pages-dist
+      - name: 包+.sig 上传滚动 release（CacheServer 源）
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          gh release view pacman-repo --repo "$GITHUB_REPOSITORY" >/dev/null 2>&1 || \
+            gh release create pacman-repo --repo "$GITHUB_REPOSITORY" --latest=false \
+              --title "pacman 仓库包缓存（滚动）" \
+              --notes "fcitx5-ai-input pacman 仓库的包与签名（CacheServer 自动取用），无需手动下载——安装见 README。"
+          gh release upload pacman-repo --repo "$GITHUB_REPOSITORY" --clobber \
+            pages-dist/x86_64/*.pkg.tar.zst pages-dist/x86_64/*.pkg.tar.zst.sig
+      - uses: actions/configure-pages@v5
+      - uses: actions/upload-pages-artifact@v4
+        with:
+          path: pages-dist
+      - uses: actions/deploy-pages@v4
+        id: deployment

@@ -125,6 +125,16 @@ fi
 
 tag `vX.Y.Z` 后 GitHub Actions `Release` workflow（`workflow_dispatch` 传 version）自动构建四平台包（Arch/Debian/Fedora/tarball）+ Flutter JIT bundle 并创建 Release。发版前确认 `packaging/` 各 `build.sh` 与版本占位符就绪。
 
+同一 workflow 同时发布 **Arch pacman 仓库**：db+签名发布到 GitHub Pages（`donkongpapa.github.io/fcitx5-ai-input`，主源），包+.sig 追加到滚动 release `pacman-repo`（CacheServer 源）。tag 发版与 workflow_dispatch 都会跑这两个 job；正式 Release 只留给 tag（守卫见 `release` job）。`workflow_dispatch version=<当前版本>` 可单独引导/重发 pacman 仓库而不动正式 Release。滚动 release 里旧版本包会累积——Release 带宽免费，暂不清理。
+
+**pacman 仓库签名密钥**：专用 ed25519 钥（UID `fcitx5-ai-input pacman repo`，指纹硬编码在 install.sh/pages-README）。私钥 armored 存于 repo secret `PACMAN_REPO_SIGNING_KEY`；**本机备份在 `~/.local/share/aiinput-secrets/`（私钥 .asc + 吊销证书 .rev，chmod 600，务必再离线备份一份）——私钥丢了只能换钥；.rev 只在钥泄露时发布，绝不能打进 keyring 包（打进即全网视钥已吊销）**。
+
+**轮换（两段舞，仓库用户全程无感）**：版本 N——新公钥并入 `packaging/arch/repo-key.asc`（keyring 包随 -Syu 到达，hook populate 自动导入信任；旧钥仍签一切）+ install.sh/pages-README 指纹仍留旧值；版本 N+1——secret 换新私钥、指纹改新值（`packaging/arch/repo-key-fingerprint` → keyring -trusted、install.sh、pages-README 三处文本），新钥签 db/包。只有手动 `pacman -U` 不走仓库源的用户需在换钥后重跑 install.sh。
+
+**同版本号重发必须重跑 workflow**（`gh workflow run release.yml --ref <ref> -f version=<ver>`）：CacheServer 优先于 Server 取包，滚动 release 里旧的同名文件不重传就会先被取到（与 db 校验和错位=用户端 "corrupted (checksum)"）。正常版本号递增无此问题（文件名不同）。
+
+本地组装发布树：`GNUPGHOME=$(mktemp -d) PACMAN_REPO_SIGNING_KEY_FILE=<私钥> bash scripts/repo-publish.sh /tmp/pages-test <pkg...>`，消费端用 archlinux 容器跑 `AIINPUT_REPO_SERVER=file:///… AIINPUT_REPO_CACHE_SERVER=<同树> sh install.sh` 验证（两个变量都要覆盖——CacheServer 优先；env 必须写在 install.sh 命令前，管道里 `VAR=x yes |` 的写法绑不到 install.sh）。
+
 ## 试验田（lab/）与快档测试
 
 - `lab/spec/protocol.md`：消息流转规范 v1（ui/asr/refine 三通道统一 envelope）；
