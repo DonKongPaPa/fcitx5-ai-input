@@ -54,7 +54,22 @@ sleep 4
 shot "$OUT_DIR/dual-panel.png"
 wait "$IC_PID" 2>/dev/null || true
 
-echo "== 4) 证据汇总"
+echo "== 4) 崩溃隔离：kill 卡片 → fcitx5 存活 → 重启卡片重连"
+pkill -x qs 2>/dev/null || true
+sleep 1
+ST=$(call State 2>/dev/null)
+echo "-- kill 后 fcitx5 State: $ST"
+case "$ST" in *idle*|*Idle*) echo "✓ fcitx5 存活";; *) echo "✗ fcitx5 异常";; esac
+nohup qs -p /usr/share/fcitx5-aiinput/card-qml >>"$FCITX_LOG" 2>&1 &
+for _ in $(seq 1 20); do
+    N=$(grep -ac "QML 卡片已连接" "$FCITX_LOG")
+    [ "$N" -ge 2 ] && break
+    sleep 0.5
+done
+echo "-- 重连次数: $(grep -ac 'QML 卡片已连接' "$FCITX_LOG")（≥2 = 断线重连链路通）"
+echo "-- 杀卡片后 envelope 仍可发（无客户端静默丢弃）: $(call State)"
+
+echo "== 5) 证据汇总"
 echo "-- update(component=1): $(grep -ac 'update(component=1' "$FCITX_LOG")"
 grep -ao "sock->] panel[a-z/]*" "$FCITX_LOG" | sort | uniq -c
 grep -a "CARD: ENV" "$FCITX_LOG" | grep -oE "method=[a-z/]+" | sort | uniq -c
