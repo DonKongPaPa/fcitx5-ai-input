@@ -108,7 +108,9 @@ public:
     // 候选窗（panel/*）专用可见性入口：ensurePopup + 解除 pushFrame 的
     // !visible_ 帧守卫，让 Dart 画好的候选窗帧能 commit 上屏。与 show()
     // 的差别——不带语音卡的探针/判定挂起/色块语义（候选窗的组合文本归
-    // pinyin 引擎，挂「语音输入中」探针会毁掉输入）
+    // pinyin 引擎，挂「语音输入中」探针会毁掉输入）；组合期每键一次
+    // update，同 IC 复用已 attach 的 popup（每键重建会 churn 表面并
+    // 搅乱语音卡的单槽定位）
     void showPanel(InputContext *ic);
     void hide();
     // Flutter 帧入口。写入一帧 BGRA（wl_shm ARGB8888 小端字节序，
@@ -392,6 +394,8 @@ private:
         connHandler_;
     std::unique_ptr<HandlerTableEntry<WaylandConnectionClosed>>
         closeHandler_;
+    // panel 场景的同 IC 复用记账（showPanel；destroyPopupSurface 清）
+    TrackableObjectReference<InputContext> panelIc_;
 };
 
 } // namespace fcitx
