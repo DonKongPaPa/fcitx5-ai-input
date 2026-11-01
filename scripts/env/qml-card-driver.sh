@@ -22,10 +22,14 @@ for _ in $(seq 1 40); do
 done
 grep -aq "QML 卡片已连接" "$FCITX_LOG" && echo "✓ socket 已连接" || echo "✗ 卡片未连接"
 
-echo "== 2) 背景窗口（视觉锚点）"
+echo "== 2) 双窗口（testapp 落第二列=非原点，原点偏差可测）"
 "$DIST_BIN/testapp-gtk" >"$LOG_DIR/testapp-qml.log" 2>&1 &
 APP_PID=$!
-timeout 10 "$DIST_BIN/virtpoint" move 540 80 1280 720 2>/dev/null || true
+sleep 1.5
+"$DIST_BIN/testapp-gtk" >"$LOG_DIR/testapp-qml2.log" 2>&1 &
+sleep 1.5
+# 聚焦第二列的 testapp（niri scrolling：新窗在 focused 列右侧开新列）
+timeout 10 "$DIST_BIN/virtpoint" move 1400 300 1280 720 2>/dev/null || true
 timeout 10 "$DIST_BIN/virtpoint" click left 2>/dev/null || true
 sleep 1
 
@@ -74,4 +78,8 @@ echo "-- update(component=1): $(grep -ac 'update(component=1' "$FCITX_LOG")"
 grep -ao "sock->] panel[a-z/]*" "$FCITX_LOG" | sort | uniq -c
 grep -a "CARD: ENV" "$FCITX_LOG" | grep -oE "method=[a-z/]+" | sort | uniq -c
 kill "$APP_PID" 2>/dev/null || true
+find /run/user/1000/quickshell -name "*.qslog" 2>/dev/null | head -3 | while read -r f; do
+    echo "== qslog: $f"
+    cat "$f" 2>/dev/null | tail -25
+done
 echo "== QML 卡验证完成"

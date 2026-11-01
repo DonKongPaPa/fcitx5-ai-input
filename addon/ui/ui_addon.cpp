@@ -214,7 +214,7 @@ AiInputUi::AiInputUi(Instance *instance) : instance_(instance) {
                 cmd = "qs -p /usr/share/fcitx5-aiinput/card-qml";
             }
             socketUi_ = std::make_unique<SocketUi>(
-                instance_, sock, cmd,
+                instance_, sock, cmd, !flutterCard_,
                 [this](const std::string &method, const std::string &args) {
                     // resize 是卡片自身布局语义，不回流（Flutter 卡的
                     // resize 才走引擎 metrics 统筹）
@@ -492,6 +492,7 @@ void AiInputUi::handleFramePpm(const uint8_t *rgb, size_t len) {
         frameBgra_[px * 4 + 3] = 0xFF;
     }
     popup_->pushFrameRelay(w, h, frameBgra_.data());
+    FCITX_LOG(Info) << "AiInputUi: [relay] frame " << w << "x" << h;
 }
 
 void AiInputUi::uiNotifyCommit() {

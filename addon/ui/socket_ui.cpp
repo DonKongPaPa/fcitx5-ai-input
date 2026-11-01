@@ -39,10 +39,11 @@ static std::string extractArgsObject(const std::string &line) {
 }
 
 SocketUi::SocketUi(Instance *instance, const std::string &sockPath,
-                   const std::string &spawnCmd, LineHandler onLine,
-                   FrameHandler onFrame)
+                   const std::string &spawnCmd, bool relayMode,
+                   LineHandler onLine, FrameHandler onFrame)
     : instance_(instance), sockPath_(sockPath), onLine_(std::move(onLine)),
-      onFrame_(std::move(onFrame)), framePath_(sockPath + "-frame") {
+      onFrame_(std::move(onFrame)), framePath_(sockPath + "-frame"),
+      relayMode_(relayMode) {
     serverFd_ = socket(AF_UNIX, SOCK_STREAM | SOCK_CLOEXEC | SOCK_NONBLOCK, 0);
     if (serverFd_ < 0) {
         FCITX_WARN() << "AiInputUi: socket 卡片监听创建失败 errno=" << errno;
@@ -110,8 +111,12 @@ SocketUi::SocketUi(Instance *instance, const std::string &sockPath,
         // stderr 直通 fcitx5 日志）。卡片退出不重启——对比期手动重跑
         if (pid_t pid = fork(); pid == 0) {
             setsid();
-            // socket 路径显式交接给卡片（不依赖 QML 默认值）
+            // socket 路径与渲染模式显式交接给卡片（不依赖 QML 默认值）
             setenv("AIINPUT_CARD_SOCK", sockPath_.c_str(), 1);
+            // relay 模式（FlutterCard=False）：QML 直显窗口退场，卡片帧
+            // 全部经 popup 上屏（防双显；invisible 窗口 grab 有效性见
+            // frame-relay.md §4 验证点）
+            setenv("AIINPUT_CARD_RELAY", relayMode_ ? "1" : "0", 1);
             // stdout/stderr 都继承：qs 的 INFO/ERROR/CARD 行直通 fcitx5
             // 日志（排障第一现场）；stdin 挂 /dev/null（卡片不读 stdin）
             int devnullr = open("/dev/null", O_RDONLY);

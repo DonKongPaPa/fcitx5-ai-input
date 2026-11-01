@@ -34,7 +34,7 @@ public:
         std::function<void(int w, int h, const uint8_t *rgb, size_t len)>;
 
     SocketUi(Instance *instance, const std::string &sockPath,
-             const std::string &spawnCmd, LineHandler onLine,
+             const std::string &spawnCmd, bool relayMode, LineHandler onLine,
              FrameHandler onFrame);
     ~SocketUi();
 
@@ -69,6 +69,7 @@ private:
     std::string frameBuf_;   // FRM 头 + payload 的重组缓冲
     size_t frameExpect_ = 0; // 当前帧 payload 期望长度（0=等头）
     pid_t spawnPid_ = -1;
+    bool relayMode_ = false; // FlutterCard=False：QML 直显退场、帧全走 popup
 };
 
 } // namespace fcitx

@@ -26,6 +26,8 @@ ShellRoot {
     // panel/caret 的光标矩形（跟随锚定源；声明缺失曾导致赋值静默失败
     // ——「Cannot assign to non-existent property」，margins 恒默认）
     property var lastCaret: null
+    // relay 模式（FlutterCard=False）：直显窗口退场，帧全走 popup 上屏
+    property bool relayMode: Quickshell.env("AIINPUT_CARD_RELAY") === "1"
 
     Theme {
         id: themeObj
@@ -43,15 +45,20 @@ ShellRoot {
     // 挤占注意力（宿主实测反馈），真实版语义 = 无会话无表面
     PanelWindow {
         id: cardWindow
-        visible: card.mode !== "idle"
+        visible: relayMode ? false : card.mode !== "idle"
         color: "transparent"
         anchors {
             left: true
             top: true
         }
         margins {
-            left: root.cardAnchorLeft
-            top: root.cardAnchorTop
+            // relay 模式：窗口整体推出屏外（surface 仍在场、场景照常渲染
+            // 供 grab；屏外 layer surface 用户不可见——visible=false 会让
+            // grabToImage 回调丢失，实测）
+            left: relayMode ? (cardWindow.screen ? cardWindow.screen.width
+                                                 : 1920) + 200
+                            : root.cardAnchorLeft
+            top: relayMode ? 10 : root.cardAnchorTop
         }
         exclusionMode: ExclusionMode.Ignore
         implicitWidth: card.implicitWidth
@@ -93,15 +100,17 @@ ShellRoot {
     // —— rime 候选面板（panel/update 显示、panel/hide 隐藏、caret 重锚）——
     PanelWindow {
         id: panelWindow
-        visible: panel.shown
+        visible: relayMode ? false : panel.shown
         color: "transparent"
         anchors {
             left: true
             top: true
         }
         margins {
-            left: root.panelAnchorLeft
-            top: root.panelAnchorTop
+            left: relayMode ? (panelWindow.screen ? panelWindow.screen.width
+                                                  : 1920) + 200
+                            : root.panelAnchorLeft
+            top: relayMode ? 10 : root.panelAnchorTop
         }
         exclusionMode: ExclusionMode.Ignore
         implicitWidth: panel.implicitWidth
@@ -248,6 +257,11 @@ ShellRoot {
     function doGrab() {
         var win = panel.shown ? panelWindow
                               : (card.mode !== "idle" ? cardWindow : null)
+        console.log("CARD: doGrab win=" + (win ? (win === panelWindow ? "panel" : "card") : "null")
+                    + " shown=" + panel.shown + " mode=" + card.mode
+                    + " w=" + (win ? win.width : -1) + " h=" + (win ? win.height : -1)
+                    + " busy=" + root.grabBusy
+                    + " mleft=" + (win ? win.margins.left : -1))
         if (!win || root.grabBusy || win.width <= 0 || win.height <= 0) {
             root.grabBusy = false
             return
