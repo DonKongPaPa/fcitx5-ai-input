@@ -8,6 +8,10 @@ Version=@PROJECT_VERSION@
 Type=SharedLibrary
 Library=aiinputui
 Depends=wayland
-Priority=Default
+# UI 选择规则（fcitx5 userinterfacemanager）：UIPriority 大者胜，并列按名
+# 字典序降序（"classicui" > "aiinput-ui"，不设则永远排在 classicui 后）。
+# 100 > kimpanel 的 50——拼音候选窗由本 addon 接管（容器 P4b 实证 10 次
+# update 到达）。旧单体写的 Priority=Default 是无效键（历史遗留，已删）。
+UIPriority=100
 Enabled=True
 Configurable=False
