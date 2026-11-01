@@ -1,13 +1,12 @@
 add_library(aiinput MODULE)
-# 模块拆分蓝图（lab/spec/protocol.md §重构）：
-# core=会话状态机/按键/配置  hub=协议发射  surfaces=定位三传输
-# asr=识别后端  embedder=Flutter raw embedder
+# 模块拆分蓝图（lab/spec/ui-split-contract.md）：进程内双 addon——
+# 本 target = 引擎（core=会话状态机/按键/配置  hub=协议发射  asr=识别后端）；
+# UI 侧三目录已迁去 addon/ui/ 的 aiinputui target，两侧经 hub/ui_split_iface.h 对调
 target_sources(aiinput PRIVATE
     core/aiinput.cpp
     hub/ui_bus.cpp
     hub/stdio_backend.cpp
-    surfaces/popup_surface.cpp
-    embedder/flutter_engine.cpp
+    hub/json_util.cpp
     asr/funasr_ws_engine.cpp
     asr/funasr_local_engine.cpp
     asr/sherpa_engine.cpp
@@ -17,9 +16,10 @@ target_include_directories(aiinput PRIVATE
     "${CMAKE_CURRENT_SOURCE_DIR}"
     "${CMAKE_CURRENT_SOURCE_DIR}/core"
     "${CMAKE_CURRENT_SOURCE_DIR}/hub"
-    "${CMAKE_CURRENT_SOURCE_DIR}/surfaces"
     "${CMAKE_CURRENT_SOURCE_DIR}/asr"
-    "${CMAKE_CURRENT_SOURCE_DIR}/embedder")
+    # sherpa-onnx SDK 头（asr 引擎 include "sherpa-onnx/c-api.h"）；
+    # flutter_embedder.h 同住此目录但只有 ui 侧用
+    "${CMAKE_CURRENT_SOURCE_DIR}/../third_party")
 target_link_libraries(aiinput PRIVATE Fcitx5::Core)
 # 5.0（bookworm 5.0.21）没有 CandidateWord::comment()（5.1 API）——
 # 按检测到的版本出宏，源码里降级
@@ -28,37 +28,10 @@ if(Fcitx5Core_VERSION VERSION_GREATER_EQUAL 5.1)
 endif()
 find_package(Fcitx5ModuleDBus CONFIG REQUIRED)
 target_link_libraries(aiinput PRIVATE Fcitx5::Module::DBus)
-find_package(Fcitx5ModuleWayland CONFIG REQUIRED)
-target_link_libraries(aiinput PRIVATE Fcitx5::Module::Wayland)
-# XWayland 矩形换算：xcb 主显示判定（isXWayland）+ 独立 xcb 连接查
-# _NET_ACTIVE_WINDOW/WM_CLASS/输出区段（无 X 环境自动跳过）。
-# 坑：Fcitx5::Module::XCB 是 INTERFACE 目标只给头文件路径，libxcb
-# 必须显式链——惰性绑定下漏链在无 X 的容器里测不出（符号从未解析），
-# 上机一调 xcb_connect 即 symbol lookup error 崩掉 fcitx5
-find_package(Fcitx5ModuleXCB CONFIG REQUIRED)
-target_link_libraries(aiinput PRIVATE Fcitx5::Module::XCB)
-# libxcb 链接在下方 fontconfig 的 PkgConfig 初始化之后统一声明
-
-# —— Flutter raw embedder 引擎（进程内嵌入，软渲染）——
-# 头文件 vendor 在 addon/third_party/；libflutter_engine.so 由
-# scripts/fetch-flutter-embedder.sh 下载到 .cache/flutter-embedder/
-#（官方工件只有 linux-x64/JIT 变体；release 目录仅 GTK 壳不导出 C API）。
-# 打包/容器构建可 -DFLUTTER_ENGINE_LIBRARY=... 显式指定。
-set(FLUTTER_ENGINE_LIBRARY "" CACHE PATH "libflutter_engine.so 路径")
-if(NOT FLUTTER_ENGINE_LIBRARY)
-    set(FLUTTER_ENGINE_LIBRARY "${CMAKE_CURRENT_SOURCE_DIR}/../../.cache/flutter-embedder/libflutter_engine.so")
-endif()
-if(NOT EXISTS "${FLUTTER_ENGINE_LIBRARY}")
-    message(FATAL_ERROR
-        "libflutter_engine.so 未找到：${FLUTTER_ENGINE_LIBRARY}\n"
-        "先运行 scripts/fetch-flutter-embedder.sh，或传 -DFLUTTER_ENGINE_LIBRARY=/path/to/libflutter_engine.so")
-endif()
 target_compile_definitions(aiinput PRIVATE
     AIINPUT_VERSION_STRING="${PROJECT_VERSION}")
-target_include_directories(aiinput PRIVATE "${CMAKE_CURRENT_SOURCE_DIR}/../third_party")
-target_link_libraries(aiinput PRIVATE "${FLUTTER_ENGINE_LIBRARY}")
 
-# —— sherpa-onnx 运行时（CPU 流式第四引擎）——
+# —— sherpa-onnx 运行时（CPU 流式识别引擎）——
 # libsherpa-onnx-c-api.so（自带 RPATH $ORIGIN，libonnxruntime.so 同目录解析）
 set(SHERPA_ONNX_LIBRARY "" CACHE PATH "libsherpa-onnx-c-api.so 路径")
 if(NOT SHERPA_ONNX_LIBRARY)
@@ -76,63 +49,16 @@ target_link_libraries(aiinput PRIVATE pthread)
 find_package(PkgConfig REQUIRED)
 pkg_check_modules(FONTCONFIG REQUIRED IMPORTED_TARGET fontconfig)
 target_link_libraries(aiinput PRIVATE PkgConfig::FONTCONFIG)
-pkg_check_modules(XCB REQUIRED IMPORTED_TARGET xcb xcb-shm)
-target_link_libraries(aiinput PRIVATE PkgConfig::XCB)
-
-# input-method-v2 协议（wlroots/fcitx5 扩展，不在 wayland-protocols 包内）
-find_program(WAYLAND_SCANNER_EXECUTABLE wayland-scanner REQUIRED)
-set(IM_V2_XML ${CMAKE_CURRENT_SOURCE_DIR}/../protocol/input-method-unstable-v2.xml)
-set(GEN_DIR ${CMAKE_CURRENT_BINARY_DIR}/generated)
-file(MAKE_DIRECTORY ${GEN_DIR})
-add_custom_command(
-    # client header 用上游标准文件名：vendored fcitx-wayland wrapper 以该名 include
-    OUTPUT ${GEN_DIR}/imv2-protocol.c
-           ${GEN_DIR}/wayland-input-method-unstable-v2-client-protocol.h
-    COMMAND ${WAYLAND_SCANNER_EXECUTABLE} client-header ${IM_V2_XML} ${GEN_DIR}/wayland-input-method-unstable-v2-client-protocol.h
-    COMMAND ${WAYLAND_SCANNER_EXECUTABLE} private-code ${IM_V2_XML} ${GEN_DIR}/imv2-protocol.c
-    # wayland-scanner 会把 wl_interface 定义标记 WL_PRIVATE(hidden)，跨编译单元
-    # 无法解析——去掉让符号在模块内可见
-    COMMAND sed -i "s/^WL_PRIVATE //g" ${GEN_DIR}/imv2-protocol.c
-    COMMAND sed -i "s/^extern const struct wl_interface/extern __attribute__((visibility(\"default\"))) const struct wl_interface/" ${GEN_DIR}/imv2-protocol.c
-    DEPENDS ${IM_V2_XML}
-    VERBATIM)
-target_sources(aiinput PRIVATE ${GEN_DIR}/imv2-protocol.c)
-
-# —— W3 fractional scale：viewporter + fractional-scale-v1（wayland-protocols 标准件）——
-foreach(proto viewporter fractional-scale-v1 wlr-layer-shell cursor-shape-v1 xdg-output-unstable-v1)
-    add_custom_command(
-        OUTPUT ${GEN_DIR}/${proto}-protocol.c
-               ${GEN_DIR}/${proto}-client-protocol.h
-        COMMAND ${WAYLAND_SCANNER_EXECUTABLE} client-header
-                ${CMAKE_CURRENT_SOURCE_DIR}/../protocol/${proto}.xml
-                ${GEN_DIR}/${proto}-client-protocol.h
-        COMMAND ${WAYLAND_SCANNER_EXECUTABLE} private-code
-                ${CMAKE_CURRENT_SOURCE_DIR}/../protocol/${proto}.xml
-                ${GEN_DIR}/${proto}-protocol.c
-        COMMAND sed -i "s/^WL_PRIVATE //g" ${GEN_DIR}/${proto}-protocol.c
-        COMMAND sed -i "s/^extern const struct wl_interface/extern __attribute__((visibility(\"default\"))) const struct wl_interface/" ${GEN_DIR}/${proto}-protocol.c
-        # wlr-layer-shell 的 get_layer_surface 参数名 namespace 撞 C++ 关键字
-        COMMAND sed -i "s/\\bnamespace\\b/namespace_/g" ${GEN_DIR}/${proto}-client-protocol.h
-        DEPENDS ${CMAKE_CURRENT_SOURCE_DIR}/../protocol/${proto}.xml
-        VERBATIM)
-    target_sources(aiinput PRIVATE ${GEN_DIR}/${proto}-protocol.c)
-endforeach()
-target_include_directories(aiinput PRIVATE ${GEN_DIR})
-target_link_libraries(aiinput PRIVATE wayland-client)
 set_target_properties(aiinput PROPERTIES PREFIX "")
 
-# 引擎 .so 装到 addon 旁的私有目录（libdir/fcitx5-aiinput），rpath 用
+# sherpa 运行时库装到 addon 旁的私有目录（libdir/fcitx5-aiinput），rpath 用
 # $ORIGIN 相对定位（无需 LD_LIBRARY_PATH）。路径必须前缀相对——dist 暂存
 # 打包依赖 CMAKE_INSTALL_PREFIX
-install(FILES "${FLUTTER_ENGINE_LIBRARY}"
-        DESTINATION "${CMAKE_INSTALL_LIBDIR}/fcitx5-aiinput")
 get_filename_component(SHERPA_RT_DIR "${SHERPA_ONNX_LIBRARY}" DIRECTORY)
 install(FILES "${SHERPA_RT_DIR}/libsherpa-onnx-c-api.so"
               "${SHERPA_RT_DIR}/libonnxruntime.so"
         DESTINATION "${CMAKE_INSTALL_LIBDIR}/fcitx5-aiinput")
-get_filename_component(FLUTTER_ENGINE_DIR "${FLUTTER_ENGINE_LIBRARY}" DIRECTORY)
 set_target_properties(aiinput PROPERTIES
-    BUILD_RPATH "${FLUTTER_ENGINE_DIR}"
     INSTALL_RPATH "$ORIGIN/../fcitx5-aiinput")
 
 install(TARGETS aiinput LIBRARY DESTINATION "${FCITX_INSTALL_ADDONDIR}")
@@ -143,19 +69,6 @@ install(TARGETS aiinput LIBRARY DESTINATION "${FCITX_INSTALL_ADDONDIR}")
 configure_file(aiinput.conf.in aiinput.conf @ONLY)
 install(FILES "${CMAKE_CURRENT_BINARY_DIR}/aiinput.conf"
         DESTINATION "${FCITX_INSTALL_PKGDATADIR}/addon")
-
-# Flutter 资产（flutter_assets + icudtl.dat）→ share/fcitx5-aiinput/flutter/
-# 产物由 flutter build bundle 生成；此处可选安装（构建机上有才装，打包
-# 脚本也可能自行拷贝）。AIINPUT_FLUTTER_ASSETS_DIR 指向含 flutter_assets/
-# 与 icudtl.dat 的目录。
-set(AIINPUT_FLUTTER_ASSETS_DIR "" CACHE PATH "flutter_assets+icudtl.dat 所在目录")
-if(AIINPUT_FLUTTER_ASSETS_DIR AND EXISTS "${AIINPUT_FLUTTER_ASSETS_DIR}/flutter_assets")
-    install(DIRECTORY "${AIINPUT_FLUTTER_ASSETS_DIR}/flutter_assets"
-            DESTINATION "${CMAKE_INSTALL_DATADIR}/fcitx5-aiinput/flutter")
-    install(FILES "${AIINPUT_FLUTTER_ASSETS_DIR}/icudtl.dat"
-            DESTINATION "${CMAKE_INSTALL_DATADIR}/fcitx5-aiinput/flutter"
-            OPTIONAL)
-endif()
 
 # v1 协议 stdio 后端脚本（P6：asr/refine 进程外；StdioAsrCmd/StdioRefineCmd
 # 默认指向此安装路径）。参照实现 + 可直接替换成真实后端

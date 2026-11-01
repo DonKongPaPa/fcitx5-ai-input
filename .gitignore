@@ -25,3 +25,4 @@ models/
 # 打包临时产物
 packaging/out/
 .cache/
+__pycache__/

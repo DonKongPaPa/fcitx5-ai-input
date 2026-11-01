@@ -59,7 +59,8 @@ D="$ROOT/artifacts/dist"
 check() { if eval "$2"; then echo "  ✓ $1"; else echo "  ✗ $1"; FAIL=1; fi; }
 FAIL=0
 check "CJK 字体在位（tofu 回归）" '[ -f "$D/share/fcitx5-aiinput/flutter/flutter_assets/assets/fonts/NotoSansSC-Regular.otf" ]'
-check "popup compat 修复编入（SEGV 回归）" '[ "$(objdump -d "$D/lib/fcitx5/aiinput.so" | grep -c wl_proxy_set_user_data)" -ge 3 ]'
+check "双 addon 产物在位" '[ -f "$D/lib/fcitx5/aiinput.so" ] && [ -f "$D/lib/fcitx5/aiinputui.so" ] && [ -f "$D/share/fcitx5/addon/aiinput.conf" ] && [ -f "$D/share/fcitx5/addon/aiinput-ui.conf" ]'
+check "popup compat 修复编入（SEGV 回归；popup_surface 已迁 aiinputui）" '[ "$(objdump -d "$D/lib/fcitx5/aiinputui.so" | grep -c wl_proxy_set_user_data)" -ge 3 ]'
 check "真实键形匹配编入（触发失效回归）" '[ "$(objdump -d "$D/lib/fcitx5/aiinput.so" | grep -c isModifier)" -ge 1 ]'
 check "sherpa 引擎编入" '[ "$(objdump -d "$D/lib/fcitx5/aiinput.so" | grep -c SherpaOnnxCreateOnlineRecognizer)" -ge 1 ]'
 check "引擎三件套在位" 'ls "$D/lib/fcitx5-aiinput/" | grep -q libsherpa-onnx-c-api.so && ls "$D/lib/fcitx5-aiinput/" | grep -q libonnxruntime.so && ls "$D/lib/fcitx5-aiinput/" | grep -q libflutter_engine.so'

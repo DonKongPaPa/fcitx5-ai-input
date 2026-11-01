@@ -1,5 +1,5 @@
 cmake_minimum_required(VERSION 3.21)
-project(fcitx5-aiinput VERSION 0.4.5 LANGUAGES C CXX)
+project(fcitx5-aiinput VERSION 0.4.8 LANGUAGES C CXX)
 
 set(CMAKE_CXX_STANDARD 20)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
@@ -14,4 +14,7 @@ message(STATUS "Found Fcitx5Core: ${Fcitx5Core_VERSION}")
 find_package(Gettext REQUIRED)
 
 include(GNUInstallDirs)
+# 双 addon（lab/spec/ui-split-contract.md §1）：src=aiinput 引擎、
+# ui=aiinput-ui（Category=UI，VoicePopup/Flutter 引擎随迁）
 add_subdirectory(src)
+add_subdirectory(ui)

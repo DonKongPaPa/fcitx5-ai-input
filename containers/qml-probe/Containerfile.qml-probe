@@ -1,0 +1,16 @@
+# qml-probe 探针容器（一次性实验，非测试门控环境；模式同 Containerfile.gtkscale）
+# 目的：验证 Quickshell QML 卡片技术底座——PanelWindow(layer-shell) 在 niri 上
+# map + 经 Unix socket 收/回 v1 envelope（lab/spec/protocol.md）。
+# 基于 niri 环境镜像追加 quickshell（依赖自动带上 qt6-declarative / qt6-svg）。
+FROM aiinput-niri:latest
+
+USER root
+
+RUN pacman -Syu --noconfirm --needed \
+        quickshell \
+        && pacman -Scc --noconfirm
+
+USER testuser
+WORKDIR /home/testuser
+
+CMD ["/bin/bash"]

@@ -105,6 +105,11 @@ public:
     // flutter 模式：只确保 popup 就绪，等首帧 commit；色块模式（桥不可用
     // 时的回退）立即绘制测试帧
     void show(InputContext *ic);
+    // 候选窗（panel/*）专用可见性入口：ensurePopup + 解除 pushFrame 的
+    // !visible_ 帧守卫，让 Dart 画好的候选窗帧能 commit 上屏。与 show()
+    // 的差别——不带语音卡的探针/判定挂起/色块语义（候选窗的组合文本归
+    // pinyin 引擎，挂「语音输入中」探针会毁掉输入）
+    void showPanel(InputContext *ic);
     void hide();
     // Flutter 帧入口。写入一帧 BGRA（wl_shm ARGB8888 小端字节序，
     // 引擎软渲输出可直接 memcpy），尺寸变化时自动重建 shm 池

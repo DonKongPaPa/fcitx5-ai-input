@@ -1,7 +1,7 @@
 #include "aiinput.h"
-#include "flutter_engine.h"
 #include "ui_bus.h"
-#include "popup_surface.h"
+#include "ui_split_iface.h"
+#include "json_util.h"
 #include "funasr_local_engine.h"
 #include "sherpa_engine.h"
 #include "sherpa-onnx/c-api.h"
@@ -14,8 +14,6 @@
 #include <fcitx-utils/log.h>
 #include <fcitx/addonmanager.h>
 #include <fcitx/inputcontextmanager.h>
-#include <fcitx/inputpanel.h>
-#include <fcitx/candidatelist.h>
 
 #include <dbus_public.h>
 
@@ -319,108 +317,27 @@ void AiInputEngine::runServerScript(const std::string &cmd,
     }
 }
 
-// Flutter 资产发现：env 覆盖 → 系统包安装路径 → 用户级（~/.local/share）。
-// 系统包必须优先：~/.local 排前面时，早期手动部署的残留副本会永久遮蔽
-// 包管理器的新安装（加载了旧副本却无从察觉）。~/.local 保留给
-// tarball/手动安装（无系统包时兜底）
-static bool findFlutterAssets(std::string *assetsDir, std::string *icuPath) {
-    // 旧环境变量（voiceinput 时代）仍认
-    const char *env = getenv("AIINPUT_FLUTTER_DIR");
-    if (!env || !*env) {
-        env = getenv("VOICEINPUT_FLUTTER_DIR");
-    }
-    if (env && *env) {
-        *assetsDir = std::string(env) + "/flutter_assets";
-        *icuPath = std::string(env) + "/icudtl.dat";
-        return true;
-    }
-    std::vector<std::string> candidates;
-    candidates.push_back("/usr/share/fcitx5-aiinput/flutter");
-    candidates.push_back("/usr/local/share/fcitx5-aiinput/flutter");
-    // 旧包路径兜底（新旧包短暂共存/卸载残留场景）
-    candidates.push_back("/usr/share/fcitx5-voiceinput/flutter");
-    if (const char *xdg = getenv("XDG_DATA_HOME"); xdg && *xdg) {
-        candidates.push_back(std::string(xdg) + "/fcitx5-aiinput/flutter");
-    } else if (const char *home = getenv("HOME"); home && *home) {
-        candidates.push_back(std::string(home) +
-                             "/.local/share/fcitx5-aiinput/flutter");
-    }
-    for (const auto &dir : candidates) {
-        std::string assets = dir + "/flutter_assets";
-        std::string icu = dir + "/icudtl.dat";
-        if (access(assets.c_str(), F_OK) == 0 && access(icu.c_str(), R_OK) == 0) {
-            *assetsDir = assets;
-            *icuPath = icu;
-            return true;
-        }
-    }
-    return false;
-}
-
 AiInputEngine::AiInputEngine(Instance *instance)
     : instance_(instance) {
     // 配置：~/.config/fcitx5/conf/aiinput.config（不存在则用默认值）
     readAsIni(config_, "conf/aiinput.config");
     reloadConfig();
 
-    popup_ = std::make_unique<VoicePopup>(instance_);
-    popup_->setModeSwitchHandler([this]() {
-        // surface 切换（结算回退）或挂起解除（矩形到达）：新 surface
-        // 需要重推一帧
-        pushUiState();
-    });
+    // 定位策略下发（UI addon 缺席时丢弃；UI 后启动靠 reloadConfig 补发）
+    if (auto *u = ui()) {
+        u->call<IAiInputUi::uiSetPolicy>(
+            config_.positionMode.value(),
+            config_.positionFallbackApps.value(),
+            config_.dbusPosition.value() == "follow");
+    }
 
-    popup_->setPositionPolicy(config_.positionMode.value(),
-                              config_.positionFallbackApps.value());
-    popup_->setDbusFollow(config_.dbusPosition.value() == "follow");
-    flutter_ = std::make_unique<FlutterEngineHost>(&instance_->eventLoop());
-
-    // 帧：引擎软渲输出（主线程）→ popup wl_shm
-    flutter_->setFrameCallback([this](const uint8_t *bgra, int w, int h) {
-        if (popup_) {
-            popup_->pushFrameBGRA(bgra, w, h);
-        }
-    });
-    // 指针：popup 表面局部坐标 → FlutterPointerEvent（hover/点击 Dart 命中）
-    popup_->setPointerSink([this](VoicePopup::PointerEvent kind, int x, int y) {
-        using PK = FlutterEngineHost::PointerKind;
-        static constexpr PK map[] = {
-            PK::Enter, PK::Leave, PK::Motion, PK::Press, PK::Release,
-        };
-        if (flutter_) {
-            flutter_->onPointer(map[static_cast<int>(kind)],
-                                static_cast<double>(x), static_cast<double>(y));
-        }
-    });
-    // 尺寸/scale 统筹：Dart 逻辑尺寸 → popup 物理池+viewport +
-    // 引擎 metrics（pixelRatio=真实 scale → 渲染物理帧，无拉伸模糊）
-    flutter_->setResizeHandler([this](int w, int h) {
-        if (popup_) {
-            popup_->setLogicalSize(w, h);
-        }
-        // metrics 更新 defer 到事件循环下一轮：resize 消息来自引擎平台
-        // 回调、scale 来自 wayland dispatch——在这些上下文里同步调
-        // SendWindowMetricsEvent 会与引擎内部锁重入死锁
-        deferredMetrics(w, h);
-    });
-    // 合成器 scale 变化（跨屏移动/用户改缩放）→ 用当前逻辑尺寸重设 metrics
-    popup_->setScaleHandler([this](double) {
-        if (popup_ && popup_->logicalWidth() > 0) {
-            deferredMetrics(popup_->logicalWidth(), popup_->logicalHeight());
-        }
-    });
-    // hub：ui 通道 v1 发射器——sender 经 embedder 送 MethodCall
+    // hub：ui 通道 v1 发射器——sender 转发到 UI addon 的 Flutter platform
+    // channel（renderer 未起时由 UI 侧 deliverEnvelope guard 丢弃）
     uiBus_.setSender([this](const std::string &method, const std::string &args) {
-        if (flutter_ && flutter_->running()) {
-            flutter_->sendMethod(method, args);
+        if (auto *u = ui()) {
+            u->call<IAiInputUi::deliverEnvelope>(method, args);
         }
     });
-
-    // Dart → C++：ready/resize 已由引擎处理，select/hover 到这（v1 ui 命令）
-    flutter_->setMessageHandler(
-        [this](const std::string &method, const std::string &args) {
-            onFlutterMessage(method, args);
-        });
 
     // 全局触发键拦截（PreInputMethod：rime/pinyin 等引擎之前）——共存核心
     keyWatcher_ = instance_->watchEvent(
@@ -466,15 +383,16 @@ AiInputEngine::AiInputEngine(Instance *instance)
             // lone modifier 的 press+release 对应用是 no-op
         });
 
-    // popup 预热：焦点 IC 变化即预建 popup 并提交透明帧（niri 对 IM
-    // popup 的 map 有 ~2s 流水线延迟，等录音才建就看不见卡片了）——
-    // 相当于旧 activate() 的 prepare 预热，改为跟随焦点
+    // 卡片预热：焦点 IC 变化即让 UI addon 预建 popup 并提交透明帧（niri
+    // 对 IM popup 的 map 有 ~2s 流水线延迟，等录音才建就看不见卡片了）
     focusWatcher_ = instance_->watchEvent(
         EventType::InputContextFocusIn, EventWatcherPhase::PreInputMethod,
         [this](Event &event) {
             auto &iev = static_cast<InputContextEvent &>(event);
-            if (state_ == State::Idle && popup_) {
-                popup_->prepare(iev.inputContext());
+            if (state_ == State::Idle) {
+                if (auto *u = ui()) {
+                    u->call<IAiInputUi::uiPrepare>(iev.inputContext());
+                }
             }
         });
 
@@ -515,23 +433,7 @@ AiInputEngine::AiInputEngine(Instance *instance)
             });
     }
 
-    // 预热：加载 5s 后初始化 Flutter 引擎（JIT 冷启动较慢，等触发再拉
-    // 就晚了；失败则懒重试——beginRecording 也会调 startFlutterEngine）
-    warmupTimer_ = instance_->eventLoop().addTimeEvent(
-        CLOCK_MONOTONIC, nowUs() + 5000000, 0, [this](EventSourceTime *, uint64_t) {
-            startFlutterEngine();
-            // popup 预热兜底（focus 事件可能早已错过）
-            if (state_ == State::Idle && popup_) {
-                if (auto *ic = instance_->inputContextManager()
-                                   .lastFocusedInputContext()) {
-                    popup_->prepare(ic);
-                }
-            }
-            return false; // 一次性
-        });
-    if (warmupTimer_) {
-        warmupTimer_->setOneShot();
-    }
+    // 5s 预热（渲染引擎 JIT 冷启动 + 焦点兜底 prepare）职责迁至 UI addon
 
     FCITX_INFO() << "AiInput module loaded (config: mode="
                  << TriggerModeToString(config_.triggerMode.value())
@@ -541,15 +443,14 @@ AiInputEngine::AiInputEngine(Instance *instance)
                  << ")——全局热键模式，与其他输入法共存";
 }
 
-AiInputEngine::~AiInputEngine() {
-    // 故意泄漏 VoicePopup：addon unload 后 wayland display 仍会 dispatch
-    // 若干轮（fractional scale/output 事件），销毁对象会让回调打进已释放
-    // 内存（SIGTERM 退出即 SEGV）。进程退出统一回收
-    (void)popup_.release();
-}
+AiInputEngine::~AiInputEngine() = default;
 
 AddonInstance *AiInputEngineFactory::create(AddonManager *manager) {
     return new AiInputEngine(manager->instance());
+}
+
+AddonInstance *AiInputEngine::ui() {
+    return instance_->addonManager().addon("aiinput-ui", true);
 }
 
 // 旧版默认回退名单：与新"跟随优先"语义冲突（chromium 上屏后可继承
@@ -600,114 +501,6 @@ static bool configFileExists(const char *path) {
     return f.fd() >= 0;
 }
 
-
-// —— UserInterface 实现（Category=UI：pinyin/rime 等引擎的候选窗）——
-// update(InputPanel) 把 IC 的候选列表/预编辑翻译为 v1 panel/* 事件。
-// 语音会话进行中不覆盖（录音/结果/候选态由状态机独占表面）
-void AiInputEngine::update(UserInterfaceComponent component,
-                            InputContext *ic) {
-    // 无条件日志：确认 fcitx5 是否调到了我们的 UI 接口
-    FCITX_LOG(Info) << "AiInput: [ui] update(component="
-                    << static_cast<int>(component) << " ic=" << ic << ")";
-    if (component != UserInterfaceComponent::InputPanel || !ic) {
-        return;
-    }
-    if (state_ != State::Idle) {
-        return; // 语音会话活跃：面板让位
-    }
-    auto &panel = ic->inputPanel();
-    if (panel.empty()) {
-        uiBus_.panelHide();
-        panelCandidates_.reset();
-        panelIcRef_ = TrackableObjectReference<InputContext>();
-        return;
-    }
-    // 持有候选列表引用（异步点击选择时仍有效）
-    panelCandidates_ = panel.candidateList();
-    panelIcRef_ = ic->watch();
-
-    // preedit → 数组 [{text, underline}]
-    std::string preedit;
-    const auto &preeditText = panel.preedit();
-    if (!preeditText.empty()) {
-        for (size_t i = 0; i < preeditText.size(); ++i) {
-            auto fmt = preeditText.formatAt(i);
-            preedit += "{\"text\":\"" +
-                       flutterJsonEscape(preeditText.stringAt(i)) +
-                       "\",\"underline\":" +
-                       ((fmt & TextFormatFlag::Underline) ? "true" : "false") +
-                       "},";
-        }
-        if (!preedit.empty()) preedit.pop_back(); // 尾逗号
-    }
-    preedit = "[" + preedit + "]";
-
-    // 候选 → 数组 [{label, text, comment?}]
-    std::string cands;
-    int cursor = -1;
-    auto list = panel.candidateList();
-    if (list) {
-        cursor = static_cast<int>(list->cursorIndex());
-        for (int i = 0; i < static_cast<int>(list->size()); ++i) {
-            auto &w = list->candidate(i);
-            std::string label = list->label(i).toString();
-            std::string text = w.text().toString();
-#if defined(AIINPUT_FCITX_GE_51)
-            std::string comment = w.comment().toString();
-#else
-            // fcitx5 5.0 无 CandidateWord::comment()——面板候选注释
-            //（如拼音注音）降级为空，正文不受影响
-            std::string comment;
-#endif
-            if (!cands.empty()) cands += ",";
-            cands += "{\"label\":\"" + flutterJsonEscape(label) +
-                     "\",\"text\":\"" + flutterJsonEscape(text);
-            if (!comment.empty()) {
-                cands += "\",\"comment\":\"" + flutterJsonEscape(comment);
-            }
-            cands += "\"}";
-        }
-    }
-    cands = "[" + cands + "]";
-
-    bool hasPrev = false, hasNext = false;
-    if (list) {
-        if (auto *pageable = list->toPageable()) {
-            hasPrev = pageable->hasPrev();
-            hasNext = pageable->hasNext();
-        }
-    }
-    std::string layout = "horizontal";
-    if (list) {
-        auto hint = list->layoutHint();
-        if (hint == CandidateLayoutHint::Vertical) {
-            layout = "vertical";
-        }
-    }
-    auto auxUp = panel.auxUp().toString();
-    auto auxDown = panel.auxDown().toString();
-    auto imName = instance_->currentInputMethod();
-
-    uiBus_.panelUpdate(preedit, auxUp, auxDown, cands, cursor, layout,
-                       hasPrev, hasNext, 0, imName);
-}
-
-bool AiInputEngine::available() {
-    // 无条件 true：Flutter 引擎 5s 预热期间 UI 选择不能跳过我们——
-    // classicui 的 available() 同样恒 true。引擎未就绪时面板暂不渲染
-    //（send 落空），就绪后下一次引擎 update() 即出面板
-    return true;
-}
-
-void AiInputEngine::suspend() {
-    uiBus_.panelHide();
-    panelCandidates_.reset();
-}
-
-void AiInputEngine::resume() {
-    // 无需主动恢复——下一次引擎 update() 会重推
-}
-
 void AiInputEngine::reloadConfig() {
     // 搬迁：voiceinput 时代的配置文件 → aiinput（只搬一次；旧文件保留
     // 不删，回滚旧包仍可用）
@@ -744,10 +537,12 @@ void AiInputEngine::reloadConfig() {
     if (llmMigrated) {
         safeSaveAsIni(config_, "conf/aiinput.config"); // 落新键、清旧键
     }
-    if (popup_) { // 定位策略热更新（PositionMode/PositionFallbackApps）
-        popup_->setPositionPolicy(config_.positionMode.value(),
-                                  config_.positionFallbackApps.value());
-        popup_->setDbusFollow(config_.dbusPosition.value() == "follow");
+    // 定位策略热更新（PositionMode/PositionFallbackApps/DbusPosition）
+    if (auto *u = ui()) {
+        u->call<IAiInputUi::uiSetPolicy>(
+            config_.positionMode.value(),
+            config_.positionFallbackApps.value(),
+            config_.dbusPosition.value() == "follow");
     }
     uiNotify("config-reloaded");
 }
@@ -765,10 +560,12 @@ void AiInputEngine::setConfig(const RawConfig &config) {
         onEngineChanged(config_.asrEngine.value());
     }
     sendFontToUi(); // 字体热改（UIFont/classicui Font 变化即生效）
-    if (popup_) {
-        popup_->setPositionPolicy(config_.positionMode.value(),
-                                  config_.positionFallbackApps.value());
-        popup_->setDbusFollow(config_.dbusPosition.value() == "follow");
+    // 定位策略热更新（同 reloadConfig）
+    if (auto *u = ui()) {
+        u->call<IAiInputUi::uiSetPolicy>(
+            config_.positionMode.value(),
+            config_.positionFallbackApps.value(),
+            config_.dbusPosition.value() == "follow");
     }
     uiNotify("config-saved-via-configtool");
 }
@@ -793,27 +590,8 @@ void AiInputEngine::ensureTestService() {
 }
 
 // ---------------------------------------------------------------------------
-// Flutter 引擎
+// Dart 推送 / 字体下发
 // ---------------------------------------------------------------------------
-
-void AiInputEngine::startFlutterEngine() {
-    if (flutter_->running()) {
-        return;
-    }
-    std::string assets, icu;
-    if (!findFlutterAssets(&assets, &icu)) {
-        FCITX_WARN() << "AiInput: Flutter 资产未找到（"
-                        "AIINPUT_FLUTTER_DIR 可覆盖；安装包应含 "
-                        "/usr/share/fcitx5-aiinput/flutter）——回退色块模式";
-        if (popup_) {
-            popup_->setPatternMode(true);
-        }
-        return;
-    }
-    if (flutter_->start(assets, icu)) {
-        pushUiState(); // 引擎就绪即同步当前状态（Dart 冷启动有个过程）
-    }
-}
 
 // 动画速率挡位 → 全局时长系数（Dart 侧所有动画按此缩放）
 static double animScaleOf(const AiInputConfig &cfg) {
@@ -835,12 +613,6 @@ static int jsonNumField(const std::string &s, const char *key) {
         return 0;
     }
     return atoi(s.c_str() + p + pat.size());
-}
-
-std::string AiInputEngine::animField() const {
-    std::ostringstream as;
-    as << ",\"anim\":" << animScaleOf(config_);
-    return as.str();
 }
 
 void AiInputEngine::pushUiState() {
@@ -956,7 +728,9 @@ std::string AiInputEngine::resolveUiFont() {
 // 互等——主循环同步调 FcInitLoadConfigAndFonts 会死锁（主线程与 pango
 // 字体线程双挂，键盘输入全冻结）
 void AiInputEngine::sendFontToUi() {
-    if (!flutter_ || !flutter_->running() || fontResolving_) {
+    // 字体 envelope 经 UI addon 转发，renderer 未起时由 UI 侧 guard 丢弃；
+    // 结果丢失由 ready 分支重推（uiCommand ready 即 sendFontToUi）兜底
+    if (fontResolving_) {
         return;
     }
     fontResolving_ = true;
@@ -1001,29 +775,10 @@ void AiInputEngine::sendFontToUi() {
     }).detach();
 }
 
-// metrics 更新统一 defer（防 dispatch/平台回调上下文重入引擎锁）
-void AiInputEngine::deferredMetrics(int w, int h) {
-    pendingMW_ = w;
-    pendingMH_ = h;
-    metricsTimer_ = instance_->eventLoop().addTimeEvent(
-        CLOCK_MONOTONIC, nowUs() + 1000, 0, [this](EventSourceTime *, uint64_t) {
-            double sc = popup_ ? popup_->scale() : 1.0;
-            if (flutter_ && flutter_->running()) {
-                // FlutterWindowMetricsEvent 的 width/height 是物理像素
-                //（引擎不乘 ratio）——传逻辑会让 Dart 布局被压成 1/sc
-                flutter_->updateMetrics(
-                    static_cast<int>(pendingMW_ * sc + 0.5),
-                    static_cast<int>(pendingMH_ * sc + 0.5), sc);
-            }
-            return false;
-        });
-    if (metricsTimer_) {
-        metricsTimer_->setOneShot();
-    }
-}
-
-void AiInputEngine::onFlutterMessage(const std::string &method,
-                                        const std::string &args) {
+// —— Dart 命令回流（UI addon 经 IAiInputEngine::uiCommand 调入）——
+// resize 与 select{panel:true} 由 UI addon 本地处理，不到这里；
+// 到这的只有 select（语音候选）/hover/ready
+void AiInputEngine::uiCommand(std::string method, std::string argsJson) {
     // {"index":N} / {"row":N}——极简字段提取（协议自约定）
     auto numOf = [](const std::string &s, const char *key) -> int {
         auto pos = s.find(std::string("\"") + key + "\":");
@@ -1033,25 +788,14 @@ void AiInputEngine::onFlutterMessage(const std::string &method,
         return atoi(s.c_str() + pos + strlen(key) + 3);
     };
     if (method == "select") {
-        const int idx = numOf(args, "index");
-        if (args.find("\"panel\":true") != std::string::npos) {
-            // panel 候选（pinyin 等）：CandidateWord::select——引擎自行
-            // commit + 刷 InputPanel（update() 重推 panel/update）
-            auto list = panelCandidates_.get();
-            auto *ic = panelIcRef_.get();
-            if (list && ic && idx >= 0 &&
-                idx < static_cast<int>(list->size())) {
-                uiNotify("panel-select", std::to_string(idx));
-                list->candidate(static_cast<size_t>(idx)).select(ic);
-            }
-        } else if (state_ == State::Candidates && idx >= 0) {
+        const int idx = numOf(argsJson, "index");
+        if (state_ == State::Candidates && idx >= 0) {
             uiNotify("mouse-click-row", std::to_string(idx));
-            commitCandidate(static_cast<size_t>(idx),
-                            sessionIcRef_.get());
+            commitCandidate(static_cast<size_t>(idx), sessionIcRef_.get());
         }
     } else if (method == "hover") {
         // 测试观测钩子（r23 扫射点击的命中反馈；与 mouse-click-row 同型）
-        uiHoverRow_ = numOf(args, "row");
+        uiHoverRow_ = numOf(argsJson, "row");
         FCITX_LOG(Info) << "AiInput: [ui] hover-row: " << uiHoverRow_;
     } else if (method == "ready") {
         FCITX_INFO() << "AiInput: Flutter UI ready";
@@ -1140,8 +884,8 @@ bool AiInputEngine::handleKey(const Key &key, bool pressed,
             // 立刻按当前光标重报矩形，show 决策时已有知识 → 首下跟随。
             // 不动文本（上屏+回删方案会扰动状态机，勿复活）；GTK 探针
             // 惰性但重聚焦有 enable 报文兜底
-            if (popup_) {
-                popup_->primePreedit(ic);
+            if (auto *u = ui()) {
+                u->call<IAiInputUi::uiPrimePreedit>(ic);
             }
             startThresholdTimer();
             uiNotify("pressing");
@@ -1198,8 +942,8 @@ bool AiInputEngine::handleKey(const Key &key, bool pressed,
             resultTimer_.reset();
             if (auto *ic = sessionIcRef_.get()) {
                 ic->commitString(finalText_);
-                if (popup_) {
-                    popup_->notifyCommit();
+                if (auto *u = ui()) {
+                    u->call<IAiInputUi::uiNotifyCommit>();
                 }
                 uiNotify("committed", finalText_);
                 enterIdle();
@@ -1314,17 +1058,12 @@ void AiInputEngine::beginRecording(InputContext *ic) {
         asr_->cancel();
     }
     asr_ = makeAsrEngine(config_);
-    if (popup_) {
-        popup_->show(ic);
+    // uiShow 内含 renderer 懒启动与色块回退（引擎不感知渲染状态）；状态
+    // envelope 经 UI addon 转发，renderer 未起时由 deliverEnvelope guard 丢弃
+    if (auto *u = ui()) {
+        u->call<IAiInputUi::uiShow>(ic);
     }
-    startFlutterEngine(); // 懒兜底（预热失败/未到 5s 就触发）
-    if (flutter_->running()) {
-        pushUiState();
-    } else if (popup_) {
-        // 引擎不可用：回退色块（popup 直接绘制）
-        popup_->setPatternMode(true);
-        popup_->show(ic);
-    }
+    pushUiState();
     partial_.clear();
     finalText_.clear();
     candidates_.clear();
@@ -1403,10 +1142,9 @@ void AiInputEngine::onAsrFinish(const std::string &text) {
     if (state_ != State::Recording) {
         return;
     }
-    if (popup_) {
-        // 结果/候选卡片必须显示：判定挂起不能再等矩形（矩形到达延迟
-        // 无上界）——结算到 layer 底部
-        popup_->resolvePendingToLayer();
+    // 结果/候选卡片必须显示：判定挂起结算到 layer（矩形到达延迟无上界）
+    if (auto *u = ui()) {
+        u->call<IAiInputUi::uiResolvePending>();
     }
     finalText_ = text;
     if (config_.llmEngine.value() == LlmEngineKind::Dummy) {
@@ -1440,8 +1178,8 @@ void AiInputEngine::startResultTimer() {
             if (auto *ic = sessionIcRef_.get();
                 state_ == State::Result && ic) {
                 ic->commitString(finalText_);
-                if (popup_) {
-                    popup_->notifyCommit();
+                if (auto *u = ui()) {
+                    u->call<IAiInputUi::uiNotifyCommit>();
                 }
                 uiNotify("committed", finalText_);
                 enterIdle();
@@ -1522,8 +1260,8 @@ void AiInputEngine::nudgeCaretRect(InputContext *ic) {
 }
 
 void AiInputEngine::notifyUiCommit() {
-    if (popup_) {
-        popup_->notifyCommit();
+    if (auto *u = ui()) {
+        u->call<IAiInputUi::uiNotifyCommit>();
     }
 }
 
@@ -1537,8 +1275,8 @@ void AiInputEngine::commitCandidate(size_t index, InputContext *ic) {
     } else if (auto *ic = sessionIcRef_.get()) {
         ic->commitString(text);
     }
-    if (popup_) {
-        popup_->notifyCommit();
+    if (auto *u = ui()) {
+        u->call<IAiInputUi::uiNotifyCommit>();
     }
     uiNotify("committed", text);
     enterIdle();
@@ -1553,8 +1291,8 @@ void AiInputEngine::resetSession() {
 }
 
 void AiInputEngine::enterIdle() {
-    if (popup_) {
-        popup_->hide();
+    if (auto *u = ui()) {
+        u->call<IAiInputUi::uiHide>();
     }
     if (uiBus_.ready()) {
         uiBus_.voiceIdle(animScaleOf(config_));
