@@ -36,9 +36,11 @@ ShellRoot {
     }
 
     // —— 语音卡（左下角，宽 420，高随状态内容）——
+    // idle 即整窗退场：原型期常驻的「待机胶囊」占一层 layer surface 且
+    // 挤占注意力（宿主实测反馈），真实版语义 = 无会话无表面
     PanelWindow {
         id: cardWindow
-        visible: true
+        visible: card.mode !== "idle"
         color: "transparent"
         anchors {
             left: true
