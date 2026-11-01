@@ -5,6 +5,7 @@ add_library(aiinputui MODULE)
 # 默认 hidden visibility，无跨 .so 符号需求，见契约 §6）
 target_sources(aiinputui PRIVATE
     ui_addon.cpp
+    socket_ui.cpp
     surfaces/popup_surface.cpp
     embedder/flutter_engine.cpp
     ../src/hub/ui_bus.cpp
@@ -119,6 +120,12 @@ install(TARGETS aiinputui LIBRARY DESTINATION "${FCITX_INSTALL_ADDONDIR}")
 configure_file(aiinput-ui.conf.in aiinput-ui.conf @ONLY)
 install(FILES "${CMAKE_CURRENT_BINARY_DIR}/aiinput-ui.conf"
         DESTINATION "${FCITX_INSTALL_PKGDATADIR}/addon")
+
+# QML 卡片原型随包安装（QmlCardCmd 默认指向此路径；__pycache__ 不入）
+install(DIRECTORY "${CMAKE_CURRENT_SOURCE_DIR}/../../card-qml"
+        DESTINATION "${CMAKE_INSTALL_DATADIR}/fcitx5-aiinput"
+        FILES_MATCHING
+        PATTERN "*.qml" PATTERN "*.py" PATTERN "README.md")
 
 # Flutter 资产（flutter_assets + icudtl.dat）→ share/fcitx5-aiinput/flutter/
 # 产物由 flutter build bundle 生成；此处可选安装（构建机上有才装，打包

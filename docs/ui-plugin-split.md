@@ -438,13 +438,13 @@ B=引擎-only（AIINPUT_DIST 屏蔽 aiinputui）、C=card-qml 独立 quickshell
 | 维度 | Flutter 卡（M1 基线） | QML 卡（M2） |
 |---|---|---|
 | 首帧延迟（触发→卡片可见） | （待实测） | （待实测） |
-| 跟随延迟（rect 变化→重锚落屏） | （待实测） | （待实测） |
-| input-popup 场景跟随保真（逐键） | （待实测） | （结构性弱，§6.2） |
+| 跟随延迟（rect 变化→重锚落屏） | （待实测） | caret 广播→margins 重锚同帧完成（容器日志零间隔）；逐帧落屏延迟待实测 |
+| input-popup 场景跟随保真（逐键） | 合成器精确跟随（已验证） | **已实现**（panel/caret 双源广播 → layer margins 重锚，qml-follow13 容器实证 + 宿主实测；坐标为输出近似——铺满输出的窗口精确，浮动窗有原点偏差 best effort，§6.2） |
 | **常驻内存（idle 稳态）** | **fcitx5 100MB**（引擎-only 87MB → UI addon +13MB） | **fcitx5 87MB + quickshell 97~122MB ≈ 184~209MB**（独立进程） |
 | **会话期内存（语音卡渲染中）** | **fcitx5 253~263MB**（UI 增量 +165~175MB） | **合计 ≈209MB**（87 + 122） |
 | **全局峰值（含 sherpa deep 试加载叠加）** | **fcitx5 663MB** | **合计 ≈340MB**（fcitx5 216 + quickshell 124） |
 | **会话期 CPU 均值** | **fcitx5 52.8%**（同条件引擎-only 4.8%） | **quickshell 1.3%**（峰值 19.9%，渲染瞬间） |
-| kill 卡片 → fcitx5 存活 | （进程内，否） | （进程外，应存活——待实测） |
+| kill 卡片 → fcitx5 存活 | （进程内，否——Flutter 崩即拖垮 fcitx5） | **实测通过**（kill qs 后 State() 照常应答；envelope 无客户端时静默丢弃；手动重启卡片重连待宿主复验，spawn 连接链路已实证） |
 | X11 应用覆盖（WPS/Electron） | （现有 X OR 路径） | （缺口，§6.3，待实测兜底表现） |
 | 混缩放多屏 fractional | （已验证） | （待实测） |
 | Material 一致性（主观） | （基线） | （待实测） |

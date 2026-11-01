@@ -253,6 +253,10 @@ void VoicePopup::popupRectangle(void *data, zwp_input_popup_surface_v2 *,
     }
     FCITX_INFO() << "VoicePopup: text_input_rectangle " << x << "," << y << " "
                  << w << "x" << h << "（窗口局部）";
+    // panel/caret 广播（QML 卡 layer 重锚数据源）：非零矩形才发
+    if (s->caretHandler_ && (w > 0 || h > 0)) {
+        s->caretHandler_(x, y, w, h);
+    }
 }
 
 // ---------------------------------------------------------------------------
@@ -483,6 +487,14 @@ VoicePopup::VoicePopup(Instance *instance) : instance_(instance) {
         EventWatcherPhase::PreInputMethod, [this](Event &event) {
             auto &ie = static_cast<InputContextEvent &>(event);
             auto *ic = ie.inputContext();
+            // panel/caret 广播（D-Bus 前端 IC 源）：cursorRect 是 Qt/GTK
+            // 经 D-Bus SetCursorRect 送来的值（waylandim 的 text-input IC
+            // 不填这里，走 popup 的 text_input_rectangle 源）
+            const auto &bcr = ic->cursorRect();
+            if (caretHandler_ && (bcr.width() > 0 || bcr.height() > 0)) {
+                caretHandler_(bcr.left(), bcr.top(), bcr.width(),
+                              bcr.height());
+            }
             std::lock_guard<std::mutex> lock(mutex_);
             if (dbusFollow_ && overlayFallback_ && ic == icRef_.get()) {
                 if (!x11Mode_) {
@@ -1632,6 +1644,9 @@ bool VoicePopup::ensurePopup(InputContext *ic, bool atShow) {
 }
 
 void VoicePopup::destroyPopupSurface() {
+    // surface 没了，panel 场景的同 IC 复用记账随之失效（下轮打字首键
+    // 重新 ensurePopup 夺槽；语音 show 的重建同样经此清账）
+    panelIc_ = TrackableObjectReference<InputContext>();
     if (layerSurface_) {
         zwlr_layer_surface_v1_destroy(layerSurface_);
         layerSurface_ = nullptr;
@@ -1788,6 +1803,18 @@ void VoicePopup::show(InputContext *ic) {
 // 直接 commit 上屏；面板清空由 update() 走 hide()（classicui 同款生命周期）
 void VoicePopup::showPanel(InputContext *ic) {
     std::lock_guard<std::mutex> lock(mutex_);
+    // 同 IC 且 popup 已 attach：直接复用。组合期每键一次 update——
+    // ensurePopup 的 popup 模式「每次重建」是语音卡的单槽夺位策略，
+    // 套在 panel 上 = 每键销毁重建 surface（宿主实测一秒 8 次），既
+    // churn map 流水线又搅乱语音卡的定位槽
+    if (popup_ && surface_ && !x11Mode_ && panelIc_.get() == ic) {
+        if (emptyRegion_ && surface_) {
+            wl_surface_set_input_region(surface_, nullptr);
+        }
+        visible_ = true;
+        wl_display_flush(display_);
+        return;
+    }
     if (!ensurePopup(ic, /*atShow=*/true)) {
         return;
     }
@@ -1796,6 +1823,7 @@ void VoicePopup::showPanel(InputContext *ic) {
         //（与拆分前一致——拆分前候选窗 surface 从未 map，无此路径）
         return;
     }
+    panelIc_ = ic->watch();
     if (topMode_ && !layerConfigured_) {
         // layer 首个 configure 未到：丢，等下一帧（prepare 已触发流水线）
         wl_display_flush(display_);

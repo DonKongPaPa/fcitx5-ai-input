@@ -108,7 +108,9 @@ public:
     // 候选窗（panel/*）专用可见性入口：ensurePopup + 解除 pushFrame 的
     // !visible_ 帧守卫，让 Dart 画好的候选窗帧能 commit 上屏。与 show()
     // 的差别——不带语音卡的探针/判定挂起/色块语义（候选窗的组合文本归
-    // pinyin 引擎，挂「语音输入中」探针会毁掉输入）
+    // pinyin 引擎，挂「语音输入中」探针会毁掉输入）；组合期每键一次
+    // update，同 IC 复用已 attach 的 popup（每键重建会 churn 表面并
+    // 搅乱语音卡的单槽定位）
     void showPanel(InputContext *ic);
     void hide();
     // Flutter 帧入口。写入一帧 BGRA（wl_shm ARGB8888 小端字节序，
@@ -149,6 +151,13 @@ public:
     // 触发键按下时（阈值判定窗口内）对未知能力的 IC 提前挂探针：
     // 矩形在窗口内即到，show 决策已有知识 → 首下跟随而非回退
     void primePreedit(InputContext *ic);
+    // 光标矩形广播（panel/caret 数据源）：每次真实矩形变化触发（窗口
+    // 局部坐标；QML 卡经 layer margins 近似重锚，同 DbusPosition=follow
+    // 的坐标系前提）。0,0 0x0（chromium 未上报态）不广播
+    void setCaretHandler(
+        std::function<void(int x, int y, int w, int h)> h) {
+        caretHandler_ = std::move(h);
+    }
 
     // fractional scale：逻辑/物理尺寸分离。Dart（或调用方）上报**逻辑**
     // 尺寸；池按 物理=ceil(逻辑×scale/120) 建，viewport 缩回逻辑显示。
@@ -362,6 +371,7 @@ private:
     bool probeDeferralUsed_ = false; // 本会话已用过二次探测暂缓（防递归）
     bool decisionPending_ = false; // 判定挂起：帧不上屏直到跟随/底部定局
     std::function<void()> modeSwitchHandler_;
+    std::function<void(int, int, int, int)> caretHandler_;
     void armProbeFallbackTimer();
     void resolvePendingToLayerLocked(); // 持锁版（保险丝/结算共用）
     std::unique_ptr<EventSourceTime> probeTimer_;
@@ -392,6 +402,8 @@ private:
         connHandler_;
     std::unique_ptr<HandlerTableEntry<WaylandConnectionClosed>>
         closeHandler_;
+    // panel 场景的同 IC 复用记账（showPanel；destroyPopupSurface 清）
+    TrackableObjectReference<InputContext> panelIc_;
 };
 
 } // namespace fcitx

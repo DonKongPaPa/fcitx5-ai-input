@@ -14,6 +14,7 @@
 #include <memory>
 #include <string>
 
+#include "socket_ui.h"
 #include "ui_bus.h"
 
 namespace fcitx {
@@ -74,6 +75,8 @@ private:
     AddonInstance *engine() const;
     // update() 让位判定 = 引擎 voiceSessionActive()（引擎缺席 = 不活跃）
     bool voiceSessionActive();
+    // FlutterCard=False（纯 QML 验证档）：不建 popup 表面不起 Flutter 引擎
+    bool flutterCard_ = true;
 
     // —— Flutter（进程内嵌入引擎）——
     void startFlutterEngine();
@@ -86,6 +89,8 @@ private:
     Instance *instance_;
     std::unique_ptr<VoicePopup> popup_;
     UiBus uiBus_; // 本 addon 的 ui 通道发射器：panel/* 直发（sender=embedder）
+    // QML 卡片通道（M2）：envelope 镜像 + 卡片回写回流（QmlCard=True 才建）
+    std::unique_ptr<SocketUi> socketUi_;
     // IM 面板状态（pinyin/rime 候选——update() 写、Dart panel select 读）
     std::shared_ptr<CandidateList> panelCandidates_;
     TrackableObjectReference<InputContext> panelIcRef_;

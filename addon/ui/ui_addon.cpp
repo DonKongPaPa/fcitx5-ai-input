@@ -8,6 +8,10 @@
 #include <fcitx/inputcontextmanager.h>
 #include <fcitx/inputpanel.h>
 
+#include <fcitx-config/iniparser.h>
+#include <fcitx-config/rawconfig.h>
+#include <fcitx-utils/standardpath.h>
+
 #include <time.h>
 #include <unistd.h>
 
@@ -64,6 +68,17 @@ static bool findFlutterAssets(std::string *assetsDir, std::string *icuPath) {
 }
 
 AiInputUi::AiInputUi(Instance *instance) : instance_(instance) {
+    // 配置一次读全（引擎独占写、本 addon 只读；ini 默认值不落文件，
+    // 裸读自备兜底）
+    RawConfig raw;
+    readAsIni(raw, "conf/aiinput.config");
+    if (const auto *fc = raw.valueByPath("FlutterCard")) {
+        flutterCard_ = !(*fc == "False" || *fc == "false");
+    }
+
+    // popup_ 恒建：text_input_rectangle 只发给 IM popup surface——它是
+    // caret/探针/跟随的矩形数据源，FlutterCard=False 时以透明表面存在
+    //（prepare 首帧，不画内容），只砍 Flutter 引擎与帧上屏
     popup_ = std::make_unique<VoicePopup>(instance_);
     popup_->setModeSwitchHandler([this]() {
         // surface 切换（结算回退）或挂起解除（矩形到达）：新 surface
@@ -74,74 +89,139 @@ AiInputUi::AiInputUi(Instance *instance) : instance_(instance) {
         }
     });
 
-    flutter_ = std::make_unique<FlutterEngineHost>(&instance_->eventLoop());
+    if (flutterCard_) {
+        flutter_ = std::make_unique<FlutterEngineHost>(&instance_->eventLoop());
 
-    // 帧：引擎软渲输出（主线程）→ popup wl_shm
-    flutter_->setFrameCallback([this](const uint8_t *bgra, int w, int h) {
-        if (popup_) {
-            popup_->pushFrameBGRA(bgra, w, h);
+        // 帧：引擎软渲输出（主线程）→ popup wl_shm
+        flutter_->setFrameCallback([this](const uint8_t *bgra, int w, int h) {
+            if (popup_) {
+                popup_->pushFrameBGRA(bgra, w, h);
+            }
+        });
+        // 指针：popup 表面局部坐标 → FlutterPointerEvent（hover/点击 Dart 命中）
+        popup_->setPointerSink(
+            [this](VoicePopup::PointerEvent kind, int x, int y) {
+                using PK = FlutterEngineHost::PointerKind;
+                static constexpr PK map[] = {
+                    PK::Enter, PK::Leave, PK::Motion, PK::Press, PK::Release,
+                };
+                if (flutter_) {
+                    flutter_->onPointer(map[static_cast<int>(kind)],
+                                        static_cast<double>(x),
+                                        static_cast<double>(y));
+                }
+            });
+        // 尺寸/scale 统筹：Dart 逻辑尺寸 → popup 物理池+viewport +
+        // 引擎 metrics（pixelRatio=真实 scale → 渲染物理帧，无拉伸模糊）
+        flutter_->setResizeHandler([this](int w, int h) {
+            if (popup_) {
+                popup_->setLogicalSize(w, h);
+            }
+            // metrics 更新 defer 到事件循环下一轮：resize 消息来自引擎平台
+            // 回调、scale 来自 wayland dispatch——在这些上下文里同步调
+            // SendWindowMetricsEvent 会与引擎内部锁重入死锁
+            deferredMetrics(w, h);
+        });
+        // 合成器 scale 变化（跨屏移动/用户改缩放）→ 用当前逻辑尺寸重设 metrics
+        popup_->setScaleHandler([this](double) {
+            if (popup_ && popup_->logicalWidth() > 0) {
+                deferredMetrics(popup_->logicalWidth(),
+                                popup_->logicalHeight());
+            }
+        });
+        // Dart → C++：resize 已由 embedder 截流（resizeHandler_）；panel 候选
+        // 选择本地处理，其余（语音 select/hover/ready）回流引擎
+        flutter_->setMessageHandler(
+            [this](const std::string &method, const std::string &args) {
+                onFlutterMessage(method, args);
+            });
+    } else {
+        FCITX_INFO() << "AiInputUi: FlutterCard=False——不起 Flutter 引擎"
+                        "（popup 以透明表面保留为 caret 数据源）";
+    }
+    // 光标矩形广播 → QML 卡 panel/caret（layer 重锚数据源）——两源合一：
+    // wayland IC 经 popup 的 text_input_rectangle；D-Bus IC 经 rectWatcher
+    // 的 ic->cursorRect()
+    popup_->setCaretHandler([this](int x, int y, int w, int h) {
+        FCITX_LOG(Info) << "AiInputUi: [caret] " << x << "," << y << " " << w
+                        << "x" << h << " sock=" << (socketUi_ != nullptr);
+        if (!socketUi_) {
+            return;
         }
-    });
-    // 指针：popup 表面局部坐标 → FlutterPointerEvent（hover/点击 Dart 命中）
-    popup_->setPointerSink([this](VoicePopup::PointerEvent kind, int x, int y) {
-        using PK = FlutterEngineHost::PointerKind;
-        static constexpr PK map[] = {
-            PK::Enter, PK::Leave, PK::Motion, PK::Press, PK::Release,
-        };
-        if (flutter_) {
-            flutter_->onPointer(map[static_cast<int>(kind)],
-                                static_cast<double>(x), static_cast<double>(y));
-        }
-    });
-    // 尺寸/scale 统筹：Dart 逻辑尺寸 → popup 物理池+viewport +
-    // 引擎 metrics（pixelRatio=真实 scale → 渲染物理帧，无拉伸模糊）
-    flutter_->setResizeHandler([this](int w, int h) {
-        if (popup_) {
-            popup_->setLogicalSize(w, h);
-        }
-        // metrics 更新 defer 到事件循环下一轮：resize 消息来自引擎平台
-        // 回调、scale 来自 wayland dispatch——在这些上下文里同步调
-        // SendWindowMetricsEvent 会与引擎内部锁重入死锁
-        deferredMetrics(w, h);
-    });
-    // 合成器 scale 变化（跨屏移动/用户改缩放）→ 用当前逻辑尺寸重设 metrics
-    popup_->setScaleHandler([this](double) {
-        if (popup_ && popup_->logicalWidth() > 0) {
-            deferredMetrics(popup_->logicalWidth(), popup_->logicalHeight());
-        }
+        socketUi_->sendEnvelope(
+            "panel/caret",
+            "{\"rect\":{\"x\":" + std::to_string(x) + ",\"y\":" +
+                std::to_string(y) + ",\"w\":" + std::to_string(w) +
+                ",\"h\":" + std::to_string(h) + "},\"space\":\"output\"}");
     });
     // 本 addon 的 ui 通道：panel/*（update() 本地翻译）直发 Dart。
-    // voice/*、theme 走引擎 UiBus → deliverEnvelope，不经此 sender
+    // voice/*、theme 走引擎 UiBus → deliverEnvelope，不经此 sender。
+    // 双发：QML 卡 socket 镜像（同 deliverEnvelope）
     uiBus_.setSender([this](const std::string &method, const std::string &args) {
         if (flutter_ && flutter_->running()) {
             flutter_->sendMethod(method, args);
         }
+        if (socketUi_) {
+            socketUi_->sendEnvelope(method, args);
+        }
     });
-
-    // Dart → C++：resize 已由 embedder 截流（resizeHandler_）；panel 候选
-    // 选择本地处理，其余（语音 select/hover/ready）回流引擎
-    flutter_->setMessageHandler(
-        [this](const std::string &method, const std::string &args) {
-            onFlutterMessage(method, args);
-        });
 
     // 预热：加载 5s 后初始化 Flutter 引擎（JIT 冷启动较慢，等触发再拉
     // 就晚了；失败则 uiShow 懒重试）+ popup 预热兜底（focus 事件可能早已
     // 错过；niri 对 IM popup 的 map 有 ~2s 流水线延迟，录音才建看不见卡）
-    warmupTimer_ = instance_->eventLoop().addTimeEvent(
-        CLOCK_MONOTONIC, nowUs() + 5000000, 0,
-        [this](EventSourceTime *, uint64_t) {
-            startFlutterEngine();
-            if (popup_) {
-                if (auto *ic = instance_->inputContextManager()
-                                   .lastFocusedInputContext()) {
-                    popup_->prepare(ic);
+    if (flutterCard_) {
+        warmupTimer_ = instance_->eventLoop().addTimeEvent(
+            CLOCK_MONOTONIC, nowUs() + 5000000, 0,
+            [this](EventSourceTime *, uint64_t) {
+                startFlutterEngine();
+                if (popup_) {
+                    if (auto *ic = instance_->inputContextManager()
+                                       .lastFocusedInputContext()) {
+                        popup_->prepare(ic);
+                    }
                 }
+                return false; // 一次性
+            });
+        if (warmupTimer_) {
+            warmupTimer_->setOneShot();
+        }
+    }
+
+    // QML 卡片（M2 对比通道）：QmlCard=True 才建 socket 服务端 + 拉卡
+    {
+        const auto *qml = raw.valueByPath("QmlCard");
+        FCITX_INFO() << "AiInputUi: QmlCard raw="
+                     << (qml ? *qml : "(null)");
+        if (qml && (*qml == "True" || *qml == "true")) {
+            const char *xdg = getenv("XDG_RUNTIME_DIR");
+            std::string sock = "/run/user/1000/aiinput-card.sock";
+            if (const auto *s = raw.valueByPath("QmlCardSock");
+                s && !s->empty()) {
+                sock = *s;
+            } else if (xdg && *xdg) {
+                sock = std::string(xdg) + "/aiinput-card.sock";
             }
-            return false; // 一次性
-        });
-    if (warmupTimer_) {
-        warmupTimer_->setOneShot();
+            std::string cmd;
+            if (const auto *c = raw.valueByPath("QmlCardCmd"); c && !c->empty()) {
+                cmd = *c;
+            }
+            if (cmd.empty()) {
+                // ini 默认值不落文件（config 序列化层的概念），裸读须自备
+                cmd = "qs -p /usr/share/fcitx5-aiinput/card-qml";
+            }
+            socketUi_ = std::make_unique<SocketUi>(
+                instance_, sock, cmd, [this](const std::string &method,
+                                             const std::string &args) {
+                    // resize 是卡片自身布局语义，不回流（Flutter 卡的
+                    // resize 才走引擎 metrics 统筹）；其余按 v1 命令回流
+                    if (method == "resize" || method.empty()) {
+                        return;
+                    }
+                    if (auto *engine = this->engine()) {
+                        engine->call<IAiInputEngine::uiCommand>(method, args);
+                    }
+                });
+        }
     }
 
     FCITX_INFO() << "AiInputUi: UI addon loaded";
@@ -292,9 +372,13 @@ void AiInputUi::resume() {
 
 void AiInputUi::deliverEnvelope(std::string method, std::string argsJson) {
     // 引擎 UiBus 的 sender 落点（voice/*、theme）：renderer 未起时丢弃
-    //（引擎稍后经 ready/uiShow 重推，不需要排队）
+    //（引擎稍后经 ready/uiShow 重推，不需要排队）。双发：Flutter 卡 +
+    // QML 卡（socket）镜像——双 UI 并行对比的通道基础
     if (flutter_ && flutter_->running()) {
         flutter_->sendMethod(method, argsJson);
+    }
+    if (socketUi_) {
+        socketUi_->sendEnvelope(method, argsJson);
     }
 }
 
@@ -311,9 +395,10 @@ void AiInputUi::uiShow(InputContext *ic) {
     }
     // 懒兜底（预热失败/未到 5s 就触发；running 时幂等）。renderer 状态
     // 不外泄：失败回退色块由 popup 直接绘制，引擎不感知——voice envelope
-    // 在 deliverEnvelope 处 guard，未起时丢弃
+    // 在 deliverEnvelope 处 guard，未起时丢弃。纯 QML 档不起色块（色块
+    // 会真的上屏，QML 卡才是显示主体）
     startFlutterEngine();
-    if (!flutter_->running()) {
+    if (flutterCard_ && flutter_ && !flutter_->running()) {
         popup_->setPatternMode(true);
     }
     popup_->show(ic);
@@ -359,6 +444,9 @@ void AiInputUi::uiPrimePreedit(InputContext *ic) {
 // —— Flutter 引擎 ——————————————————————————————————————————
 
 void AiInputUi::startFlutterEngine() {
+    if (!flutterCard_) {
+        return; // 纯 QML 档：popup 保持透明（caret 数据源），引擎不起
+    }
     if (flutter_->running()) {
         return;
     }
