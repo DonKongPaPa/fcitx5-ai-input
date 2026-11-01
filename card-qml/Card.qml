@@ -63,7 +63,7 @@ Rectangle {
             }
             Text {
                 anchors.verticalCenter: parent.verticalCenter
-                color: card.theme.onSurfaceVariant
+                color: card.theme.textOnSurfaceVariant
                 font.family: card.theme.fontFamily
                 font.pixelSize: card.theme.fontSize
                 text: card.mode === "recording"
@@ -82,7 +82,7 @@ Rectangle {
             wrapMode: Text.WrapAtWordBoundaryOrAnywhere
             maximumLineCount: 3
             elide: Text.ElideRight
-            color: card.theme.onSurface
+            color: card.theme.textOnSurface
             font.family: card.theme.fontFamily
             font.pixelSize: card.theme.fontSize + 2
             text: card.mode === "recording" ? card.partial : card.finalText
@@ -110,7 +110,7 @@ Rectangle {
                         x: Math.round(8 * card.theme.scale)
                         width: parent.width - 2 * x
                         elide: Text.ElideRight
-                        color: card.theme.onSurface
+                        color: card.theme.textOnSurface
                         font.family: card.theme.fontFamily
                         font.pixelSize: card.theme.fontSize
                         text: (index + 1) + ". " + modelData

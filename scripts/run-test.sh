@@ -45,6 +45,10 @@ else
     SCALES="${SCALE_MATRIX:-1.0 2.0}"
 fi
 
+# dist 覆盖（性能对照用：AIINPUT_DIST=artifacts/dist-engineui-off 跑引擎-only，
+# 屏蔽 aiinputui.so + aiinput-ui.conf 即得无 Flutter UI 的 fcitx5 基线）
+DIST_DIR="${AIINPUT_DIST:-$ROOT/artifacts/dist}"
+
 for SCALE in $SCALES; do
     RUN_ID="$(date +%Y%m%d-%H%M%S)-${ENV_NAME}"
     OUT="$ROOT/artifacts/reports/$RUN_ID"
@@ -55,7 +59,7 @@ for SCALE in $SCALES; do
         --user 0 --userns=keep-id \
         "${DEV_ARGS[@]}" \
         -v "$ROOT/scripts:/scripts:ro" \
-        -v "$ROOT/artifacts/dist:/opt/dist:ro" \
+        -v "$DIST_DIR:/opt/dist:ro" \
         -v "$ROOT/tests:/tests:ro" \
         -v "$ROOT/artifacts/voice-samples:/samples:ro" \
         "${MODEL_ARGS[@]}" \

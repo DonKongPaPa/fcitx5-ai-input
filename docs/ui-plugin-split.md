@@ -427,19 +427,37 @@ v1 ui 通道——**基线 Unix socket（addon 服务端 + 卡 `Socket` 客户�
 语音卡 + `panel/*` 候选面板双支持（决策 ③）；与 M1 Flutter 卡同条件实测。
 验收口径：protocol.md schema 全过；对比矩阵填数。
 
-### 对比矩阵（**占位**——M2 实测后填写）
+### 对比矩阵
+
+**内存/CPU 已实测**（2026-11-01，容器 headless niri 1080p scale1.0；A/B 轮
+workload=smoke s1-s5 真实录音会话、C 轮=voice-full+pinyin-flow 回放 20 条；
+200ms 采样 /proc VmRSS。A=全栈 fcitx5（内嵌 Flutter kSoftware JIT）、
+B=引擎-only（AIINPUT_DIST 屏蔽 aiinputui）、C=card-qml 独立 quickshell
+（QT_QUICK_BACKEND=software）。容器数字，宿主会话只高不低）：
 
 | 维度 | Flutter 卡（M1 基线） | QML 卡（M2） |
 |---|---|---|
 | 首帧延迟（触发→卡片可见） | （待实测） | （待实测） |
 | 跟随延迟（rect 变化→重锚落屏） | （待实测） | （待实测） |
 | input-popup 场景跟随保真（逐键） | （待实测） | （结构性弱，§6.2） |
-| 常驻内存（addon+卡片） | （待实测） | （待实测） |
-| kill 卡片 → fcitx5 存活 | （进程内，否） | （待实测，应存活） |
+| **常驻内存（idle 稳态）** | **fcitx5 100MB**（引擎-only 87MB → UI addon +13MB） | **fcitx5 87MB + quickshell 97~122MB ≈ 184~209MB**（独立进程） |
+| **会话期内存（语音卡渲染中）** | **fcitx5 253~263MB**（UI 增量 +165~175MB） | **合计 ≈209MB**（87 + 122） |
+| **全局峰值（含 sherpa deep 试加载叠加）** | **fcitx5 663MB** | **合计 ≈340MB**（fcitx5 216 + quickshell 124） |
+| **会话期 CPU 均值** | **fcitx5 52.8%**（同条件引擎-only 4.8%） | **quickshell 1.3%**（峰值 19.9%，渲染瞬间） |
+| kill 卡片 → fcitx5 存活 | （进程内，否） | （进程外，应存活——待实测） |
 | X11 应用覆盖（WPS/Electron） | （现有 X OR 路径） | （缺口，§6.3，待实测兜底表现） |
 | 混缩放多屏 fractional | （已验证） | （待实测） |
 | Material 一致性（主观） | （基线） | （待实测） |
 | 打包体积/维护面 | （含 flutter 引擎私有库） | （零新增依赖） |
+
+内存结论（M2 前瞻）：Flutter UI 的真实代价被拆分显性化——idle +13MB、
+会话渲染 +165~175MB、峰值 +447MB（JIT 引擎工作集 + 软渲帧缓冲；raw
+embedder 官方工件只有 JIT 变体，CMakeLists 注释在案）。QML 卡单进程
+122MB 但**不进 fcitx5**：会话期总占用低 40~50MB、峰值近乎砍半，且崩溃
+隔离是结构性收益。idle 期 QML 方案多一个完整 Qt 进程（~110MB），若最终
+采纳需做 idle unmap + 常驻取舍评估。基准复跑入口：
+`containers/qml-probe/run-card-bench.sh`（C）、`AIINPUT_DIST=…/dist-engineui-off
+SUITE=smoke ./scripts/run-test.sh niri`（B）。
 
 ---
 

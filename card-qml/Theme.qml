@@ -10,13 +10,13 @@ QtObject {
 
     // Material 3 dark palette（qt6 Material style 默认值）
     readonly property color primary: "#D0BCFF"
-    readonly property color onPrimary: "#381E72"
+    readonly property color textOnPrimary: "#381E72"
     readonly property color surface: "#1C1B1F"
     readonly property color surfaceContainer: "#211F26"
     readonly property color surfaceContainerHigh: "#2B2930"
     readonly property color surfaceVariant: "#49454F"
-    readonly property color onSurface: "#E6E1E5"
-    readonly property color onSurfaceVariant: "#CAC4D0"
+    readonly property color textOnSurface: "#E6E1E5"
+    readonly property color textOnSurfaceVariant: "#CAC4D0"
     readonly property color outline: "#938F99"
     readonly property color error: "#F2B8B5"
 

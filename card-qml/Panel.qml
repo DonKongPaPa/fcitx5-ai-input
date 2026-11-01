@@ -62,14 +62,14 @@ Rectangle {
             Text {
                 anchors.verticalCenter: parent.verticalCenter
                 text: panel.imName
-                color: panel.theme.onSurfaceVariant
+                color: panel.theme.textOnSurfaceVariant
                 font.family: panel.theme.fontFamily
                 font.pixelSize: panel.theme.fontSize - 2
             }
             Text {
                 anchors.verticalCenter: parent.verticalCenter
                 text: "第 " + (panel.page + 1) + " 页"
-                color: panel.theme.onSurfaceVariant
+                color: panel.theme.textOnSurfaceVariant
                 font.family: panel.theme.fontFamily
                 font.pixelSize: panel.theme.fontSize - 2
             }
@@ -92,7 +92,7 @@ Rectangle {
         Text {
             visible: panel.auxUp !== ""
             text: panel.auxUp
-            color: panel.theme.onSurfaceVariant
+            color: panel.theme.textOnSurfaceVariant
             font.family: panel.theme.fontFamily
             font.pixelSize: panel.theme.fontSize
         }
@@ -104,7 +104,7 @@ Rectangle {
                 delegate: Text {
                     required property var modelData
                     text: modelData.text
-                    color: panel.theme.onSurface
+                    color: panel.theme.textOnSurface
                     font.family: panel.theme.fontFamily
                     font.pixelSize: panel.theme.fontSize + 2
                     // underline 段底部划线（classicui PreEdit underline 等价）
@@ -123,7 +123,7 @@ Rectangle {
         Text {
             visible: panel.auxDown !== ""
             text: panel.auxDown
-            color: panel.theme.onSurfaceVariant
+            color: panel.theme.textOnSurfaceVariant
             font.family: panel.theme.fontFamily
             font.pixelSize: panel.theme.fontSize
         }
@@ -176,7 +176,7 @@ Rectangle {
             Text {
                 anchors.verticalCenter: parent.verticalCenter
                 text: modelData.text
-                color: panel.theme.onSurface
+                color: panel.theme.textOnSurface
                 font.family: panel.theme.fontFamily
                 font.pixelSize: panel.theme.fontSize
             }
