@@ -139,3 +139,20 @@ if(AIINPUT_FLUTTER_ASSETS_DIR AND EXISTS "${AIINPUT_FLUTTER_ASSETS_DIR}/flutter_
             DESTINATION "${CMAKE_INSTALL_DATADIR}/fcitx5-aiinput/flutter"
             OPTIONAL)
 endif()
+
+# —— aiinput-card-host（frame-relay 离屏渲染宿主，lab/spec/frame-relay.md）——
+# Qt6 QUIET 探测：缺席则宿主跳过（纯 fcitx addon 构建不强制依赖 Qt；
+# relayed QML 卡随之停用，direct/Flutter 路径不受影响）
+find_package(Qt6 COMPONENTS Core Gui Quick QUIET)
+if(Qt6_FOUND)
+    add_subdirectory("${CMAKE_CURRENT_SOURCE_DIR}/../../card-qml/host"
+                     "${CMAKE_CURRENT_BINARY_DIR}/card-host")
+    message(STATUS "aiinput-card-host: Qt6 ${Qt6_VERSION} 离屏渲染宿主启用")
+else()
+    message(STATUS "aiinput-card-host: Qt6 未找到——QML relay 停用")
+endif()
+
+# relay 模式默认 spawn 的宿主/QML 路径（install 布局单源，跨发行版 libdir）
+target_compile_definitions(aiinputui PRIVATE
+    AIINPUT_CARD_HOST_PATH="${CMAKE_INSTALL_FULL_LIBDIR}/fcitx5/aiinput-card-host"
+    AIINPUT_CARD_QML_DIR="${CMAKE_INSTALL_FULL_DATADIR}/fcitx5-aiinput/card-qml")

@@ -197,21 +197,28 @@ AiInputUi::AiInputUi(Instance *instance) : instance_(instance) {
         FCITX_INFO() << "AiInputUi: QmlCard raw="
                      << (qml ? *qml : "(null)");
         if (qml && (*qml == "True" || *qml == "true")) {
-            const char *xdg = getenv("XDG_RUNTIME_DIR");
-            std::string sock = "/run/user/1000/aiinput-card.sock";
+            // 默认 abstract 名（无常驻 dentry，见 socket_ui.cpp listenUnix
+            // 注释），带 uid 防同 netns 多用户撞名；显式 QmlCardSock 以
+            // '/' 开头 = filesystem 路径（旧约定兼容），否则按 abstract 名
+            std::string sock = "aiinput-card-" + std::to_string(getuid());
             if (const auto *s = raw.valueByPath("QmlCardSock");
                 s && !s->empty()) {
                 sock = *s;
-            } else if (xdg && *xdg) {
-                sock = std::string(xdg) + "/aiinput-card.sock";
             }
             std::string cmd;
             if (const auto *c = raw.valueByPath("QmlCardCmd"); c && !c->empty()) {
                 cmd = *c;
             }
             if (cmd.empty()) {
-                // ini 默认值不落文件（config 序列化层的概念），裸读须自备
-                cmd = "qs -p /usr/share/fcitx5-aiinput/card-qml";
+                // ini 默认值不落文件（config 序列化层的概念），裸读须自备。
+                // relay 模式（纯 QML 档）默认离屏渲染宿主——quickshell 的
+                // grab 管线依赖合成器 expose，invisible 窗口回调丢失（
+                // wip/qml-frame-relay 存档）；direct 模式（双卡对比）仍
+                // quickshell 直显。宿主/QML 路径编译期注入（跨发行版
+                // libdir：Arch=lib、Debian=lib/<triplet>）
+                cmd = !flutterCard_
+                          ? AIINPUT_CARD_HOST_PATH " --qml-dir " AIINPUT_CARD_QML_DIR
+                          : "qs -p /usr/share/fcitx5-aiinput/card-qml";
             }
             socketUi_ = std::make_unique<SocketUi>(
                 instance_, sock, cmd, !flutterCard_,
@@ -243,8 +250,15 @@ AiInputUi::AiInputUi(Instance *instance) : instance_(instance) {
                         engine->call<IAiInputEngine::uiCommand>(method, args);
                     }
                 },
-                [this](int, int, const uint8_t *rgb, size_t len) {
-                    handleFramePpm(rgb, len);
+                [this](int w, int h, const uint8_t *data, size_t len) {
+                    // 格式分发（见 SocketUi::FrameHandler）：P6 头 =
+                    // PPM（quickshell 文件中转遗留）；其余 = 宿主直出
+                    // premultiplied BGRA
+                    if (len >= 2 && data[0] == 'P' && data[1] == '6') {
+                        handleFramePpm(data, len);
+                        return;
+                    }
+                    handleFrameBgra(w, h, data, len);
                 });
         }
     }
@@ -492,6 +506,19 @@ void AiInputUi::handleFramePpm(const uint8_t *rgb, size_t len) {
         frameBgra_[px * 4 + 3] = 0xFF;
     }
     popup_->pushFrameRelay(w, h, frameBgra_.data());
+    FCITX_LOG(Info) << "AiInputUi: [relay] frame " << w << "x" << h;
+}
+
+// 离屏宿主直出帧：premultiplied BGRA8888（带 alpha，圆角/阴影正常混合），
+// 尺寸即物理像素，零转换直入 popup（PPM 路线的 alpha 丢失在此修复）
+void AiInputUi::handleFrameBgra(int w, int h, const uint8_t *bgra, size_t len) {
+    if (!popup_ || w <= 0 || h <= 0 || w > 4096 || h > 4096) {
+        return;
+    }
+    if (len < static_cast<size_t>(w) * h * 4) {
+        return;
+    }
+    popup_->pushFrameRelay(w, h, bgra);
     FCITX_LOG(Info) << "AiInputUi: [relay] frame " << w << "x" << h;
 }
 

@@ -1,8 +1,34 @@
 # QML 卡像素回传（frame-relay）设计
 
-状态：Draft（M2 后续，feat 分支施工）。目标：**QML 卡获得与 Flutter 卡完全
-同级的跟随精度**（合成器定位 input-popup surface），保留 QML Material 视觉
-与进程隔离（崩溃不拖垮 fcitx5）。
+状态：**T1 已通（feat/qml-card-offscreen-host 分支）**。目标：**QML 卡获得
+与 Flutter 卡完全同级的跟随精度**（合成器定位 input-popup surface），保留
+QML Material 视觉与进程隔离（崩溃不拖垮 fcitx5）。
+
+## 0. 实施结论（2026-11-02）
+
+- **渲染端弃用 quickshell grab**：grabToImage 依赖合成器 expose，
+  invisible/屏外 PanelWindow 回调永久丢失（wip/qml-frame-relay 存档）。
+  改为独立 Qt6 离屏宿主 **aiinput-card-host**（card-qml/host/）：
+  `QQuickRenderControl` + 软件后端 + `QT_QPA_PLATFORM=offscreen`，渲染全
+  同步、不依赖显示服务器；QML 场景 shell-headless.qml 复用 Card/Panel/
+  Theme（theme.scale 内化输出缩放，隐式尺寸即物理像素，无 dpr 协商）。
+- **传输改 abstract unix socket**：filesystem socket 的 dentry 在容器
+  flow 里 bind 后毫秒级被外部摘除（内核 socket 表仍监听、bind 者自身
+  路径查找 ENOENT；strace 观察即消失=Heisenbug）。约定：`AIINPUT_CARD_
+  SOCK` 以 `/` 开头 = filesystem（旧约定兼容），否则 = abstract 名
+  （`sun_path[0]='\0'`，默认 `aiinput-card-<uid>`）。宿主侧因此用原生
+  AF_UNIX + QSocketNotifier（Qt 的 QLocalSocket 对 abstract 支持未定
+  文档）。
+- **帧格式升级为 premultiplied BGRA 直入**（FRM 头 w/h 透传，payload
+  首字节 "P6" 仍走 PPM 旧路）：修 PPM 路线的 alpha 丢失（圆角/阴影正常
+  混合），零转换 memcpy 进 shm 池。
+- **T1 实证**（容器 relayhost11）：abstract 双通道 75ms 内连；离屏渲染
+  420x48/79/83 帧 → VoicePopup pushFrameRelay → input-popup surface 上
+  屏，Material 暗色语音卡与 pinyin 候选面板截图目检通过；无双显（宿主
+  零窗口）；QML 卡进程 kill 不影响 fcitx5（崩溃隔离同 M2）。
+- **遗留**：ic-sim 的 rect 变更不驱动 popup 重锚（D-Bus IC 定位语义，
+  exp 008 领域）——relay 帧走与 Flutter 卡完全相同的 popup 定位代码，
+  跟随精度由 popup 层继承，真实应用待宿主验收。
 
 ## 1. 根因与思路
 

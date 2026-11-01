@@ -86,8 +86,10 @@ private:
                           const std::string &argsJson);
     // metrics 更新统一 defer（防 dispatch/平台回调上下文重入引擎锁）
     void deferredMetrics(int w, int h);
-    // frame-relay 帧（PPM P6）→ BGRA → popup（帧 socket 与文件中转共用）
+    // frame-relay 帧入口（格式按 payload 首字节分发，见 SocketUi::FrameHandler）
     void handleFramePpm(const uint8_t *rgb, size_t len);
+    // 离屏宿主直出帧：premultiplied BGRA（带 alpha）零转换直入 popup
+    void handleFrameBgra(int w, int h, const uint8_t *bgra, size_t len);
 
     Instance *instance_;
     std::unique_ptr<VoicePopup> popup_;

@@ -15,6 +15,7 @@ if [ "${AIINPUT_CN_MIRROR:-0}" = 1 ] && ! grep -q tuna /etc/pacman.d/mirrorlist 
 fi
 
 pacman -Syu --noconfirm --needed cmake gcc wayland fontconfig fcitx5 libpulse dbus zstd \
+    qt6-base qt6-declarative \
     >/dev/null 2>&1 || { echo "!! 依赖安装失败"; exit 1; }
 pacman -Scc --noconfirm >/dev/null 2>&1 || true
 
@@ -71,6 +72,8 @@ cd "$STAGE"
     echo "depend = fcitx5"
     echo "depend = libpulse"
     echo "depend = fcitx5-ai-input-keyring"
+    # aiinput-card-host（QML relay 离屏渲染宿主，纯 QML 档用）
+    echo "depend = qt6-declarative"
 } > .PKGINFO
 tar --zstd -cf "$PKG" .PKGINFO usr
 rm .PKGINFO

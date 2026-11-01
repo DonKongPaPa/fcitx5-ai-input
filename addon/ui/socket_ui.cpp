@@ -9,6 +9,7 @@
 #include <sys/un.h>
 #include <unistd.h>
 
+#include <cstddef>
 #include <cerrno>
 #include <cstdlib>
 
@@ -16,6 +17,37 @@
 #include <signal.h>
 
 namespace fcitx {
+
+namespace {
+
+// AF_UNIX bind/listen：'/' 开头 = filesystem 路径（旧约定）；否则 =
+// abstract 名（sun_path[0]='\0'）。容器 flow 里 filesystem socket 的
+// dentry 在 bind 后毫秒级被外部摘除（内核 socket 表仍在监听、连 bind 者
+// 自己的路径查找都 ENOENT），abstract 无常驻 dentry，从根上免疫该类
+// 竞态；作用域 = netns，与 fcitx5 会话同界
+bool listenUnix(int fd, const std::string &name) {
+    sockaddr_un addr{};
+    addr.sun_family = AF_UNIX;
+    socklen_t len = 0;
+    if (!name.empty() && name[0] == '/') {
+        if (name.size() >= sizeof(addr.sun_path)) {
+            return false;
+        }
+        strncpy(addr.sun_path, name.c_str(), sizeof(addr.sun_path) - 1);
+        len = sizeof(addr);
+    } else {
+        if (name.size() + 1 >= sizeof(addr.sun_path)) {
+            return false;
+        }
+        memcpy(addr.sun_path + 1, name.c_str(), name.size());
+        len = static_cast<socklen_t>(offsetof(sockaddr_un, sun_path)) + 1 +
+              name.size();
+    }
+    return bind(fd, reinterpret_cast<const sockaddr *>(&addr), len) == 0 &&
+           listen(fd, 2) == 0;
+}
+
+} // namespace
 
 // 从 "args":{ 起做括号配对，取完整对象体（行协议无转义大括号——envelope
 // 的字符串值经 flutterJsonEscape 不转义 {}，但候选文本含 {} 的概率与代价
@@ -49,19 +81,11 @@ SocketUi::SocketUi(Instance *instance, const std::string &sockPath,
         FCITX_WARN() << "AiInputUi: socket 卡片监听创建失败 errno=" << errno;
         return;
     }
-    unlink(sockPath_.c_str()); // 残留 sock 文件（上次异常退出）先清
-    sockaddr_un addr{};
-    addr.sun_family = AF_UNIX;
-    if (sockPath_.size() >= sizeof(addr.sun_path)) {
-        FCITX_WARN() << "AiInputUi: socket 路径过长 " << sockPath_;
-        close(serverFd_);
-        serverFd_ = -1;
-        return;
+    const bool fsSock = !sockPath_.empty() && sockPath_[0] == '/';
+    if (fsSock) {
+        unlink(sockPath_.c_str()); // 残留 sock 文件（上次异常退出）先清
     }
-    strncpy(addr.sun_path, sockPath_.c_str(), sizeof(addr.sun_path) - 1);
-    if (bind(serverFd_, reinterpret_cast<sockaddr *>(&addr), sizeof(addr)) !=
-            0 ||
-        listen(serverFd_, 2) != 0) {
+    if (!listenUnix(serverFd_, sockPath_)) {
         FCITX_WARN() << "AiInputUi: socket 卡片 bind/listen 失败 errno="
                      << errno;
         close(serverFd_);
@@ -77,25 +101,16 @@ SocketUi::SocketUi(Instance *instance, const std::string &sockPath,
     // 二进制（FRM 头 + PPM payload），与行协议互不阻塞 ——
     frameServerFd_ = socket(AF_UNIX, SOCK_STREAM | SOCK_CLOEXEC | SOCK_NONBLOCK, 0);
     if (frameServerFd_ >= 0) {
-        unlink(framePath_.c_str());
-        sockaddr_un faddr{};
-        faddr.sun_family = AF_UNIX;
-        if (framePath_.size() < sizeof(faddr.sun_path)) {
-            strncpy(faddr.sun_path, framePath_.c_str(),
-                    sizeof(faddr.sun_path) - 1);
-            if (bind(frameServerFd_, reinterpret_cast<sockaddr *>(&faddr),
-                     sizeof(faddr)) == 0 &&
-                listen(frameServerFd_, 2) == 0) {
-                frameServerWatch_ = instance_->eventLoop().addIOEvent(
-                    frameServerFd_, IOEventFlag::In,
-                    [this](EventSourceIO *, int, IOEventFlags) {
-                        acceptFrameClient();
-                        return true;
-                    });
-            } else {
-                close(frameServerFd_);
-                frameServerFd_ = -1;
-            }
+        if (fsSock) {
+            unlink(framePath_.c_str());
+        }
+        if (listenUnix(frameServerFd_, framePath_)) {
+            frameServerWatch_ = instance_->eventLoop().addIOEvent(
+                frameServerFd_, IOEventFlag::In,
+                [this](EventSourceIO *, int, IOEventFlags) {
+                    acceptFrameClient();
+                    return true;
+                });
         } else {
             close(frameServerFd_);
             frameServerFd_ = -1;
@@ -144,7 +159,10 @@ SocketUi::~SocketUi() {
     if (frameServerFd_ >= 0) {
         close(frameServerFd_);
     }
-    unlink(framePath_.c_str());
+    const bool fsSock = !sockPath_.empty() && sockPath_[0] == '/';
+    if (fsSock) {
+        unlink(framePath_.c_str());
+    }
     detachClient();
     if (serverWatch_) {
         serverWatch_.reset();
@@ -152,7 +170,9 @@ SocketUi::~SocketUi() {
     if (serverFd_ >= 0) {
         close(serverFd_);
     }
-    unlink(sockPath_.c_str());
+    if (fsSock) {
+        unlink(sockPath_.c_str());
+    }
 }
 
 void SocketUi::acceptClient() {
@@ -261,15 +281,17 @@ void SocketUi::handleFrameRead() {
                     return;
                 }
                 frameExpect_ = size;
+                frameW_ = w;
+                frameH_ = h;
                 frameBuf_.erase(0, kHead);
             }
             if (frameBuf_.size() < frameExpect_) {
                 break;
             }
             if (onFrame_) {
-                onFrame_(0, 0, reinterpret_cast<const uint8_t *>(
-                                   frameBuf_.data()),
-                         frameExpect_); // w/h 由使用方从 PPM 头解析
+                onFrame_(static_cast<int>(frameW_), static_cast<int>(frameH_),
+                         reinterpret_cast<const uint8_t *>(frameBuf_.data()),
+                         frameExpect_);
             }
             frameBuf_.erase(0, frameExpect_);
             frameExpect_ = 0;

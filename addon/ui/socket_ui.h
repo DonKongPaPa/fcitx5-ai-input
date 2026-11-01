@@ -28,8 +28,10 @@ public:
     // 卡片回写（method + args 对象体 JSON）
     using LineHandler =
         std::function<void(const std::string &method, const std::string &args)>;
-    // QML 卡渲染帧（frame-relay，lab/spec/frame-relay.md）：宽高 + PPM
-    // 字节流（P6，RGB），由使用方转 BGRA 上屏
+    // QML 卡渲染帧（frame-relay，lab/spec/frame-relay.md）：宽高 + payload。
+    // 两种格式按 payload 首字节区分（使用方分发）："P6…" = PPM RGB（
+    // quickshell 文件中转遗留，无 alpha）；否则 size==w*h*4 为 premultiplied
+    // BGRA8888（aiinput-card-host 直出，带 alpha）
     using FrameHandler =
         std::function<void(int w, int h, const uint8_t *rgb, size_t len)>;
 
@@ -68,6 +70,7 @@ private:
     std::string buf_;
     std::string frameBuf_;   // FRM 头 + payload 的重组缓冲
     size_t frameExpect_ = 0; // 当前帧 payload 期望长度（0=等头）
+    uint32_t frameW_ = 0, frameH_ = 0; // 帧头 w/h（BGRA 直入路径用）
     pid_t spawnPid_ = -1;
     bool relayMode_ = false; // FlutterCard=False：QML 直显退场、帧全走 popup
 };
