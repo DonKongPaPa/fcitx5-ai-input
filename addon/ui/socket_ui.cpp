@@ -70,16 +70,17 @@ SocketUi::SocketUi(Instance *instance, const std::string &sockPath,
             acceptClient();
             return true;
         });
+    FCITX_INFO() << "AiInputUi: QML 卡片 socket 监听就绪 " << sockPath_;
 
     if (!spawnCmd.empty()) {
         // 拉起 QML 卡（继承 fcitx5 的会话 env：WAYLAND_DISPLAY 等齐备；
         // stderr 直通 fcitx5 日志）。卡片退出不重启——对比期手动重跑
         if (pid_t pid = fork(); pid == 0) {
             setsid();
-            int devnull = open("/dev/null", O_WRONLY);
-            if (devnull >= 0) {
-                dup2(devnull, 1);
-            }
+            // socket 路径显式交接给卡片（不依赖 QML 默认值）
+            setenv("AIINPUT_CARD_SOCK", sockPath_.c_str(), 1);
+            // stdout/stderr 都继承：qs 的 INFO/ERROR/CARD 行直通 fcitx5
+            // 日志（排障第一现场）；stdin 挂 /dev/null（卡片不读 stdin）
             int devnullr = open("/dev/null", O_RDONLY);
             if (devnullr >= 0) {
                 dup2(devnullr, 0);

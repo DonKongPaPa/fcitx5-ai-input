@@ -158,6 +158,8 @@ AiInputUi::AiInputUi(Instance *instance) : instance_(instance) {
         RawConfig raw;
         readAsIni(raw, "conf/aiinput.config");
         const auto *qml = raw.valueByPath("QmlCard");
+        FCITX_INFO() << "AiInputUi: QmlCard raw="
+                     << (qml ? *qml : "(null)");
         if (qml && (*qml == "True" || *qml == "true")) {
             const char *xdg = getenv("XDG_RUNTIME_DIR");
             std::string sock = "/run/user/1000/aiinput-card.sock";
@@ -168,8 +170,12 @@ AiInputUi::AiInputUi(Instance *instance) : instance_(instance) {
                 sock = std::string(xdg) + "/aiinput-card.sock";
             }
             std::string cmd;
-            if (const auto *c = raw.valueByPath("QmlCardCmd"); c) {
+            if (const auto *c = raw.valueByPath("QmlCardCmd"); c && !c->empty()) {
                 cmd = *c;
+            }
+            if (cmd.empty()) {
+                // ini 默认值不落文件（config 序列化层的概念），裸读须自备
+                cmd = "qs -p /usr/share/fcitx5-aiinput/card-qml";
             }
             socketUi_ = std::make_unique<SocketUi>(
                 instance_, sock, cmd, [this](const std::string &method,
