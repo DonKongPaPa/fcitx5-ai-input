@@ -8,6 +8,10 @@
 #include <fcitx/inputcontextmanager.h>
 #include <fcitx/inputpanel.h>
 
+#include <fcitx-config/iniparser.h>
+#include <fcitx-config/rawconfig.h>
+#include <fcitx-utils/standardpath.h>
+
 #include <time.h>
 #include <unistd.h>
 
@@ -111,10 +115,14 @@ AiInputUi::AiInputUi(Instance *instance) : instance_(instance) {
         }
     });
     // 本 addon 的 ui 通道：panel/*（update() 本地翻译）直发 Dart。
-    // voice/*、theme 走引擎 UiBus → deliverEnvelope，不经此 sender
+    // voice/*、theme 走引擎 UiBus → deliverEnvelope，不经此 sender。
+    // 双发：QML 卡 socket 镜像（同 deliverEnvelope）
     uiBus_.setSender([this](const std::string &method, const std::string &args) {
         if (flutter_ && flutter_->running()) {
             flutter_->sendMethod(method, args);
+        }
+        if (socketUi_) {
+            socketUi_->sendEnvelope(method, args);
         }
     });
 
@@ -142,6 +150,40 @@ AiInputUi::AiInputUi(Instance *instance) : instance_(instance) {
         });
     if (warmupTimer_) {
         warmupTimer_->setOneShot();
+    }
+
+    // QML 卡片（M2 对比通道）：读引擎 config（引擎独占写、本 addon 只读，
+    // 见 ui-split-contract.md §1）；QmlCard=True 才建 socket 服务端 + 拉卡
+    {
+        RawConfig raw;
+        readAsIni(raw, "conf/aiinput.config");
+        const auto *qml = raw.valueByPath("QmlCard");
+        if (qml && (*qml == "True" || *qml == "true")) {
+            const char *xdg = getenv("XDG_RUNTIME_DIR");
+            std::string sock = "/run/user/1000/aiinput-card.sock";
+            if (const auto *s = raw.valueByPath("QmlCardSock");
+                s && !s->empty()) {
+                sock = *s;
+            } else if (xdg && *xdg) {
+                sock = std::string(xdg) + "/aiinput-card.sock";
+            }
+            std::string cmd;
+            if (const auto *c = raw.valueByPath("QmlCardCmd"); c) {
+                cmd = *c;
+            }
+            socketUi_ = std::make_unique<SocketUi>(
+                instance_, sock, cmd, [this](const std::string &method,
+                                             const std::string &args) {
+                    // resize 是卡片自身布局语义，不回流（Flutter 卡的
+                    // resize 才走引擎 metrics 统筹）；其余按 v1 命令回流
+                    if (method == "resize" || method.empty()) {
+                        return;
+                    }
+                    if (auto *engine = this->engine()) {
+                        engine->call<IAiInputEngine::uiCommand>(method, args);
+                    }
+                });
+        }
     }
 
     FCITX_INFO() << "AiInputUi: UI addon loaded";
@@ -292,9 +334,13 @@ void AiInputUi::resume() {
 
 void AiInputUi::deliverEnvelope(std::string method, std::string argsJson) {
     // 引擎 UiBus 的 sender 落点（voice/*、theme）：renderer 未起时丢弃
-    //（引擎稍后经 ready/uiShow 重推，不需要排队）
+    //（引擎稍后经 ready/uiShow 重推，不需要排队）。双发：Flutter 卡 +
+    // QML 卡（socket）镜像——双 UI 并行对比的通道基础
     if (flutter_ && flutter_->running()) {
         flutter_->sendMethod(method, argsJson);
+    }
+    if (socketUi_) {
+        socketUi_->sendEnvelope(method, argsJson);
     }
 }
 

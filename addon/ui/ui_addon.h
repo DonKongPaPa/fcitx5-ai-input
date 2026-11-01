@@ -14,6 +14,7 @@
 #include <memory>
 #include <string>
 
+#include "socket_ui.h"
 #include "ui_bus.h"
 
 namespace fcitx {
@@ -86,6 +87,8 @@ private:
     Instance *instance_;
     std::unique_ptr<VoicePopup> popup_;
     UiBus uiBus_; // 本 addon 的 ui 通道发射器：panel/* 直发（sender=embedder）
+    // QML 卡片通道（M2）：envelope 镜像 + 卡片回写回流（QmlCard=True 才建）
+    std::unique_ptr<SocketUi> socketUi_;
     // IM 面板状态（pinyin/rime 候选——update() 写、Dart panel select 读）
     std::shared_ptr<CandidateList> panelCandidates_;
     TrackableObjectReference<InputContext> panelIcRef_;

@@ -155,6 +155,24 @@ FCITX_CONFIGURATION(
         "Stdio refine 后端命令（sh -c；refine/request → refine/result）",
         "python3 /usr/share/fcitx5-aiinput/backends/refine-dummy.py"};
 
+    // —— QML 卡片（M2：Quickshell 独立进程，Unix socket 传输）——
+    // 键定义在引擎 config（configtool 入口），aiinput-ui 只读同一文件
+    //（引擎独占写，见 ui-split-contract.md §1）。生效需重启 fcitx5
+    //（UI addon 无 reloadConfig 链路）
+    Option<bool> qmlCard{this, "QmlCard",
+                         "启用 QML Material 卡片（Quickshell 独立进程，"
+                         "与 Flutter 卡并行双显——双 UI 对比用）",
+                         false};
+    Option<std::string> qmlCardCmd{
+        this, "QmlCardCmd",
+        "QML 卡片启动命令（sh -c；QmlCard=True 时由 aiinput-ui 拉起）",
+        "qs -p /usr/share/fcitx5-aiinput/card-qml"};
+    Option<std::string> qmlCardSock{
+        this, "QmlCardSock",
+        "QML 卡片 Unix socket 路径（留空 = $XDG_RUNTIME_DIR/"
+        "aiinput-card.sock；须与卡片侧一致）",
+        ""};
+
     // —— 组2.1 FunASR 流式（WS 档）——
     Option<std::string> funasrUrl{
         this, "FunASRUrl", "FunASR 流式服务地址（ws://host:port）",
