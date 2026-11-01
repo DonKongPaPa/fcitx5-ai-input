@@ -211,6 +211,62 @@ ShellRoot {
                               : t)
     }
 
+    // frame-relay（lab/spec/frame-relay.md）：grab 活跃窗口内容 →
+    // saveToFile(P6 PPM) → 控制通道发 frame/ready，C++ 读文件上屏
+    // （二进制不过 socket 字符串语义；文件名双缓冲轮换防读写竞争）
+    property int frameSeq: 0
+    property bool grabBusy: false
+    Timer {
+        id: grabThrottle
+        interval: 100
+        onTriggered: root.doGrab()
+    }
+    // grabBusy 卡死自愈：grabToImage 回调丢失（窗口生命周期竞态）时
+    // 800ms 强制释放并重试一次
+    Timer {
+        id: grabTimeout
+        interval: 800
+        onTriggered: {
+            root.grabBusy = false
+            root.doGrab()
+        }
+    }
+    function scheduleGrab() {
+        var win = panel.shown ? panelWindow
+                              : (card.mode !== "idle" ? cardWindow : null)
+        if (!win) {
+            root.grabBusy = false // 无活跃窗口（idle）：清卡死状态
+            return
+        }
+        if (root.grabBusy) {
+            grabTimeout.restart() // 在飞：等自愈
+            return
+        }
+        root.grabBusy = true
+        grabThrottle.restart()
+    }
+    function doGrab() {
+        var win = panel.shown ? panelWindow
+                              : (card.mode !== "idle" ? cardWindow : null)
+        if (!win || root.grabBusy || win.width <= 0 || win.height <= 0) {
+            root.grabBusy = false
+            return
+        }
+        root.grabBusy = true
+        grabTimeout.restart() // 回调丢失自愈布防
+        var item = win === panelWindow ? panel : card
+        item.grabToImage(function(result) {
+            grabTimeout.stop()
+            var path = "/tmp/aiinput-frame-" + (root.frameSeq % 2) + ".ppm"
+            var ok = result ? result.saveToFile(path) : false
+            console.log("CARD: grabbed " + path + " ok=" + ok)
+            root.frameSeq++
+            root.grabBusy = false
+            if (ok)
+                root.sendEnvelope("frame/ready", { path: path })
+        }, Qt.size(win.width, win.height))
+    }
+
     function handleLine(line) {
         if (!line || !line.trim())
             return
@@ -282,6 +338,8 @@ ShellRoot {
             return
         }
         root.recvCount++
+        if (env.method !== "frame/ready")
+            scheduleGrab() // 状态面变化即 grab（100ms 节流）
         console.log("CARD: ENV seq=" + (env.seq === undefined ? -1 : env.seq)
                     + " method=" + env.method)
     }

@@ -15,11 +15,15 @@
 #include <time.h>
 #include <unistd.h>
 
+#include <fstream>
+#include <iterator>
+
 #include <chrono>
 #include <cstdlib>
 #include <cstring>
 
 #include "json_util.h"
+#include "proto_line.h"
 
 namespace fcitx {
 
@@ -210,16 +214,37 @@ AiInputUi::AiInputUi(Instance *instance) : instance_(instance) {
                 cmd = "qs -p /usr/share/fcitx5-aiinput/card-qml";
             }
             socketUi_ = std::make_unique<SocketUi>(
-                instance_, sock, cmd, [this](const std::string &method,
-                                             const std::string &args) {
+                instance_, sock, cmd,
+                [this](const std::string &method, const std::string &args) {
                     // resize 是卡片自身布局语义，不回流（Flutter 卡的
-                    // resize 才走引擎 metrics 统筹）；其余按 v1 命令回流
-                    if (method == "resize" || method.empty()) {
+                    // resize 才走引擎 metrics 统筹）
+                    if (method == "resize") {
+                        return;
+                    }
+                    if (method == "frame/ready") {
+                        // frame-relay 文件中转：QML grab→saveToFile(P6)→
+                        // 通知，C++ 读文件（二进制不过 socket 字符串语义）
+                        auto path = jsonStrField(args, "path");
+                        if (path.empty()) {
+                            return;
+                        }
+                        std::ifstream f(path, std::ios::binary);
+                        std::string ppm((std::istreambuf_iterator<char>(f)),
+                                        std::istreambuf_iterator<char>());
+                        handleFramePpm(reinterpret_cast<const uint8_t *>(
+                                           ppm.data()),
+                                       ppm.size());
+                        return;
+                    }
+                    if (method.empty()) {
                         return;
                     }
                     if (auto *engine = this->engine()) {
                         engine->call<IAiInputEngine::uiCommand>(method, args);
                     }
+                },
+                [this](int, int, const uint8_t *rgb, size_t len) {
+                    handleFramePpm(rgb, len);
                 });
         }
     }
@@ -417,6 +442,56 @@ void AiInputUi::uiSetPolicy(std::string mode, std::string fallbackApps,
         popup_->setPositionPolicy(mode, fallbackApps);
         popup_->setDbusFollow(dbusFollow);
     }
+}
+
+// frame-relay 帧（PPM P6）→ BGRA → popup 物理帧直入
+//（lab/spec/frame-relay.md；帧 socket 与文件中转两路共用）
+void AiInputUi::handleFramePpm(const uint8_t *rgb, size_t len) {
+    if (!popup_ || len < 16 || rgb[0] != 'P' || rgb[1] != '6') {
+        return;
+    }
+    size_t i = 2;
+    auto skipWsComments = [&]() {
+        for (;;) {
+            while (i < len &&
+                   (rgb[i] == ' ' || rgb[i] == '\n' || rgb[i] == '\r' ||
+                    rgb[i] == '\t'))
+                ++i;
+            if (i < len && rgb[i] == '#') {
+                while (i < len && rgb[i] != '\n')
+                    ++i;
+            } else {
+                break;
+            }
+        }
+    };
+    auto readInt = [&]() -> int {
+        skipWsComments();
+        int v = 0;
+        while (i < len && rgb[i] >= '0' && rgb[i] <= '9') {
+            v = v * 10 + (rgb[i] - '0');
+            ++i;
+        }
+        return v;
+    };
+    skipWsComments(); // magic "P6"
+    int w = readInt(), h = readInt(), maxv = readInt();
+    if (w <= 0 || h <= 0 || w > 4096 || h > 4096 || maxv != 255) {
+        return;
+    }
+    ++i; // 数据段前的单个空白
+    size_t need = static_cast<size_t>(w) * h * 3;
+    if (len - i < need) {
+        return;
+    }
+    frameBgra_.assign(need / 3 * 4, 0);
+    for (size_t px = 0; px < need / 3; ++px) {
+        frameBgra_[px * 4] = rgb[i + px * 3 + 2];
+        frameBgra_[px * 4 + 1] = rgb[i + px * 3 + 1];
+        frameBgra_[px * 4 + 2] = rgb[i + px * 3];
+        frameBgra_[px * 4 + 3] = 0xFF;
+    }
+    popup_->pushFrameRelay(w, h, frameBgra_.data());
 }
 
 void AiInputUi::uiNotifyCommit() {

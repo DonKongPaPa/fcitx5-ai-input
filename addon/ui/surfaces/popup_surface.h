@@ -116,6 +116,10 @@ public:
     // Flutter 帧入口。写入一帧 BGRA（wl_shm ARGB8888 小端字节序，
     // 引擎软渲输出可直接 memcpy），尺寸变化时自动重建 shm 池
     void pushFrameBGRA(const uint8_t *bgra, int w, int h);
+    // frame-relay 帧入口（lab/spec/frame-relay.md）：QML 卡 grab 的物理
+    // 像素直入——绕过 logical/scale 协商（grab 像素即物理像素），其余
+    // 守卫（surface 存在/池就绪/configure）与 pushFrameBGRA 一致
+    void pushFrameRelay(int w, int h, const uint8_t *bgra);
     void resize(int w, int h); // 重建 shm 池（帧尺寸变化；内部加锁）
     void resizeLocked(int w, int h); // 已持锁版本（wayland 回调用）
     void setPatternMode(bool p) { patternMode_ = p; } // 引擎不可用时回退色块

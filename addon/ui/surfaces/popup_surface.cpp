@@ -2055,6 +2055,35 @@ void VoicePopup::pushFrameBGRA(const uint8_t *bgra, int w, int h) {
     wl_display_flush(display_);
 }
 
+// frame-relay 帧入口：物理像素直入（QML grab 尺寸即物理像素，无
+// logical/scale 协商）；守卫与 pushFrameBGRA 一致但尺寸不符时直接
+// resizeLocked（grab 尺寸 = 期望尺寸，无过渡帧问题）
+void VoicePopup::pushFrameRelay(int w, int h, const uint8_t *bgra) {
+    std::lock_guard<std::mutex> lock(mutex_);
+    if (w <= 0 || h <= 0 || w > 4096 || h > 4096) {
+        return;
+    }
+    if (!surface_ || x11Mode_ || !buffers_[0] ||
+        (topMode_ ? !layerSurface_ : !popup_)) {
+        return;
+    }
+    if (w != width_ || h != height_) {
+        resizeLocked(w, h);
+    }
+    if (topMode_ && !layerConfigured_) {
+        return;
+    }
+    size_t bufSize = static_cast<size_t>(width_) * height_ * 4;
+    memcpy(pixels_ + cur_ * bufSize, bgra, bufSize);
+    wl_surface_attach(surface_, buffers_[cur_], 0, 0);
+    damageSurface(surface_, compositorVersion_, width_, height_);
+    syncViewportLocked();
+    wl_surface_commit(surface_);
+    cur_ = 1 - cur_;
+    visible_ = true;
+    wl_display_flush(display_);
+}
+
 void VoicePopup::teardown() {
     std::lock_guard<std::mutex> lock(mutex_);
     if (xconn_) {

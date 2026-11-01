@@ -39,8 +39,10 @@ static std::string extractArgsObject(const std::string &line) {
 }
 
 SocketUi::SocketUi(Instance *instance, const std::string &sockPath,
-                   const std::string &spawnCmd, LineHandler onLine)
-    : instance_(instance), sockPath_(sockPath), onLine_(std::move(onLine)) {
+                   const std::string &spawnCmd, LineHandler onLine,
+                   FrameHandler onFrame)
+    : instance_(instance), sockPath_(sockPath), onLine_(std::move(onLine)),
+      onFrame_(std::move(onFrame)), framePath_(sockPath + "-frame") {
     serverFd_ = socket(AF_UNIX, SOCK_STREAM | SOCK_CLOEXEC | SOCK_NONBLOCK, 0);
     if (serverFd_ < 0) {
         FCITX_WARN() << "AiInputUi: socket 卡片监听创建失败 errno=" << errno;
@@ -70,7 +72,38 @@ SocketUi::SocketUi(Instance *instance, const std::string &sockPath,
             acceptClient();
             return true;
         });
-    FCITX_INFO() << "AiInputUi: QML 卡片 socket 监听就绪 " << sockPath_;
+    // —— 帧通道（frame-relay，lab/spec/frame-relay.md）：第二 socket 纯
+    // 二进制（FRM 头 + PPM payload），与行协议互不阻塞 ——
+    frameServerFd_ = socket(AF_UNIX, SOCK_STREAM | SOCK_CLOEXEC | SOCK_NONBLOCK, 0);
+    if (frameServerFd_ >= 0) {
+        unlink(framePath_.c_str());
+        sockaddr_un faddr{};
+        faddr.sun_family = AF_UNIX;
+        if (framePath_.size() < sizeof(faddr.sun_path)) {
+            strncpy(faddr.sun_path, framePath_.c_str(),
+                    sizeof(faddr.sun_path) - 1);
+            if (bind(frameServerFd_, reinterpret_cast<sockaddr *>(&faddr),
+                     sizeof(faddr)) == 0 &&
+                listen(frameServerFd_, 2) == 0) {
+                frameServerWatch_ = instance_->eventLoop().addIOEvent(
+                    frameServerFd_, IOEventFlag::In,
+                    [this](EventSourceIO *, int, IOEventFlags) {
+                        acceptFrameClient();
+                        return true;
+                    });
+            } else {
+                close(frameServerFd_);
+                frameServerFd_ = -1;
+            }
+        } else {
+            close(frameServerFd_);
+            frameServerFd_ = -1;
+        }
+    }
+
+    FCITX_INFO() << "AiInputUi: QML 卡片 socket 监听就绪 " << sockPath_
+                 << (frameServerFd_ >= 0 ? "（帧通道就绪 " + framePath_ + "）"
+                                         : "（帧通道未建）");
 
     if (!spawnCmd.empty()) {
         // 拉起 QML 卡（继承 fcitx5 的会话 env：WAYLAND_DISPLAY 等齐备；
@@ -99,6 +132,14 @@ SocketUi::~SocketUi() {
     if (spawnPid_ > 0) {
         kill(spawnPid_, SIGTERM);
     }
+    detachFrameClient();
+    if (frameServerWatch_) {
+        frameServerWatch_.reset();
+    }
+    if (frameServerFd_ >= 0) {
+        close(frameServerFd_);
+    }
+    unlink(framePath_.c_str());
     detachClient();
     if (serverWatch_) {
         serverWatch_.reset();
@@ -160,6 +201,82 @@ void SocketUi::handleClientRead() {
         detachClient();
     }
 }
+
+void SocketUi::acceptFrameClient() {
+    int fd = accept4(frameServerFd_, nullptr, nullptr,
+                     SOCK_CLOEXEC | SOCK_NONBLOCK);
+    if (fd < 0) {
+        return;
+    }
+    detachFrameClient();
+    frameFd_ = fd;
+    frameBuf_.clear();
+    frameExpect_ = 0;
+    frameWatch_ = instance_->eventLoop().addIOEvent(
+        frameFd_, IOEventFlag::In,
+        [this](EventSourceIO *, int, IOEventFlags) {
+            handleFrameRead();
+            return true;
+        });
+    FCITX_INFO() << "AiInputUi: QML 卡片帧通道已连接";
+}
+
+void SocketUi::detachFrameClient() {
+    if (frameWatch_) {
+        frameWatch_.reset();
+    }
+    if (frameFd_ >= 0) {
+        close(frameFd_);
+        frameFd_ = -1;
+    }
+    frameBuf_.clear();
+    frameExpect_ = 0;
+}
+
+void SocketUi::handleFrameRead() {
+    char chunk[65536];
+    ssize_t n;
+    while ((n = read(frameFd_, chunk, sizeof(chunk))) > 0) {
+        frameBuf_.append(chunk, static_cast<size_t>(n));
+        // FRM 帧协议："FRM" u32le w u32le h u32le size '\n' payload[size]
+        for (;;) {
+            if (frameExpect_ == 0) {
+                static constexpr size_t kHead = 3 + 12 + 1;
+                if (frameBuf_.size() < kHead ||
+                    frameBuf_.compare(0, 3, "FRM") != 0) {
+                    break;
+                }
+                uint32_t w, h, size;
+                memcpy(&w, frameBuf_.data() + 3, 4);
+                memcpy(&h, frameBuf_.data() + 7, 4);
+                memcpy(&size, frameBuf_.data() + 11, 4);
+                if (size == 0 || size > 64u * 1024 * 1024) {
+                    FCITX_WARN() << "AiInputUi: 帧尺寸异常 " << size;
+                    detachFrameClient();
+                    return;
+                }
+                frameExpect_ = size;
+                frameBuf_.erase(0, kHead);
+            }
+            if (frameBuf_.size() < frameExpect_) {
+                break;
+            }
+            if (onFrame_) {
+                onFrame_(0, 0, reinterpret_cast<const uint8_t *>(
+                                   frameBuf_.data()),
+                         frameExpect_); // w/h 由使用方从 PPM 头解析
+            }
+            frameBuf_.erase(0, frameExpect_);
+            frameExpect_ = 0;
+        }
+    }
+    if (n == 0 || (n < 0 && errno != EAGAIN && errno != EWOULDBLOCK)) {
+        FCITX_INFO() << "AiInputUi: QML 卡片帧通道断开（等待重连）";
+        detachFrameClient();
+    }
+}
+
+void SocketUi::feedFrame(const uint8_t *data, size_t len) {}
 
 void SocketUi::sendEnvelope(const std::string &method,
                             const std::string &argsJson) {

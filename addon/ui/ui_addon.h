@@ -12,6 +12,7 @@
 #include <fcitx/userinterface.h>
 
 #include <memory>
+#include <vector>
 #include <string>
 
 #include "socket_ui.h"
@@ -85,12 +86,15 @@ private:
                           const std::string &argsJson);
     // metrics 更新统一 defer（防 dispatch/平台回调上下文重入引擎锁）
     void deferredMetrics(int w, int h);
+    // frame-relay 帧（PPM P6）→ BGRA → popup（帧 socket 与文件中转共用）
+    void handleFramePpm(const uint8_t *rgb, size_t len);
 
     Instance *instance_;
     std::unique_ptr<VoicePopup> popup_;
     UiBus uiBus_; // 本 addon 的 ui 通道发射器：panel/* 直发（sender=embedder）
     // QML 卡片通道（M2）：envelope 镜像 + 卡片回写回流（QmlCard=True 才建）
     std::unique_ptr<SocketUi> socketUi_;
+    std::vector<uint8_t> frameBgra_; // PPM→BGRA 转换复用缓冲
     // IM 面板状态（pinyin/rime 候选——update() 写、Dart panel select 读）
     std::shared_ptr<CandidateList> panelCandidates_;
     TrackableObjectReference<InputContext> panelIcRef_;
