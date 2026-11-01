@@ -75,10 +75,6 @@ AiInputUi::AiInputUi(Instance *instance) : instance_(instance) {
     if (const auto *fc = raw.valueByPath("FlutterCard")) {
         flutterCard_ = !(*fc == "False" || *fc == "false");
     }
-    if (!flutterCard_) {
-        FCITX_INFO() << "AiInputUi: FlutterCard=False——不建 popup 表面不起 "
-                        "Flutter 引擎（纯 QML 验证档）";
-    }
 
     // popup_ 恒建：text_input_rectangle 只发给 IM popup surface——它是
     // caret/探针/跟随的矩形数据源，FlutterCard=False 时以透明表面存在
