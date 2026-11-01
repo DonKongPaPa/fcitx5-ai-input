@@ -145,8 +145,8 @@ private:
     std::atomic<bool> shuttingDown_{false};
 };
 
-// JSON 字符串转义（aiinput.cpp 组 update 消息用）
-std::string flutterJsonEscape(const std::string &s);
+// JSON 转义已独立到 hub/json_util.h（拆分后两侧 target 各自链接）
+#include "json_util.h"
 
 } // namespace fcitx
 

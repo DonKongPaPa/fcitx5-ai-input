@@ -31,30 +31,6 @@ static std::string encodeMethodCall(const std::string &method,
     return "{\"method\":\"" + method + "\",\"args\":" + argsJson + "}";
 }
 
-// JSON 字符串转义（候选文本走 UTF-8 原样，只处理控制字符）
-static std::string jsonEscape(const std::string &s) {
-    std::string out;
-    out.reserve(s.size() + 8);
-    for (unsigned char c : s) {
-        switch (c) {
-        case '"': out += "\\\""; break;
-        case '\\': out += "\\\\"; break;
-        case '\n': out += "\\n"; break;
-        case '\r': out += "\\r"; break;
-        case '\t': out += "\\t"; break;
-        default:
-            if (c < 0x20) {
-                char buf[8];
-                snprintf(buf, sizeof(buf), "\\u%04x", c);
-                out += buf;
-            } else {
-                out += static_cast<char>(c);
-            }
-        }
-    }
-    return out;
-}
-
 FlutterEngineHost::FlutterEngineHost(EventLoop *loop) : loop_(loop) {}
 
 FlutterEngineHost::~FlutterEngineHost() { stop(); }
@@ -513,8 +489,5 @@ void FlutterEngineHost::onPointer(PointerKind kind, double x, double y) {
         break;
     }
 }
-
-// 供 aiinput.cpp 组 update JSON（导出 jsonEscape 语义）
-std::string flutterJsonEscape(const std::string &s) { return jsonEscape(s); }
 
 } // namespace fcitx
