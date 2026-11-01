@@ -439,7 +439,7 @@ B=引擎-only（AIINPUT_DIST 屏蔽 aiinputui）、C=card-qml 独立 quickshell
 |---|---|---|
 | 首帧延迟（触发→卡片可见） | （待实测） | （待实测） |
 | 跟随延迟（rect 变化→重锚落屏） | （待实测） | caret 广播→margins 重锚同帧完成（容器日志零间隔）；逐帧落屏延迟待实测 |
-| input-popup 场景跟随保真（逐键） | 合成器精确跟随（已验证） | **已实现**（panel/caret 双源广播 → layer margins 重锚，qml-follow13 容器实证 + 宿主实测；坐标为输出近似——铺满输出的窗口精确，浮动窗有原点偏差 best effort，§6.2） |
+| input-popup 场景跟随保真（逐键） | 合成器精确跟随（已验证） | **已实现**（panel/caret 双源广播 → layer margins 重锚，qml-follow13 容器实证 + 宿主实测）。**坐标系前提**：D-Bus 前端 IC 上报窗口局部坐标按输出坐标近似用——平铺/最大化窗口精确（实测 brave 平铺逐键准）；**浮窗错位实锤**（DMS 搜索框浮窗：局部 (88,112) 被当输出坐标，面板锚到左上）。原点 Wayland 不暴露、niri IPC 复测（2026-11-02）tile_pos_in_workspace_view 仍 null——精确解需 DMS 侧上报全局坐标（DMS 是 quickshell 应用自知窗口位置）或 niri 上游提需求，§6.2 |
 | **常驻内存（idle 稳态）** | **fcitx5 100MB**（引擎-only 87MB → UI addon +13MB） | **fcitx5 87MB + quickshell 97~122MB ≈ 184~209MB**（独立进程） |
 | **会话期内存（语音卡渲染中）** | **fcitx5 253~263MB**（UI 增量 +165~175MB） | **合计 ≈209MB**（87 + 122） |
 | **全局峰值（含 sherpa deep 试加载叠加）** | **fcitx5 663MB** | **合计 ≈340MB**（fcitx5 216 + quickshell 124） |
