@@ -1,11 +1,12 @@
 #ifndef _FCITX5_AIINPUT_HUB_UI_BUS_H_
 #define _FCITX5_AIINPUT_HUB_UI_BUS_H_
 
+#include <cstdint>
 #include <functional>
 #include <string>
 #include <vector>
 
-#include "flutter_engine.h" // flutterJsonEscape（embedder 层工具）
+#include "json_util.h" // flutterJsonEscape（拆分后独立小工具，两 addon 各自链接）
 
 namespace fcitx {
 

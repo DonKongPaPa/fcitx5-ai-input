@@ -24,14 +24,19 @@ namespace fcitx {
 
 class InputContext;
 
+} // namespace fcitx
+
+// DECLARE 宏自身展开 namespace fcitx（上游 xcb_public.h/wayland_public.h
+// 同款）——必须在全局作用域调用：namespace 内调用会把特例化嵌进
+// fcitx::fcitx，落在非包围命名空间，编译期即报错
 // —— aiinput-ui 导出面（引擎调用；无 UI addon 时引擎空判静默降级）——
 // UiBus sender 落点：转发 voice/*、theme 到 Flutter platform channel
 FCITX_ADDON_DECLARE_FUNCTION(AiInputUi, deliverEnvelope,
                              void(std::string, std::string));
 // 焦点预热：预建 popup 并提交透明帧（niri IM popup map 有 ~2s 流水线延迟）
-FCITX_ADDON_DECLARE_FUNCTION(AiInputUi, uiPrepare, void(InputContext *));
+FCITX_ADDON_DECLARE_FUNCTION(AiInputUi, uiPrepare, void(fcitx::InputContext *));
 // 录音开始显示卡片：内部含 renderer 懒启动与色块回退（引擎不感知渲染状态）
-FCITX_ADDON_DECLARE_FUNCTION(AiInputUi, uiShow, void(InputContext *));
+FCITX_ADDON_DECLARE_FUNCTION(AiInputUi, uiShow, void(fcitx::InputContext *));
 FCITX_ADDON_DECLARE_FUNCTION(AiInputUi, uiHide, void());
 // 定位策略热更新（reloadConfig/setConfig 后下发）
 FCITX_ADDON_DECLARE_FUNCTION(AiInputUi, uiSetPolicy,
@@ -41,7 +46,8 @@ FCITX_ADDON_DECLARE_FUNCTION(AiInputUi, uiNotifyCommit, void());
 // 录音结束仍无矩形：判定挂起结算到 layer（结果/候选卡片必须显示）
 FCITX_ADDON_DECLARE_FUNCTION(AiInputUi, uiResolvePending, void());
 // 触发键按下时对未知能力 IC 提前挂探针（矩形窗口内即到 → 首下跟随）
-FCITX_ADDON_DECLARE_FUNCTION(AiInputUi, uiPrimePreedit, void(InputContext *));
+FCITX_ADDON_DECLARE_FUNCTION(AiInputUi, uiPrimePreedit,
+                             void(fcitx::InputContext *));
 
 // —— aiinput 导出面（UI addon 调用）——
 // Dart 命令回流：select（语音候选）/hover/ready；UI 侧 surface 切换等
@@ -51,7 +57,5 @@ FCITX_ADDON_DECLARE_FUNCTION(AiInputEngine, uiCommand,
 // update() 让位判定：语音会话（Recording/Result/Candidates）活跃时
 // 拼音面板不覆盖语音卡片
 FCITX_ADDON_DECLARE_FUNCTION(AiInputEngine, voiceSessionActive, bool());
-
-} // namespace fcitx
 
 #endif // _FCITX5_AIINPUT_HUB_UI_SPLIT_IFACE_H_

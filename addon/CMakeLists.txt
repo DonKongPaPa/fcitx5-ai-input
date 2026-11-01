@@ -14,4 +14,7 @@ message(STATUS "Found Fcitx5Core: ${Fcitx5Core_VERSION}")
 find_package(Gettext REQUIRED)
 
 include(GNUInstallDirs)
+# 双 addon（lab/spec/ui-split-contract.md §1）：src=aiinput 引擎、
+# ui=aiinput-ui（Category=UI，VoicePopup/Flutter 引擎随迁）
 add_subdirectory(src)
+add_subdirectory(ui)

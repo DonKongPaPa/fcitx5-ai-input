@@ -4,6 +4,11 @@
 #include <fcitx-utils/event.h>
 
 #include "flutter_embedder.h"
+// JSON 转义独立在 hub/json_util.h（UI 拆分后两侧 target 各自编译）。
+// 必须在 namespace fcitx 外 include：头内嵌的 `namespace fcitx {}` 在
+// namespace 内会被 GCC 当作嵌套 fcitx::fcitx，污染后续头文件的
+// `fcitx::` 限定名解析（wayland_public.h 等）
+#include "json_util.h"
 
 #include <atomic>
 #include <cstdint>
@@ -145,8 +150,7 @@ private:
     std::atomic<bool> shuttingDown_{false};
 };
 
-// JSON 转义已独立到 hub/json_util.h（拆分后两侧 target 各自链接）
-#include "json_util.h"
+// JSON 转义已独立到 hub/json_util.h（见文件头 include 区的放置约束）
 
 } // namespace fcitx
 

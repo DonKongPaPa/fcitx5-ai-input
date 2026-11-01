@@ -11,7 +11,6 @@
 #include <fcitx/addoninstance.h>
 #include <fcitx/event.h>
 #include <fcitx/instance.h>
-#include <fcitx/userinterface.h>
 #include <fcitx-utils/trackableobject.h>
 
 #include <atomic>
@@ -19,12 +18,10 @@
 
 #include "ui_bus.h"
 #include "stdio_backend.h"
-#include <fcitx/candidatelist.h>
+#include "ui_split_iface.h" // IAiInputEngine：EXPORT 宏要核对 DECLARE 侧签名
 
 namespace fcitx {
 
-class VoicePopup;
-class FlutterEngineHost;
 class UiBus;
 class AiInputEngine;
 
@@ -68,8 +65,9 @@ private:
  * 与其他输入法（rime/pinyin…）共存：无需切换输入法，触发键经
  * Instance::watchEvent(InputContextKeyEvent, PreInputMethod) 在引擎之前
  * 拦截（官方"独立模式 addon"工作流，同 clipboard 模块）；识别结果直接
- * commitString 到焦点 IC。悬浮窗借 waylandim 的 IM proxy（classicui 同款），
- * UI 由进程内嵌入的 Flutter 引擎软渲（无窗口/无独立进程）。
+ * commitString 到焦点 IC。悬浮窗/Flutter 渲染由 aiinput-ui addon 承担
+ *（跨 addon 接口见 hub/ui_split_iface.h），UI addon 缺席时引擎静默
+ * 降级（无卡片，语音照常上屏）。
  *
  * 触发键消费策略（共存的关键，见 keyWatcher 注释）：
  *   - 触发键事件本身永不 filter：press 已透传给应用，release 必须配对，
@@ -89,20 +87,21 @@ private:
  *   Result（LLM 关）：展示 popupTimeoutMs 后自动 commit
  *   Candidates（LLM 开）：润色/原始候选，数字1-9/Enter/Esc/方向键/空格选择
  */
-class AiInputEngine : public UserInterface {
+class AiInputEngine : public AddonInstance {
 public:
     AiInputEngine(Instance *instance);
     ~AiInputEngine() override;
 
-    // —— UserInterface 四方法（Category=UI 后 fcitx5 调用）——
-    // update(InputPanel)：IC 的候选/预编辑/辅助文本变化——翻译为 v1
-    // panel/* 事件经 UiBus 送 Flutter；与语音卡片共用同一表面（竞争时
-    // 语音卡片优先——录音态不覆盖）
-    void update(UserInterfaceComponent component,
-                InputContext *inputContext) override;
-    bool available() override;
-    void suspend() override;
-    void resume() override;
+    // —— aiinput 导出面（UI addon 调用，接口见 hub/ui_split_iface.h）——
+    // Dart 命令回流：select（语音候选）/hover/ready；surface 切换等需要
+    // 引擎重推状态时也走 uiCommand("ready", "{}")。resize 与
+    // select{panel:true} 由 UI addon 本地处理，不到这里
+    void uiCommand(std::string method, std::string argsJson);
+    FCITX_ADDON_EXPORT_FUNCTION(AiInputEngine, uiCommand);
+    // UI update() 让位判定：语音会话（Recording/Result/Candidates）活跃
+    // 时拼音面板不覆盖语音卡片
+    bool voiceSessionActive() { return state_ != State::Idle; }
+    FCITX_ADDON_EXPORT_FUNCTION(AiInputEngine, voiceSessionActive);
 
     // configtool 设置页：Configuration 自动生成 UI。注意保存链路是
     // D-Bus SetConfig → setConfig()（基类默认 no-op，不实现则 configtool
@@ -127,9 +126,6 @@ public:
     std::mutex fontMutex_;
     std::string fontJson_;
     std::atomic<bool> fontResolving_{false};
-    void deferredMetrics(int w, int h);
-    std::unique_ptr<EventSourceTime> metricsTimer_;
-    int pendingMW_ = 64, pendingMH_ = 64;
     const std::vector<std::string> &candidates() const { return candidates_; }
     void commitCandidate(size_t index, InputContext *ic);
     // 上屏后通知 popup（auto 模式继承跟随；TestService::Trigger 也走这里）
@@ -139,6 +135,8 @@ private:
     enum class State { Idle, Pressing, Recording, Result, Candidates };
 
     void migrateLegacyConfig();
+    // UI addon 访问（跨 addon 现取：缺失 = 无卡片，引擎降级运行）
+    AddonInstance *ui();
     // 上屏后注入 Left+Right 无净位移键对：应用的光标矩形重报只发生在
     // 光标移动/文本变化时（GTK 程序性 commit 不重报、chromium 报插入
     // 点），逼它按真实光标重报，下一轮卡片不再"迟一步"
@@ -167,34 +165,24 @@ private:
     void runServerScript(const std::string &cmd, const std::string &action);
     AsrEngineKind lastEngine_ = AsrEngineKind::Dummy;
 
-    // —— Flutter（进程内嵌入引擎）——
-    void startFlutterEngine();
+    // 状态机 → Dart 状态推送（经 UiBus sender → UI addon deliverEnvelope）
     void pushUiState();
-    std::string animField() const; // 动画速率字段（update/font 消息共用）                  // 状态机 → Dart update 推送
-    void onFlutterMessage(const std::string &method,
-                          const std::string &argsJson);
 
     // —— UI 通知（日志，测试断言用）——
     void uiNotify(const std::string &what, const std::string &detail = "");
 
     Instance *instance_;
     AiInputConfig config_;
-    std::unique_ptr<VoicePopup> popup_;
-    UiBus uiBus_; // hub：ui 通道 v1 发射器（sender=embedder channel）
-    // IM 面板状态（pinyin/rime 候选——update() 写、select 读）
-    std::shared_ptr<CandidateList> panelCandidates_;
-    TrackableObjectReference<InputContext> panelIcRef_;
-    std::unique_ptr<FlutterEngineHost> flutter_;
+    UiBus uiBus_; // hub：ui 通道 v1 发射器（sender=UI addon deliverEnvelope）
     dbus::Bus *bus_ = nullptr;
     std::unique_ptr<TestService> testService_;
 
     // 全局按键拦截（PreInputMethod：rime 等引擎之前）
     std::unique_ptr<HandlerTableEntry<EventHandler>> keyWatcher_;
-    std::unique_ptr<HandlerTableEntry<EventHandler>> focusWatcher_; // popup 预热
+    std::unique_ptr<HandlerTableEntry<EventHandler>> focusWatcher_; // 卡片预热
     // 会话 IC 失焦（焦点被抢/窗口关闭）即结束录音，防会话卡死
     std::unique_ptr<HandlerTableEntry<EventHandler>> focusOutWatcher_;
-    std::unique_ptr<EventSourceTime> warmupTimer_; // 加载后预热引擎
-    std::unique_ptr<EventSourceTime> dbusRetry_;   // dbus 模块未就绪时补注册
+    std::unique_ptr<EventSourceTime> dbusRetry_; // dbus 模块未就绪时补注册
 
     State state_ = State::Idle;
     // 会话 IC 用 watch() 跟踪：裸指针会在 hold 的 300ms 窗口内因焦点

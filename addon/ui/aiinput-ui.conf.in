@@ -1,0 +1,13 @@
+[Addon]
+# 消息路由（lab/spec/ui-split-contract.md §3）：panel/* 由本 addon 的
+# UserInterface::update 直发（fcitx5 的 update 回调物理落在 Category=UI
+# 的 aiinput-ui 上）；voice/*、theme 由引擎 addon 经 deliverEnvelope 注入
+Name=AI Input UI
+Category=UI
+Version=@PROJECT_VERSION@
+Type=SharedLibrary
+Library=aiinputui
+Depends=wayland
+Priority=Default
+Enabled=True
+Configurable=False
