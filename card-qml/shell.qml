@@ -276,9 +276,6 @@ ShellRoot {
             // 不暴露其它 surface 位置——best effort，QA Q11 同款）
             console.log("CARD: caret hit, rect=" + JSON.stringify(args.rect))
             root.lastCaret = args.rect // 绑定自动重算两窗口 margins
-                        + " top=" + root.cardAnchorTop
-                        + " margins.left=" + cardWindow.margins.left
-                        + " top=" + cardWindow.margins.top)
             break
         default:
             root.ignoredCount++ // 未知 method 忽略（向前兼容）
