@@ -159,6 +159,11 @@ FCITX_CONFIGURATION(
     // 键定义在引擎 config（configtool 入口），aiinput-ui 只读同一文件
     //（引擎独占写，见 ui-split-contract.md §1）。生效需重启 fcitx5
     //（UI addon 无 reloadConfig 链路）
+    Option<bool> flutterCard{
+        this, "FlutterCard",
+        "进程内 Flutter 卡（关闭后 aiinput-ui 只作 QML 卡的传输桥，"
+        "不建 popup 表面不起 Flutter 引擎——纯 QML 验证档）",
+        true};
     Option<bool> qmlCard{this, "QmlCard",
                          "启用 QML Material 卡片（Quickshell 独立进程，"
                          "与 Flutter 卡并行双显——双 UI 对比用）",

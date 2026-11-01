@@ -253,6 +253,10 @@ void VoicePopup::popupRectangle(void *data, zwp_input_popup_surface_v2 *,
     }
     FCITX_INFO() << "VoicePopup: text_input_rectangle " << x << "," << y << " "
                  << w << "x" << h << "（窗口局部）";
+    // panel/caret 广播（QML 卡 layer 重锚数据源）：非零矩形才发
+    if (s->caretHandler_ && (w > 0 || h > 0)) {
+        s->caretHandler_(x, y, w, h);
+    }
 }
 
 // ---------------------------------------------------------------------------
@@ -483,6 +487,14 @@ VoicePopup::VoicePopup(Instance *instance) : instance_(instance) {
         EventWatcherPhase::PreInputMethod, [this](Event &event) {
             auto &ie = static_cast<InputContextEvent &>(event);
             auto *ic = ie.inputContext();
+            // panel/caret 广播（D-Bus 前端 IC 源）：cursorRect 是 Qt/GTK
+            // 经 D-Bus SetCursorRect 送来的值（waylandim 的 text-input IC
+            // 不填这里，走 popup 的 text_input_rectangle 源）
+            const auto &bcr = ic->cursorRect();
+            if (caretHandler_ && (bcr.width() > 0 || bcr.height() > 0)) {
+                caretHandler_(bcr.left(), bcr.top(), bcr.width(),
+                              bcr.height());
+            }
             std::lock_guard<std::mutex> lock(mutex_);
             if (dbusFollow_ && overlayFallback_ && ic == icRef_.get()) {
                 if (!x11Mode_) {

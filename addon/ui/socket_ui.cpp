@@ -169,9 +169,14 @@ void SocketUi::sendEnvelope(const std::string &method,
     std::string wire = "{\"v\":1,\"channel\":\"ui\",\"dir\":\"out\",\"method\":\"" +
                        method + "\",\"args\":" +
                        (argsJson.empty() ? "{}" : argsJson) + "}\n";
+    FCITX_LOG(Info) << "AiInputUi: [sock->] fd=" << clientFd_ << " "
+                    << method << " " << wire.size() << "B";
     // 行协议小包，主循环直写；短写视为链路异常由下次读事件清理
-    if (write(clientFd_, wire.data(), wire.size()) < 0) {
+    auto n = write(clientFd_, wire.data(), wire.size());
+    if (n < 0) {
         FCITX_WARN() << "AiInputUi: QML 卡片写失败 errno=" << errno;
+    } else {
+        FCITX_LOG(Info) << "AiInputUi: [sock->] wrote " << n;
     }
 }
 

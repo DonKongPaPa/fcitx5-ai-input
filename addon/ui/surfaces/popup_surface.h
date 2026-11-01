@@ -151,6 +151,13 @@ public:
     // 触发键按下时（阈值判定窗口内）对未知能力的 IC 提前挂探针：
     // 矩形在窗口内即到，show 决策已有知识 → 首下跟随而非回退
     void primePreedit(InputContext *ic);
+    // 光标矩形广播（panel/caret 数据源）：每次真实矩形变化触发（窗口
+    // 局部坐标；QML 卡经 layer margins 近似重锚，同 DbusPosition=follow
+    // 的坐标系前提）。0,0 0x0（chromium 未上报态）不广播
+    void setCaretHandler(
+        std::function<void(int x, int y, int w, int h)> h) {
+        caretHandler_ = std::move(h);
+    }
 
     // fractional scale：逻辑/物理尺寸分离。Dart（或调用方）上报**逻辑**
     // 尺寸；池按 物理=ceil(逻辑×scale/120) 建，viewport 缩回逻辑显示。
@@ -364,6 +371,7 @@ private:
     bool probeDeferralUsed_ = false; // 本会话已用过二次探测暂缓（防递归）
     bool decisionPending_ = false; // 判定挂起：帧不上屏直到跟随/底部定局
     std::function<void()> modeSwitchHandler_;
+    std::function<void(int, int, int, int)> caretHandler_;
     void armProbeFallbackTimer();
     void resolvePendingToLayerLocked(); // 持锁版（保险丝/结算共用）
     std::unique_ptr<EventSourceTime> probeTimer_;

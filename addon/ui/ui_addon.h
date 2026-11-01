@@ -75,6 +75,8 @@ private:
     AddonInstance *engine() const;
     // update() 让位判定 = 引擎 voiceSessionActive()（引擎缺席 = 不活跃）
     bool voiceSessionActive();
+    // FlutterCard=False（纯 QML 验证档）：不建 popup 表面不起 Flutter 引擎
+    bool flutterCard_ = true;
 
     // —— Flutter（进程内嵌入引擎）——
     void startFlutterEngine();

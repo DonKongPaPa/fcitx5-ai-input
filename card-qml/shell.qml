@@ -23,6 +23,9 @@ ShellRoot {
     property int recvCount: 0
     property int ignoredCount: 0
     property var caps: []
+    // panel/caret 的光标矩形（跟随锚定源；声明缺失曾导致赋值静默失败
+    // ——「Cannot assign to non-existent property」，margins 恒默认）
+    property var lastCaret: null
 
     Theme {
         id: themeObj
@@ -35,7 +38,7 @@ ShellRoot {
         onNameChanged: themeObj.fontFamily = name
     }
 
-    // —— 语音卡（左下角，宽 420，高随状态内容）——
+    // —— 语音卡（跟随光标；无 caret 时兜底左下）——
     // idle 即整窗退场：原型期常驻的「待机胶囊」占一层 layer surface 且
     // 挤占注意力（宿主实测反馈），真实版语义 = 无会话无表面
     PanelWindow {
@@ -44,11 +47,11 @@ ShellRoot {
         color: "transparent"
         anchors {
             left: true
-            bottom: true
+            top: true
         }
         margins {
-            left: 8
-            bottom: 10
+            left: root.cardAnchorLeft
+            top: root.cardAnchorTop
         }
         exclusionMode: ExclusionMode.Ignore
         implicitWidth: card.implicitWidth
@@ -74,11 +77,12 @@ ShellRoot {
             id: cardResizeTimer
             interval: 200
             onTriggered: {
-                if (cardWindow.width > 0 && cardWindow.height > 0)
+                if (cardWindow.width > 0 && cardWindow.height > 0) {
                     root.sendEnvelope("resize", {
                         w: cardWindow.width,
                         h: cardWindow.height
                     })
+                }
             }
         }
         onWidthChanged: cardResizeTimer.restart()
@@ -86,17 +90,18 @@ ShellRoot {
         Component.onCompleted: cardResizeTimer.restart()
     }
 
-    // —— rime 候选面板（底部条；panel/update 显示、panel/hide 隐藏）——
+    // —— rime 候选面板（panel/update 显示、panel/hide 隐藏、caret 重锚）——
     PanelWindow {
         id: panelWindow
         visible: panel.shown
         color: "transparent"
         anchors {
-            bottom: true
+            left: true
+            top: true
         }
         margins {
-            left: 8
-            bottom: 8
+            left: root.panelAnchorLeft
+            top: root.panelAnchorTop
         }
         exclusionMode: ExclusionMode.Ignore
         implicitWidth: panel.implicitWidth
@@ -122,11 +127,12 @@ ShellRoot {
             interval: 200
             onTriggered: {
                 if (panelWindow.visible && panelWindow.width > 0
-                        && panelWindow.height > 0)
+                        && panelWindow.height > 0) {
                     root.sendEnvelope("resize", {
                         w: panelWindow.width,
                         h: panelWindow.height
                     })
+                }
             }
         }
         onWidthChanged: panelResizeTimer.restart()
@@ -164,6 +170,45 @@ ShellRoot {
         id: reconnectTimer
         interval: 200
         onTriggered: sock.connected = true
+    }
+
+    // caret 锚定（root 内联属性绑定：块表达式直引 id.property，依赖捕获
+    // 可靠；函数调用式绑定对函数内属性访问不保证重算——实测 margins 停在
+    // 默认值）。rect 为窗口局部坐标按输出坐标近似用（同 DbusPosition=
+    // follow 前提；浮动窗有原点偏差——best effort，QA Q11 同款）
+    readonly property int cardAnchorLeft: {
+        var sw = cardWindow.screen ? cardWindow.screen.width : 1920
+        return root.lastCaret
+                   ? Math.round(Math.max(8, Math.min(
+                         root.lastCaret.x, sw - card.implicitWidth - 8)))
+                   : 8
+    }
+    readonly property int cardAnchorTop: {
+        var sh = cardWindow.screen ? cardWindow.screen.height : 1080
+        if (!root.lastCaret)
+            return 0
+        var t = root.lastCaret.y + root.lastCaret.h + 8
+        return Math.round(t + card.implicitHeight > sh - 8
+                              ? Math.max(8, root.lastCaret.y
+                                               - card.implicitHeight - 8)
+                              : t)
+    }
+    readonly property int panelAnchorLeft: {
+        var sw = panelWindow.screen ? panelWindow.screen.width : 1920
+        return root.lastCaret
+                   ? Math.round(Math.max(8, Math.min(
+                         root.lastCaret.x, sw - panel.implicitWidth - 8)))
+                   : 8
+    }
+    readonly property int panelAnchorTop: {
+        var sh = panelWindow.screen ? panelWindow.screen.height : 1080
+        if (!root.lastCaret)
+            return 0
+        var t = root.lastCaret.y + root.lastCaret.h + 8
+        return Math.round(t + panel.implicitHeight > sh - 8
+                              ? Math.max(8, root.lastCaret.y
+                                               - panel.implicitHeight - 8)
+                              : t)
     }
 
     function handleLine(line) {
@@ -225,7 +270,16 @@ ShellRoot {
             panel.hidePanel()
             break
         case "panel/caret":
-            break // caret 重锚属 addon P4 职责：原型只收不锚
+            // 跟随（M2 补齐）：光标矩形 → layer margins 重锚。rect 为
+            // 窗口局部坐标按输出坐标近似用（同 DbusPosition=follow 的
+            // 坐标系前提，铺满输出的窗口即精确；浮动窗有原点偏差，Wayland
+            // 不暴露其它 surface 位置——best effort，QA Q11 同款）
+            console.log("CARD: caret hit, rect=" + JSON.stringify(args.rect))
+            root.lastCaret = args.rect // 绑定自动重算两窗口 margins
+                        + " top=" + root.cardAnchorTop
+                        + " margins.left=" + cardWindow.margins.left
+                        + " top=" + cardWindow.margins.top)
+            break
         default:
             root.ignoredCount++ // 未知 method 忽略（向前兼容）
             return
