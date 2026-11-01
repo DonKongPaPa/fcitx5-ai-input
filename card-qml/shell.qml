@@ -1,0 +1,249 @@
+// card-qml/shell.qml —— Quickshell 入口：语音卡 + rime 候选面板双 layer 表面
+// 传输选型（containers/qml-probe 结论）：Io 模块无读自身 stdin 的类型，走
+// Socket 客户端 + SplitParser 按行收 envelope；write 不自动补 \n，写后须 flush。
+// 协议（lab/spec/protocol.md v1）：只消费 channel=="ui" && dir=="out"，
+// 未知 method 忽略；命令方向（ready/resize/select/hover/navigate/cancel）
+// 经同一 socket 回写。
+pragma ComponentBehavior: Bound
+import QtQuick
+import Quickshell
+import Quickshell.Io
+import Quickshell.Wayland
+
+ShellRoot {
+    id: root
+
+    // socket 路径经环境变量交接（feed.py 默认值一致），QML 侧不硬编码绝对路径
+    property string sockPath: Quickshell.env("AIINPUT_CARD_SOCK") !== ""
+                                  ? Quickshell.env("AIINPUT_CARD_SOCK")
+                                  : "/run/user/1000/aiinput-card.sock"
+    // theme{font_path} 的热加载源（FontLoader 异步加载，失败回落系统默认）
+    property string fontPath: ""
+    property int sendSeq: 0
+    property int recvCount: 0
+    property int ignoredCount: 0
+    property var caps: []
+
+    Theme {
+        id: themeObj
+    }
+
+    FontLoader {
+        id: themeFontLoader
+        source: root.fontPath === "" ? "" : "file://" + root.fontPath
+        // 与 theme{font_family} 的显式指定后到者赢（原型简化）
+        onNameChanged: themeObj.fontFamily = name
+    }
+
+    // —— 语音卡（左下角，宽 420，高随状态内容）——
+    PanelWindow {
+        id: cardWindow
+        visible: true
+        color: "transparent"
+        anchors {
+            left: true
+            bottom: true
+        }
+        margins {
+            left: 8
+            bottom: 10
+        }
+        exclusionMode: ExclusionMode.Ignore
+        implicitWidth: card.implicitWidth
+        implicitHeight: card.implicitHeight
+
+        // namespace 陷阱：windowConnected 后不可改（官方文档），创建时定死
+        WlrLayershell.layer: WlrLayer.Top
+        WlrLayershell.namespace: "aiinput-card"
+        WlrLayershell.keyboardFocus: WlrKeyboardFocus.None
+
+        Card {
+            id: card
+            anchors.centerIn: parent
+            theme: themeObj
+            onSelectRequested: index => root.sendEnvelope("select",
+                                                          { index: index })
+            onHoverRequested: row => root.sendEnvelope("hover", { row: row })
+            onCancelRequested: () => root.sendEnvelope("cancel", {})
+        }
+
+        // UI 内在尺寸上报（协议 §4.2 resize{w,h}）：布局稳定后去抖再报
+        Timer {
+            id: cardResizeTimer
+            interval: 200
+            onTriggered: {
+                if (cardWindow.width > 0 && cardWindow.height > 0)
+                    root.sendEnvelope("resize", {
+                        w: cardWindow.width,
+                        h: cardWindow.height
+                    })
+            }
+        }
+        onWidthChanged: cardResizeTimer.restart()
+        onHeightChanged: cardResizeTimer.restart()
+        Component.onCompleted: cardResizeTimer.restart()
+    }
+
+    // —— rime 候选面板（底部条；panel/update 显示、panel/hide 隐藏）——
+    PanelWindow {
+        id: panelWindow
+        visible: panel.shown
+        color: "transparent"
+        anchors {
+            bottom: true
+        }
+        margins {
+            left: 8
+            bottom: 8
+        }
+        exclusionMode: ExclusionMode.Ignore
+        implicitWidth: panel.implicitWidth
+        implicitHeight: panel.implicitHeight
+
+        WlrLayershell.layer: WlrLayer.Top
+        WlrLayershell.namespace: "aiinput-panel"
+        WlrLayershell.keyboardFocus: WlrKeyboardFocus.None
+
+        Panel {
+            id: panel
+            anchors.centerIn: parent
+            theme: themeObj
+            onSelectRequested: index => root.sendEnvelope("select",
+                                                          { index: index })
+            onHoverRequested: row => root.sendEnvelope("hover", { row: row })
+            onNavigateRequested: delta => root.sendEnvelope("navigate",
+                                                            { delta: delta })
+        }
+
+        Timer {
+            id: panelResizeTimer
+            interval: 200
+            onTriggered: {
+                if (panelWindow.visible && panelWindow.width > 0
+                        && panelWindow.height > 0)
+                    root.sendEnvelope("resize", {
+                        w: panelWindow.width,
+                        h: panelWindow.height
+                    })
+            }
+        }
+        onWidthChanged: panelResizeTimer.restart()
+        onHeightChanged: panelResizeTimer.restart()
+        onVisibleChanged: panelResizeTimer.restart()
+    }
+
+    // —— 传输（feeder 须先 listen；断线重连照探针模式：connected 目标态两段置位）——
+    Socket {
+        id: sock
+        path: root.sockPath
+        connected: true
+        parser: SplitParser {
+            onRead: line => root.handleLine(line)
+        }
+        onConnectionStateChanged: {
+            console.log("CARD: SOCK connected=" + connected)
+            if (connected) {
+                retryTimer.stop()
+                root.sendEnvelope("ready", {}) // 协议 §4.2：UI 引擎就绪
+            }
+        }
+        onError: () => retryTimer.restart()
+    }
+    Timer {
+        id: retryTimer
+        interval: 600
+        // connected 是目标态：先置 false 再置 true 才会重连（探针实测）
+        onTriggered: {
+            sock.connected = false
+            reconnectTimer.restart()
+        }
+    }
+    Timer {
+        id: reconnectTimer
+        interval: 200
+        onTriggered: sock.connected = true
+    }
+
+    function handleLine(line) {
+        if (!line || !line.trim())
+            return
+        var env
+        try {
+            env = JSON.parse(line)
+        } catch (e) {
+            console.log("CARD: BADJSON " + line.substring(0, 80))
+            return
+        }
+        // v1 envelope 门禁：v/channel/dir 不符一律忽略（协议 §2/§8）
+        if (env.v !== 1 || env.channel !== "ui" || env.dir !== "out") {
+            root.ignoredCount++
+            return
+        }
+        var args = env.args === undefined ? {} : env.args
+        switch (env.method) {
+        case "hello":
+            root.caps = args.caps === undefined ? [] : args.caps
+            panel.caps = root.caps
+            break
+        case "theme":
+            if (args.font_path !== undefined)
+                root.fontPath = args.font_path
+            if (args.font_family !== undefined && args.font_family !== "")
+                themeObj.fontFamily = args.font_family
+            if (args.font_size !== undefined)
+                themeObj.baseFontSize = args.font_size
+            if (args.scale !== undefined)
+                themeObj.scale = args.scale
+            if (args.anim !== undefined)
+                themeObj.anim = args.anim
+            break
+        case "voice/recording":
+            card.showRecording(args.partial === undefined ? "" : args.partial,
+                               args.elapsed_ms === undefined
+                                   ? 0 : args.elapsed_ms)
+            break
+        case "voice/result":
+            card.showResult(args.final === undefined ? "" : args.final,
+                            args.timeout_ms === undefined ? 0 : args.timeout_ms)
+            break
+        case "voice/candidates":
+            card.showCandidates(args.final === undefined ? "" : args.final,
+                                args.candidates === undefined
+                                    ? [] : args.candidates,
+                                args.hover === undefined ? -1 : args.hover,
+                                args.llm_dummy === true)
+            break
+        case "voice/idle":
+            card.showIdle()
+            break
+        case "panel/update":
+            panel.applyUpdate(args)
+            break
+        case "panel/hide":
+            panel.hidePanel()
+            break
+        case "panel/caret":
+            break // caret 重锚属 addon P4 职责：原型只收不锚
+        default:
+            root.ignoredCount++ // 未知 method 忽略（向前兼容）
+            return
+        }
+        root.recvCount++
+        console.log("CARD: ENV seq=" + (env.seq === undefined ? -1 : env.seq)
+                    + " method=" + env.method)
+    }
+
+    function sendEnvelope(method, args) {
+        root.sendSeq++
+        // write 不自动补 \n（官方文档），写后必须 flush
+        sock.write(JSON.stringify({
+            v: 1,
+            channel: "ui",
+            dir: "in",
+            method: method,
+            seq: root.sendSeq,
+            args: args
+        }) + "\n")
+        sock.flush()
+    }
+}
