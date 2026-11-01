@@ -185,10 +185,22 @@ void AiInputUi::update(UserInterfaceComponent component,
     }
     auto &panel = ic->inputPanel();
     if (panel.empty()) {
+        // 面板清空：surface 同步退场（classicui 同款生命周期——popup 模式
+        // hide 即销毁，下轮 showPanel 重建即拿到最新光标矩形/重夺定位槽）
+        if (popup_) {
+            popup_->hide();
+        }
         uiBus_.panelHide();
         panelCandidates_.reset();
         panelIcRef_ = TrackableObjectReference<InputContext>();
         return;
+    }
+    // 候选窗上屏：解除帧守卫（visible_）——修复存量缺陷：panel 场景从无
+    // show 路径，pushFrameBGRA 的 !visible_ 守卫把 Dart 候选窗帧全部丢弃
+    //（容器 P4b 截图实证：帧画了、屏幕没有）。语音会话让位判定在上，
+    // 与语音卡共用表面的竞争由该判定独占仲裁
+    if (popup_) {
+        popup_->showPanel(ic);
     }
     // 持有候选列表引用（异步点击选择时仍有效）
     panelCandidates_ = panel.candidateList();

@@ -1782,6 +1782,33 @@ void VoicePopup::show(InputContext *ic) {
     visible_ = true;
 }
 
+// 候选窗可见性（panel/* 路径）：与 show() 共用 ensurePopup/定位决策，
+// 但剥离语音卡语义——不挂探针（组合文本归 pinyin）、不判定挂起、不画
+// 色块。visible_=true 后 pushFrameBGRA 的帧守卫解除，Dart 的候选窗帧
+// 直接 commit 上屏；面板清空由 update() 走 hide()（classicui 同款生命周期）
+void VoicePopup::showPanel(InputContext *ic) {
+    std::lock_guard<std::mutex> lock(mutex_);
+    if (!ensurePopup(ic, /*atShow=*/true)) {
+        return;
+    }
+    if (x11Mode_) {
+        // X OR 卡片是语音卡路径；候选窗的 X 应用覆盖为已知缺口
+        //（与拆分前一致——拆分前候选窗 surface 从未 map，无此路径）
+        return;
+    }
+    if (topMode_ && !layerConfigured_) {
+        // layer 首个 configure 未到：丢，等下一帧（prepare 已触发流水线）
+        wl_display_flush(display_);
+        return;
+    }
+    if (emptyRegion_ && surface_) {
+        // 候选窗可点击：恢复全量输入区（同 show 语义，随下一次 commit 生效）
+        wl_surface_set_input_region(surface_, nullptr);
+    }
+    visible_ = true;
+    wl_display_flush(display_);
+}
+
 void VoicePopup::hide() {
     std::lock_guard<std::mutex> lock(mutex_);
     probeTimer_.reset();        // 会话结束，切换定时器作废
