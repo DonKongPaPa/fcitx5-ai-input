@@ -11,6 +11,13 @@ FAIL=0
 step() { echo "[smoke] $1"; }
 check() { if eval "$2"; then echo "[smoke] ✓ $1"; else echo "[smoke] ✗ $1"; FAIL=1; fi; }
 
+# 链接完整性门禁（0.4.17 实锤：新增 .cpp 漏编 target_sources → 未解析
+# 符号 → 宿主 fcitx5 加载即崩）。无 wayland 显示也能跑的静态探针
+for so in /usr/lib/fcitx5/aiinput.so /usr/lib/fcitx5/aiinputui.so; do
+    UNDEF="$(ldd -r "$so" 2>&1 | grep -c 'undefined symbol')"
+    check "$(basename "$so") 无未解析符号（count=$UNDEF）" "[ '$UNDEF' = 0 ]"
+done
+
 step "拉起 fcitx5"
 pkill -x fcitx5 2>/dev/null || true
 dbus-run-session -- bash -c '

@@ -308,10 +308,6 @@ AiInputUi::AiInputUi(Instance *instance) : instance_(instance) {
         }
     }
 
-    // 自有托盘（对比工具条）：bug 标记 / 卡切换 / UI 切换。与 fcitx5 内
-    // 建 SNI（classicui 持有，本 UI 活跃时被其 suspend disable）并存
-    tray_ = std::make_unique<AiInputTray>(this);
-
     // 定位策略拉取：引擎构造期推送在本 addon 加载前发生（实测竞态 2.3ms
     // 差，推送静默丢弃）→ dbusFollow 停默认 false、D-Bus 前端应用跟随全
     // 灭。构造期直接查引擎实测拿不到（addon 装载阶段内查询不可靠），挪
