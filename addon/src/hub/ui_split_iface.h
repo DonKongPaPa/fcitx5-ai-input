@@ -41,6 +41,8 @@ FCITX_ADDON_DECLARE_FUNCTION(AiInputUi, uiHide, void());
 // 定位策略热更新（reloadConfig/setConfig 后下发）
 FCITX_ADDON_DECLARE_FUNCTION(AiInputUi, uiSetPolicy,
                              void(std::string, std::string, bool));
+// 候选面板排列钉死（PanelLayout 配置：auto/horizontal/vertical）
+FCITX_ADDON_DECLARE_FUNCTION(AiInputUi, uiSetPanelLayout, void(std::string));
 // 上屏后通知（auto 模式继承跟随）
 FCITX_ADDON_DECLARE_FUNCTION(AiInputUi, uiNotifyCommit, void());
 // 录音结束仍无矩形：判定挂起结算到 layer（结果/候选卡片必须显示）

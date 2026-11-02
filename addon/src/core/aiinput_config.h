@@ -105,6 +105,17 @@ FCITX_CONFIGURATION(
         "悬浮卡片字体（Pango 格式如 \"MiSans VF 13\"；留空 = 跟随 classicui 的字体设置）",
         ""};
 
+    // UI 全局缩放：卡片全部字号/间距的倍率（独立于字体的整体大小旋钮；
+    // QML 卡与 Flutter 卡共用）
+    Option<double> uiScale{this, "UiScale", "卡片全局缩放（1.0 = 原始尺寸）",
+                           1.0};
+
+    // 拼音候选面板排列：Auto=跟随输入法布局提示，Horizontal/Vertical 钉死
+    FCITX_CONFIG_ENUM(PanelLayoutKind, Auto, Horizontal, Vertical);
+    FCITX_CONFIG_ENUM_I18N_ANNOTATION(PanelLayoutKind, "自动", "横向", "纵向");
+    Option<PanelLayoutKind, NoConstrain<PanelLayoutKind>, DefaultMarshaller<PanelLayoutKind>, PanelLayoutKindI18NAnnotation> panelLayout{
+        this, "PanelLayout", "候选面板排列方式", PanelLayoutKind::Auto};
+
     // —— 卡片定位 ——
     // chromium 系只在文本/光标变化时上报 text-input 光标矩形（焦点时不
     // 报）。auto：收到过真实矩形（GTK/Qt）或本 IC 上屏过

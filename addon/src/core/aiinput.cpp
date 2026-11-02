@@ -324,12 +324,7 @@ AiInputEngine::AiInputEngine(Instance *instance)
     reloadConfig();
 
     // 定位策略下发（UI addon 缺席时丢弃；UI 后启动靠 reloadConfig 补发）
-    if (auto *u = ui()) {
-        u->call<IAiInputUi::uiSetPolicy>(
-            config_.positionMode.value(),
-            config_.positionFallbackApps.value(),
-            config_.dbusPosition.value() == "follow");
-    }
+    syncUiPolicy();
 
     // hub：ui 通道 v1 发射器——sender 转发到 UI addon 的 Flutter platform
     // channel（renderer 未起时由 UI 侧 deliverEnvelope guard 丢弃）
@@ -538,12 +533,7 @@ void AiInputEngine::reloadConfig() {
         safeSaveAsIni(config_, "conf/aiinput.config"); // 落新键、清旧键
     }
     // 定位策略热更新（PositionMode/PositionFallbackApps/DbusPosition）
-    if (auto *u = ui()) {
-        u->call<IAiInputUi::uiSetPolicy>(
-            config_.positionMode.value(),
-            config_.positionFallbackApps.value(),
-            config_.dbusPosition.value() == "follow");
-    }
+    syncUiPolicy();
     uiNotify("config-reloaded");
 }
 
@@ -561,12 +551,7 @@ void AiInputEngine::setConfig(const RawConfig &config) {
     }
     sendFontToUi(); // 字体热改（UIFont/classicui Font 变化即生效）
     // 定位策略热更新（同 reloadConfig）
-    if (auto *u = ui()) {
-        u->call<IAiInputUi::uiSetPolicy>(
-            config_.positionMode.value(),
-            config_.positionFallbackApps.value(),
-            config_.dbusPosition.value() == "follow");
-    }
+    syncUiPolicy();
     uiNotify("config-saved-via-configtool");
 }
 
@@ -759,7 +744,7 @@ void AiInputEngine::sendFontToUi() {
             if (json.length() > 4) {
                 uiBus_.theme(jsonStrField(json, "path"),
                              jsonNumField(json, "size"),
-                             animScaleOf(config_));
+                             animScaleOf(config_), config_.uiScale.value());
                 FCITX_INFO() << "AiInput: UI 字体 → " << json;
             }
             return true;
@@ -782,6 +767,11 @@ void AiInputEngine::syncUiPolicy() {
         u->call<IAiInputUi::uiSetPolicy>(
             config_.positionMode.value(), config_.positionFallbackApps.value(),
             config_.dbusPosition.value() == "follow");
+        static constexpr const char *kPanelLayout[] = {
+            "auto", "horizontal", "vertical",
+        };
+        u->call<IAiInputUi::uiSetPanelLayout>(
+            kPanelLayout[static_cast<int>(config_.panelLayout.value())]);
     }
 }
 

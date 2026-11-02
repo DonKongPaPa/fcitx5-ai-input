@@ -58,6 +58,10 @@ public:
     void uiHide();
     void uiSetPolicy(std::string mode, std::string fallbackApps,
                      bool dbusFollow);
+    // 候选面板排列钉死（PanelLayout=auto/horizontal/vertical；auto=跟随
+    // 输入法布局提示）
+    void uiSetPanelLayout(std::string layout);
+    FCITX_ADDON_EXPORT_FUNCTION(AiInputUi, uiSetPanelLayout);
     void uiNotifyCommit();
     void uiResolvePending();
     void uiPrimePreedit(InputContext *ic);
@@ -100,6 +104,7 @@ private:
     // IM 面板状态（pinyin/rime 候选——update() 写、Dart panel select 读）
     std::shared_ptr<CandidateList> panelCandidates_;
     TrackableObjectReference<InputContext> panelIcRef_;
+    std::string panelLayout_ = "auto"; // PanelLayout 钉死（auto=跟随提示）
     std::unique_ptr<FlutterEngineHost> flutter_;
     std::unique_ptr<EventSourceTime> warmupTimer_; // 加载后预热引擎+popup
     std::unique_ptr<EventSourceTime> policyPullTimer_; // 加载后拉定位策略

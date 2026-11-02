@@ -452,6 +452,10 @@ void AiInputUi::update(UserInterfaceComponent component,
             layout = "vertical";
         }
     }
+    // PanelLayout 钉死优先（auto 才跟随输入法提示）
+    if (panelLayout_ == "horizontal" || panelLayout_ == "vertical") {
+        layout = panelLayout_;
+    }
     auto auxUp = panel.auxUp().toString();
     auto auxDown = panel.auxDown().toString();
     auto imName = instance_->currentInputMethod();
@@ -535,6 +539,12 @@ void AiInputUi::uiSetPolicy(std::string mode, std::string fallbackApps,
         popup_->setPositionPolicy(mode, fallbackApps);
         popup_->setDbusFollow(dbusFollow);
     }
+}
+
+void AiInputUi::uiSetPanelLayout(std::string layout) {
+    // 候选面板排列钉死（PanelLayout 配置）：auto = 跟随输入法布局提示
+    panelLayout_ = std::move(layout);
+    FCITX_INFO() << "AiInputUi: [panel-layout] " << panelLayout_;
 }
 
 // frame-relay 帧（PPM P6）→ BGRA → popup 物理帧直入

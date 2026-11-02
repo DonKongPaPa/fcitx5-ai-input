@@ -33,8 +33,10 @@ Rectangle {
     signal navigateRequested(int delta)
 
     readonly property int pad: Math.round(6 * theme.scale)
-    // 宽度随内容（classicui 同款；720 定宽在短候选页留白过大——实测反馈）
-    implicitWidth: content.implicitWidth + 2 * pad
+    // 面板最大宽：长 preedit/长候选（通配输入）把内容宽撑到爆屏——封顶后
+    // preedit/候选折行、条目省略（classicui 同策略）
+    readonly property int maxW: Math.round(640 * theme.scale)
+    implicitWidth: Math.min(content.implicitWidth + 2 * pad, maxW)
     implicitHeight: content.implicitHeight + 2 * pad
     radius: theme.radius
     color: theme.surfaceContainer
@@ -59,15 +61,18 @@ Rectangle {
         spacing: Math.round(6 * panel.theme.scale)
 
         Text {
+            width: panel.maxW - 2 * pad
             visible: panel.auxUp !== ""
             text: panel.auxUp
+            wrapMode: Text.WrapAtWordBoundaryOrAnywhere
             color: panel.theme.textOnSurfaceVariant
             font.family: panel.theme.fontFamily
             font.pixelSize: panel.theme.fontSize
         }
 
-        // classicui 布局：auxUp → 预编辑（突出）→ auxDown → 候选（翻页内联）
-        Row {
+        // classicui 布局：auxUp → 预编辑（突出，超宽折行）→ auxDown → 候选
+        Flow {
+            width: panel.maxW - 2 * pad
             spacing: 0
             Repeater {
                 model: panel.preedit
@@ -80,7 +85,7 @@ Rectangle {
                     // underline 段底部划线（classicui PreEdit underline 等价）
                     Rectangle {
                         anchors.bottom: parent.bottom
-                        width: parent.width
+                        width: panel.maxW - 2 * pad
                         height: 2
                         radius: 1
                         color: panel.theme.primary
@@ -91,52 +96,50 @@ Rectangle {
         }
 
         Text {
+            width: panel.maxW - 2 * pad
             visible: panel.auxDown !== ""
             text: panel.auxDown
+            wrapMode: Text.WrapAtWordBoundaryOrAnywhere
             color: panel.theme.textOnSurfaceVariant
             font.family: panel.theme.fontFamily
             font.pixelSize: panel.theme.fontSize
         }
 
+        // 候选排列恒为两态之一（horizontal=Flow 可折行 / vertical=Column），
+        // 宽度受 maxW 封顶；长候选条目省略号截断（份额×N 通配输入实测反馈）
+        Flow {
+            width: panel.maxW - 2 * pad
+            visible: panel.layoutMode === "horizontal"
+            spacing: Math.round(4 * panel.theme.scale)
+            Repeater {
+                model: panel.candidates
+                delegate: PanelCand {}
+            }
+        }
+
+        Column {
+            width: panel.maxW - 2 * pad
+            visible: panel.layoutMode === "vertical"
+            spacing: Math.round(2 * panel.theme.scale)
+            Repeater {
+                model: panel.candidates
+                delegate: PanelCand {}
+            }
+        }
+
+        // 翻页控件候选区尾随（仅 caps 协商到 paging 时出现）
         Row {
-            spacing: Math.round(6 * panel.theme.scale)
-
-            Flow {
-                width: implicitWidth
-                visible: panel.layoutMode === "horizontal"
-                spacing: Math.round(4 * panel.theme.scale)
-                Repeater {
-                    model: panel.candidates
-                    delegate: PanelCand {}
-                }
+            visible: panel.caps.includes("paging")
+            spacing: Math.round(2 * panel.theme.scale)
+            Button {
+                text: "◀"
+                enabled: panel.hasPrev
+                onClicked: panel.navigateRequested(-1)
             }
-
-            Column {
-                width: implicitWidth
-                visible: panel.layoutMode === "vertical"
-                spacing: Math.round(2 * panel.theme.scale)
-                Repeater {
-                    model: panel.candidates
-                    delegate: PanelCand {}
-                }
-            }
-
-            // 翻页内联候选行尾（classicui 同位；仅 caps 协商到 paging 时出现）
-            Row {
-                anchors.verticalCenter: parent.verticalCenter
-                visible: panel.layoutMode === "horizontal"
-                         && panel.caps.includes("paging")
-                spacing: Math.round(2 * panel.theme.scale)
-                Button {
-                    text: "◀"
-                    enabled: panel.hasPrev
-                    onClicked: panel.navigateRequested(-1)
-                }
-                Button {
-                    text: "▶"
-                    enabled: panel.hasNext
-                    onClicked: panel.navigateRequested(1)
-                }
+            Button {
+                text: "▶"
+                enabled: panel.hasNext
+                onClicked: panel.navigateRequested(1)
             }
         }
     }
@@ -171,6 +174,11 @@ Rectangle {
                 color: panel.theme.textOnSurface
                 font.family: panel.theme.fontFamily
                 font.pixelSize: panel.theme.fontSize
+                // 长候选省略截断（通配输入的份额×N 实测反馈）
+                elide: Text.ElideRight
+                maximumLineCount: 1
+                width: Math.min(implicitWidth,
+                                Math.round(280 * panel.theme.scale))
             }
             Text {
                 anchors.verticalCenter: parent.verticalCenter

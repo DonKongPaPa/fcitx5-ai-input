@@ -24,7 +24,8 @@ public:
     void setSender(Sender sender) { sender_ = std::move(sender); }
     bool ready() const { return static_cast<bool>(sender_); }
 
-    void theme(const std::string &fontPath, double size, double anim);
+    void theme(const std::string &fontPath, double size, double anim,
+               double scale);
     void voiceRecording(const std::string &partial, uint64_t elapsedMs,
                         double anim);
     void voiceResult(const std::string &finalText, int timeoutMs,

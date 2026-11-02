@@ -7,10 +7,12 @@
 
 namespace fcitx {
 
-void UiBus::theme(const std::string &fontPath, double size, double anim) {
+void UiBus::theme(const std::string &fontPath, double size, double anim,
+                  double scale) {
     std::ostringstream o;
     o << "{\"font_path\":\"" << flutterJsonEscape(fontPath)
-      << "\",\"font_size\":" << size << ",\"anim\":" << anim << "}";
+      << "\",\"font_size\":" << size << ",\"anim\":" << anim
+      << ",\"scale\":" << scale << "}";
     send("theme", o.str());
 }
 

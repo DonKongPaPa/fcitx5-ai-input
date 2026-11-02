@@ -146,6 +146,15 @@ try:
         "has_prev": False, "has_next": False, "page": 0,
         "im_name": "rime"})
     time.sleep(1.5)
+    # 超长 preedit（通配输入 份额×N 实测反馈）：宽度须封顶 640 折行
+    send("panel/update", {
+        "preedit": [{"text": "份额" * 40, "underline": True}],
+        "aux_up": "", "aux_down": "",
+        "candidates": [{"label": str(i + 1), "text": "份额" * 8}
+                       for i in range(5)],
+        "cursor": 0, "layout": "horizontal",
+        "has_prev": False, "has_next": True, "page": 0, "im_name": "rime"})
+    time.sleep(1.5)
 finally:
     rc = host.poll()
     if rc is None:
