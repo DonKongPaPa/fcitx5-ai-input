@@ -30,7 +30,9 @@ target_compile_definitions(aiinputui PRIVATE
     AIINPUT_VERSION_STRING="${PROJECT_VERSION}")
 
 find_package(Fcitx5ModuleWayland CONFIG REQUIRED)
-target_link_libraries(aiinputui PRIVATE Fcitx5::Module::Wayland)
+# tray 使能接管（classicui 挂起会 disable SNI，活跃 UI 补位使能）
+find_package(Fcitx5ModuleNotificationItem CONFIG REQUIRED)
+target_link_libraries(aiinputui PRIVATE Fcitx5::Module::Wayland Fcitx5::Module::NotificationItem)
 # XWayland 矩形换算：xcb 主显示判定（isXWayland）+ 独立 xcb 连接查
 # _NET_ACTIVE_WINDOW/WM_CLASS/输出区段（无 X 环境自动跳过）。
 # 坑：Fcitx5::Module::XCB 是 INTERFACE 目标只给头文件路径，libxcb

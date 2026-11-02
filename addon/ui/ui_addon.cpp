@@ -10,6 +10,8 @@
 
 #include <fcitx-config/iniparser.h>
 #include <fcitx-config/rawconfig.h>
+// Arch 的 Fcitx5ModuleNotificationItem config 将 include 根指向叶子目录
+#include <notificationitem_public.h>
 #include <fcitx-utils/standardpath.h>
 
 #include <time.h>
@@ -298,6 +300,17 @@ AiInputUi::AiInputUi(Instance *instance) : instance_(instance) {
             FCITX_INFO() << "AiInputUi: [policy-pull] engine=" << e;
             if (e) {
                 e->call<IAiInputEngine::syncUiPolicy>();
+            }
+            // tray 使能接管：本 addon 以 UIPriority 胜出后 classicui 被
+            // 管理器挂起，其 suspend() 会 disable SNI（fcitx5 托盘图标
+            // 从此消失——0.4.11 接管以来的回归）。notificationitem 模块
+            // 是独立实现（OnDemand），此处按需加载并使能，图标与菜单
+            // （IM 切换/配置）随模块回归
+            if (auto *ni = instance_->addonManager().addon("notificationitem",
+                                                           true)) {
+                ni->call<INotificationItem::enable>();
+                FCITX_INFO() << "AiInputUi: [tray] notificationitem enabled="
+                             << ni->call<INotificationItem::registered>();
             }
             return false; // 一次性
         });
