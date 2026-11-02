@@ -123,25 +123,28 @@ key i press\nkey i release\nsleep 350\n\
 key h press\nkey h release\nsleep 350\n\
 key a press\nkey a release\nsleep 350\n\
 key o press\nkey o release\nsleep 1500\n\
-rect 900 500 8 50\nsleep 1200\n\
-rect 200 850 8 50\nsleep 1200\n\
-rect 1300 300 8 50\nsleep 1200\n\
-sleep 3000\n' | timeout 26 "$DIST_BIN/ic-sim" 2>>"$LOG_DIR/ic-sim.err" ) &
+rect 30 92 8 20\nsleep 1300\n\
+rect 980 92 8 20\nsleep 1300\n\
+rect 900 500 8 50\nsleep 1300\n\
+rect 30 92 8 20\nsleep 1300\n\
+sleep 2400\n' | timeout 26 "$DIST_BIN/ic-sim" 2>>"$LOG_DIR/ic-sim.err" ) &
 IC_PID=$!
 
 # 时序对齐：rect+400ms press → 450ms 阈值 → recording（~t+2.5s 截语音帧）
 sleep 3
 shot "$OUT_DIR/${SHOT_PREFIX:-relay}-voice.png"
-# release→tail→asr final→Esc→pinyin 5 键（~t+9.5s 起候选）；~t+11/12.2/13.4
-# 三次 rect 重锚——t+11.2/12.4/13.6 各截一张
-sleep 5
-shot "$OUT_DIR/${SHOT_PREFIX:-relay}-panel-posA.png"
-sleep 1.2
-shot "$OUT_DIR/${SHOT_PREFIX:-relay}-panel-posB.png"
-sleep 1.2
-shot "$OUT_DIR/${SHOT_PREFIX:-relay}-panel-posC.png"
-sleep 1.2
-shot "$OUT_DIR/${SHOT_PREFIX:-relay}-panel-posD.png"
+# release→tail→asr final→Esc→pinyin 5 键（~t+9.5s 起候选）；候选起后四次
+# rect（窗1输入框 → 窗2输入框 → 窗口中腰反证点 → 回窗1输入框）——t+11.3/
+# 12.6/13.9/15.2 各截一张。输入框位 = 眼读可判"贴光标"；中腰点反证
+# 跟的是 caret 不是巧合
+sleep 5.5
+shot "$OUT_DIR/${SHOT_PREFIX:-relay}-panel-field1.png"
+sleep 1.3
+shot "$OUT_DIR/${SHOT_PREFIX:-relay}-panel-field2.png"
+sleep 1.3
+shot "$OUT_DIR/${SHOT_PREFIX:-relay}-panel-mid.png"
+sleep 1.3
+shot "$OUT_DIR/${SHOT_PREFIX:-relay}-panel-back.png"
 wait "$IC_PID" 2>/dev/null || true
 
 echo "== 4) 帧证据与异常扫描"
