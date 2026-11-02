@@ -49,6 +49,17 @@ Rectangle {
     }
     implicitWidth: Math.min(content.implicitWidth + 2 * pad, maxW)
     implicitHeight: content.implicitHeight + 2 * pad
+    property int repCount: 0
+    property int d0w: -1
+    property int d0h: -1
+    // 诊断探针（12x12 小点排查）：内容隐式尺寸与排列态
+    readonly property string debugState:
+        "shown=" + shown + " layoutMode=" + layoutMode
+        + " n=" + candidates.length + " ciw=" + content.implicitWidth
+        + " cih=" + content.implicitHeight
+        + " rep=" + repCount + " d0w=" + d0w + " d0h=" + d0h
+        + " font=" + theme.fontFamily + "/" + theme.fontSize
+        + "/scale=" + theme.scale + " maxW=" + maxW
     radius: theme.radius
     color: theme.surfaceContainer
     opacity: 0.97
@@ -131,6 +142,14 @@ Rectangle {
                     id: candRepeater
                     model: panel.candidates
                     delegate: PanelCand {}
+                    onItemAdded: (item, index) => {
+                        if (index === 0) {
+                            panel.repCount = count
+                            panel.d0w = item.width
+                            panel.d0h = item.height
+                        }
+                    }
+                    onCountChanged: panel.repCount = count
                 }
             }
         }

@@ -389,8 +389,12 @@ int main(int argc, char **argv) {
             retry.start();
             return;
         }
-        std::fprintf(stderr, "CARD-HOST: frame %dx%d %uB\n", img.width(),
-                     img.height(), su);
+        std::fprintf(stderr,
+                     "CARD-HOST: frame %dx%d %uB (root=%gx%g) %s\n",
+                     img.width(), img.height(), su,
+                     static_cast<double>(rootItem->width()),
+                     static_cast<double>(rootItem->height()),
+                     qPrintable(rootItem->property("debugState").toString()));
     });
 
     tryConnect();

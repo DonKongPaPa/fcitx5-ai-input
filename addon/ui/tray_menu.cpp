@@ -9,6 +9,7 @@
 #include <dbus_public.h> // Arch Fcitx5ModuleDBus config 根=叶子目录
 
 #include <algorithm>
+#include <chrono>
 #include <fstream>
 
 namespace fcitx {
@@ -31,6 +32,10 @@ constexpr int32_t kItemIdUi = 3;
 } // namespace
 
 AiInputTray::AiInputTray(AiInputUi *ui) : ui_(ui) {
+    const auto nowUs = [] { return static_cast<uint64_t>(
+        std::chrono::duration_cast<std::chrono::microseconds>(
+            std::chrono::steady_clock::now().time_since_epoch())
+            .count()); };
     try {
         auto *dbusMod = ui->instance()->addonManager().addon("dbus", true);
         if (!dbusMod) {
@@ -41,13 +46,23 @@ AiInputTray::AiInputTray(AiInputUi *ui) : ui_(ui) {
         if (!bus) {
             return;
         }
-        watcher_ = std::make_unique<dbus::ServiceWatcher>(*bus);
         sni_ = std::make_unique<AiTraySNI>(ui);
         menu_ = std::make_unique<AiInputMenu>(ui);
-        watcherEntry_ = watcher_->watchService(
-            kWatcherName,
-            [this](const std::string &, const std::string &,
-                   const std::string &newName) { setServiceName(newName); });
+        privateBus_ = std::make_unique<dbus::Bus>(bus->address());
+        privateBus_->attachEventLoop(&ui->instance()->eventLoop());
+        privateBus_->addObjectVTable(kSniObj, kSniIface, *sni_);
+        privateBus_->addObjectVTable(kMenuObj, kMenuIface, *menu_);
+        // watcher 服务的存在性不探活：直接注册，失败由重试定时器兜底
+        // （定时器挂实例事件循环——私有 Bus 已 attach 同一循环）
+        retryTimer_ = ui_->instance()->eventLoop().addTimeEvent(
+            CLOCK_MONOTONIC, nowUs() + 2000000, 2000000,
+            [this](EventSourceTime *, uint64_t) {
+                if (!registered_) {
+                    registerSNI();
+                }
+                return !registered_; // 注册成功后停
+            });
+        FCITX_INFO() << "AiInputTray: 已初始化（注册重试 2s 周期）";
     } catch (const std::exception &e) {
         FCITX_WARN() << "AiInputTray: 初始化失败 " << e.what();
     }
@@ -55,46 +70,19 @@ AiInputTray::AiInputTray(AiInputUi *ui) : ui_(ui) {
 
 AiInputTray::~AiInputTray() = default;
 
-void AiInputTray::setServiceName(const std::string &name) {
-    sniWatcherName_ = name;
-    registered_ = false;
-    if (!sniWatcherName_.empty()) {
-        registerSNI();
-    }
-}
-
 void AiInputTray::registerSNI() {
-    if (sniWatcherName_.empty() || registered_ || !sni_ || !menu_) {
+    if (registered_ || !privateBus_ || !sni_ || !menu_) {
         return;
     }
-    registered_ = false;
-    try {
-        auto *dbusMod = ui_->instance()->addonManager().addon("dbus", true);
-        if (!dbusMod) {
-            return;
-        }
-        auto *bus = dbusMod->call<IDBusModule::bus>();
-        if (!bus) {
-            return;
-        }
-        privateBus_ = std::make_unique<dbus::Bus>(bus->address());
-    } catch (...) {
-        registered_ = false;
-        return;
-    }
-    privateBus_->attachEventLoop(&ui_->instance()->eventLoop());
-    // 对象先挂后注册（SNI 惯例：watcher 注册即回读）
-    privateBus_->addObjectVTable(kSniObj, kSniIface, *sni_);
-    privateBus_->addObjectVTable(kMenuObj, kMenuIface, *menu_);
     auto call = privateBus_->createMethodCall(
-        sniWatcherName_.c_str(), kWatcherObj, kWatcherIface,
+        kWatcherName, kWatcherObj, kWatcherIface,
         "RegisterStatusNotifierItem");
     call << privateBus_->uniqueName();
     pendingRegisterCall_ = call.callAsync(0, [this](dbus::Message &msg) {
         std::unique_ptr<dbus::Slot> call = std::move(pendingRegisterCall_);
         registered_ = !msg.isError();
         FCITX_INFO() << "AiInputTray: SNI 注册 "
-                     << (registered_ ? "成功" : "失败");
+                     << (registered_ ? "成功" : "失败（等待重试）");
         return true;
     });
     privateBus_->flush();

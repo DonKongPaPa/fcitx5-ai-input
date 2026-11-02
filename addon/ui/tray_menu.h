@@ -9,7 +9,6 @@
 #include <fcitx-utils/dbus/bus.h>
 #include <fcitx-utils/dbus/message.h>
 #include <fcitx-utils/dbus/objectvtable.h>
-#include <fcitx-utils/dbus/servicewatcher.h>
 #include <fcitx-utils/dbus/variant.h>
 #include <fcitx-utils/event.h>
 
@@ -147,17 +146,14 @@ public:
     ~AiInputTray();
 
 private:
-    void setServiceName(const std::string &name);
     void registerSNI();
 
     AiInputUi *ui_;
-    std::unique_ptr<dbus::ServiceWatcher> watcher_;
-    std::unique_ptr<dbus::ServiceWatcherEntry> watcherEntry_;
     std::unique_ptr<dbus::Bus> privateBus_;
     std::unique_ptr<AiTraySNI> sni_;
     std::unique_ptr<AiInputMenu> menu_;
     std::unique_ptr<dbus::Slot> pendingRegisterCall_;
-    std::string sniWatcherName_;
+    std::unique_ptr<EventSourceTime> retryTimer_;
     bool registered_ = false;
 };
 

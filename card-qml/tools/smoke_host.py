@@ -104,9 +104,15 @@ env = os.environ.copy()
 env["AIINPUT_CARD_SOCK"] = args.sock
 env.pop("AIINPUT_HOST_RENDER", None)
 import subprocess
+import shutil
+qml_src = "/work/card-qml"
+host_bin = "/usr/lib/fcitx5/aiinput-card-host"
+if os.path.exists(host_bin):
+    # 宿主本地复测：安装版二进制 + 安装版 QML
+    qml_src = "/usr/share/fcitx5-aiinput/card-qml"
 host = subprocess.Popen(
-    ["/work/artifacts/dist/lib/fcitx5/aiinput-card-host",
-     "--qml-dir", "/work/card-qml"],
+    [host_bin if os.path.exists(host_bin) else "/work/artifacts/dist/lib/fcitx5/aiinput-card-host",
+     "--qml-dir", qml_src],
     env=env, stderr=subprocess.PIPE)
 try:
     # 等 ready（控制通道连通 + 场景装载完成的信号）
@@ -116,7 +122,15 @@ try:
         time.sleep(0.1)
     print("READY:", got["ready"])
 
+    themed = [False]
+
     def send(method, a):
+        if method != "ready" and not themed[0]:
+            themed[0] = True
+            send("theme", {"font_path": "/usr/share/fonts/TTF/MiSans VF.ttf",
+                           "font_family": "MiSans VF", "font_size": 12,
+                           "anim": 1.0, "scale": 1.0})
+            time.sleep(0.5)
         line = json.dumps({"v": 1, "channel": "ui", "dir": "out",
                            "method": method, "seq": 1, "args": a})
         ctrl_sock[0].sendall((line + "\n").encode())
@@ -145,6 +159,18 @@ try:
         "cursor": 0, "layout": "vertical",
         "has_prev": False, "has_next": False, "page": 0,
         "im_name": "rime"})
+    for i in range(8):
+        send("panel/update", {
+            "preedit": [{"text": "ni hao", "underline": False}],
+            "aux_up": "", "aux_down": "",
+            "candidates": [{"label": "1 ", "text": "你好"},
+                           {"label": "2 ", "text": "拟好"},
+                           {"label": "3 ", "text": "你"},
+                           {"label": "4 ", "text": "尼"},
+                           {"label": "5 ", "text": "逆"}],
+            "cursor": 0, "layout": "horizontal",
+            "has_prev": False, "has_next": True, "page": 0, "im_name": "rime"})
+        time.sleep(0.4)
     time.sleep(1.5)
     # 超长 preedit（通配输入 份额×N 实测反馈）：宽度须封顶 640 折行
     send("panel/update", {
@@ -152,6 +178,19 @@ try:
         "aux_up": "", "aux_down": "",
         "candidates": [{"label": str(i + 1), "text": "份额" * 8}
                        for i in range(5)],
+        "cursor": 0, "layout": "horizontal",
+        "has_prev": False, "has_next": True, "page": 0, "im_name": "rime"})
+    time.sleep(1.5)
+    # 宿主精确数据复现（label 尾空格；rime hint 布局）
+    send("hello", {"caps": []})
+    send("panel/update", {
+        "preedit": [],
+        "aux_up": "", "aux_down": "",
+        "candidates": [{"label": "1 ", "text": "候选"},
+                       {"label": "2 ", "text": "后续"},
+                       {"label": "3 ", "text": "后序"},
+                       {"label": "4 ", "text": "后"},
+                       {"label": "5 ", "text": "候"}],
         "cursor": 0, "layout": "horizontal",
         "has_prev": False, "has_next": True, "page": 0, "im_name": "rime"})
     time.sleep(1.5)

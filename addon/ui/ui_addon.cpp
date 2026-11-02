@@ -467,7 +467,8 @@ void AiInputUi::update(UserInterfaceComponent component,
 
     // 面板数据落地日志（rime 预编辑为空的取证：classicui 有而本面板无时
     // 对比此行即可定位丢在前端翻译还是渲染）
-    FCITX_INFO() << "AiInputUi: [panel-data] preedit=" << preedit
+    FCITX_INFO() << "AiInputUi: [panel-data] layout=" << layout
+                 << " preedit=" << preedit
                  << " auxUp=" << auxUp << " auxDown=" << auxDown
                  << " cands=" << cands.substr(0, 160);
 

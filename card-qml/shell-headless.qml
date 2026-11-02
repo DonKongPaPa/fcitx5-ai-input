@@ -13,6 +13,10 @@ Item {
     // 宿主 C++ 注入上下文属性 Host：
     //   sendEnvelope(method, args) —— 控制通道回写（ready/select/hover/…）
     //   requestFrame()             —— 请求渲染一帧（宿主持有节流与合并）
+    // 诊断探针：C++ 渲染泵按 property("debugState") 读出随帧落日志
+    readonly property string debugState:
+        "shown=" + panel.shown + " layout=" + panel.layoutMode
+        + " n=" + panel.candidates.length + " | " + panel.debugState
     // theme{font_path} 的加载源（FontLoader 异步，失败回落系统默认）
     property string fontPath: ""
 
@@ -104,15 +108,24 @@ Item {
                 themeObj.anim = args.anim
             break
         case "voice/recording":
+            if (panel.shown) {
+                panel.hidePanel()
+            }
             card.showRecording(args.partial === undefined ? "" : args.partial,
                                args.elapsed_ms === undefined
                                    ? 0 : args.elapsed_ms)
             break
         case "voice/result":
+            if (panel.shown) {
+                panel.hidePanel()
+            }
             card.showResult(args.final === undefined ? "" : args.final,
                             args.timeout_ms === undefined ? 0 : args.timeout_ms)
             break
         case "voice/candidates":
+            if (panel.shown) {
+                panel.hidePanel()
+            }
             card.showCandidates(args.final === undefined ? "" : args.final,
                                 args.candidates === undefined
                                     ? [] : args.candidates,
