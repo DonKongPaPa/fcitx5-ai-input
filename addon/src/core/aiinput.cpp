@@ -744,7 +744,7 @@ void AiInputEngine::sendFontToUi() {
             if (json.length() > 4) {
                 uiBus_.theme(jsonStrField(json, "path"),
                              jsonNumField(json, "size"),
-                             animScaleOf(config_), config_.uiScale.value());
+                             animScaleOf(config_), config_.uiScale.value() / 100.0);
                 FCITX_INFO() << "AiInput: UI 字体 → " << json;
             }
             return true;

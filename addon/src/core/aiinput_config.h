@@ -35,6 +35,9 @@ FCITX_CONFIG_ENUM_I18N_ANNOTATION(FunASRQuantKind, "None", "Int8");
 // 消息下发 Dart，configtool 热改即时生效）
 FCITX_CONFIG_ENUM(UiAnimSpeedKind, Slow, Normal, Fast);
 FCITX_CONFIG_ENUM_I18N_ANNOTATION(UiAnimSpeedKind, "Slow", "Normal", "Fast");
+// 拼音候选面板排列：Auto=跟随输入法布局提示，Horizontal/Vertical 钉死
+FCITX_CONFIG_ENUM(PanelLayoutKind, Auto, Horizontal, Vertical);
+FCITX_CONFIG_ENUM_I18N_ANNOTATION(PanelLayoutKind, "Auto", "Horizontal", "Vertical");
 
 // LLM 引擎：Off=关闭（结果单行直接展示自动上屏）；Dummy=规则占位
 //（句末补标点，双行候选）；Stdio=v1 协议进程外后端（refine/request →
@@ -106,13 +109,10 @@ FCITX_CONFIGURATION(
         ""};
 
     // UI 全局缩放：卡片全部字号/间距的倍率（独立于字体的整体大小旋钮；
-    // QML 卡与 Flutter 卡共用）
-    Option<double> uiScale{this, "UiScale", "卡片全局缩放（1.0 = 原始尺寸）",
-                           1.0};
+    // QML 卡与 Flutter 卡共用）。整数百分比（fcitx-config 无 double 通道）
+    Option<int> uiScale{this, "UiScale", "卡片全局缩放（百分比，100 = 原始尺寸）",
+                        100};
 
-    // 拼音候选面板排列：Auto=跟随输入法布局提示，Horizontal/Vertical 钉死
-    FCITX_CONFIG_ENUM(PanelLayoutKind, Auto, Horizontal, Vertical);
-    FCITX_CONFIG_ENUM_I18N_ANNOTATION(PanelLayoutKind, "自动", "横向", "纵向");
     Option<PanelLayoutKind, NoConstrain<PanelLayoutKind>, DefaultMarshaller<PanelLayoutKind>, PanelLayoutKindI18NAnnotation> panelLayout{
         this, "PanelLayout", "候选面板排列方式", PanelLayoutKind::Auto};
 
