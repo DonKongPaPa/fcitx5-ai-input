@@ -118,6 +118,20 @@ AiInputUi::AiInputUi(Instance *instance) : instance_(instance) {
                                         static_cast<double>(x),
                                         static_cast<double>(y));
                 }
+                // relay 指针回传：卡片宿主把事件合成 Qt 鼠标进 QML 场景，
+                // 候选 hover/点击选择经既有 select/hover 回流（坐标 =
+                // 表面逻辑坐标，输出 scale=1 下与帧像素 1:1）
+                if (socketUi_) {
+                    static constexpr const char *kinds[] = {
+                        "enter", "leave", "motion", "press", "release",
+                    };
+                    socketUi_->sendEnvelope(
+                        "panel/pointer",
+                        std::string("{\"kind\":\"") +
+                            kinds[static_cast<int>(kind)] +
+                            "\",\"x\":" + std::to_string(x) +
+                            ",\"y\":" + std::to_string(y) + "}");
+                }
             });
         // 尺寸/scale 统筹：Dart 逻辑尺寸 → popup 物理池+viewport +
         // 引擎 metrics（pixelRatio=真实 scale → 渲染物理帧，无拉伸模糊）
@@ -423,6 +437,12 @@ void AiInputUi::update(UserInterfaceComponent component,
         }
     }
     cands = "[" + cands + "]";
+
+    // 面板数据落地日志（rime 预编辑为空的取证：classicui 有而本面板无时
+    // 对比此行即可定位丢在前端翻译还是渲染）
+    FCITX_INFO() << "AiInputUi: [panel-data] preedit=" << preedit
+                 << " auxUp=" << auxUp << " auxDown=" << auxDown
+                 << " cands=" << cands.substr(0, 160);
 
     bool hasPrev = false, hasNext = false;
     if (list) {

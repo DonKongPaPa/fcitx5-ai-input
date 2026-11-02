@@ -32,8 +32,9 @@ Rectangle {
     signal hoverRequested(int row)
     signal navigateRequested(int delta)
 
-    readonly property int pad: Math.round(10 * theme.scale)
-    implicitWidth: Math.round(720 * theme.scale)
+    readonly property int pad: Math.round(6 * theme.scale)
+    // 宽度随内容（classicui 同款；720 定宽在短候选页留白过大——实测反馈）
+    implicitWidth: content.implicitWidth + 2 * pad
     implicitHeight: content.implicitHeight + 2 * pad
     radius: theme.radius
     color: theme.surfaceContainer
@@ -57,38 +58,6 @@ Rectangle {
         anchors.margins: panel.pad
         spacing: Math.round(6 * panel.theme.scale)
 
-        Row {
-            spacing: Math.round(8 * panel.theme.scale)
-            Text {
-                anchors.verticalCenter: parent.verticalCenter
-                text: panel.imName
-                color: panel.theme.textOnSurfaceVariant
-                font.family: panel.theme.fontFamily
-                font.pixelSize: panel.theme.fontSize - 2
-            }
-            Text {
-                anchors.verticalCenter: parent.verticalCenter
-                text: "第 " + (panel.page + 1) + " 页"
-                color: panel.theme.textOnSurfaceVariant
-                font.family: panel.theme.fontFamily
-                font.pixelSize: panel.theme.fontSize - 2
-            }
-            Button {
-                anchors.verticalCenter: parent.verticalCenter
-                visible: panel.caps.includes("paging")
-                text: "◀"
-                enabled: panel.hasPrev
-                onClicked: panel.navigateRequested(-1)
-            }
-            Button {
-                anchors.verticalCenter: parent.verticalCenter
-                visible: panel.caps.includes("paging")
-                text: "▶"
-                enabled: panel.hasNext
-                onClicked: panel.navigateRequested(1)
-            }
-        }
-
         Text {
             visible: panel.auxUp !== ""
             text: panel.auxUp
@@ -97,6 +66,7 @@ Rectangle {
             font.pixelSize: panel.theme.fontSize
         }
 
+        // classicui 布局：auxUp → 预编辑（突出）→ auxDown → 候选（翻页内联）
         Row {
             spacing: 0
             Repeater {
@@ -128,23 +98,45 @@ Rectangle {
             font.pixelSize: panel.theme.fontSize
         }
 
-        Flow {
-            width: parent.width
-            visible: panel.layoutMode === "horizontal"
+        Row {
             spacing: Math.round(6 * panel.theme.scale)
-            Repeater {
-                model: panel.candidates
-                delegate: PanelCand {}
-            }
-        }
 
-        Column {
-            width: parent.width
-            visible: panel.layoutMode === "vertical"
-            spacing: Math.round(2 * panel.theme.scale)
-            Repeater {
-                model: panel.candidates
-                delegate: PanelCand {}
+            Flow {
+                width: implicitWidth
+                visible: panel.layoutMode === "horizontal"
+                spacing: Math.round(4 * panel.theme.scale)
+                Repeater {
+                    model: panel.candidates
+                    delegate: PanelCand {}
+                }
+            }
+
+            Column {
+                width: implicitWidth
+                visible: panel.layoutMode === "vertical"
+                spacing: Math.round(2 * panel.theme.scale)
+                Repeater {
+                    model: panel.candidates
+                    delegate: PanelCand {}
+                }
+            }
+
+            // 翻页内联候选行尾（classicui 同位；仅 caps 协商到 paging 时出现）
+            Row {
+                anchors.verticalCenter: parent.verticalCenter
+                visible: panel.layoutMode === "horizontal"
+                         && panel.caps.includes("paging")
+                spacing: Math.round(2 * panel.theme.scale)
+                Button {
+                    text: "◀"
+                    enabled: panel.hasPrev
+                    onClicked: panel.navigateRequested(-1)
+                }
+                Button {
+                    text: "▶"
+                    enabled: panel.hasNext
+                    onClicked: panel.navigateRequested(1)
+                }
             }
         }
     }
@@ -156,9 +148,9 @@ Rectangle {
         // 行号 = 页内索引 = select{index} / hover{row} 的行号
         readonly property bool active: candArea.containsMouse
                                        || panel.cursor === index
-        width: candRow.implicitWidth + Math.round(16 * panel.theme.scale)
-        height: candRow.implicitHeight + Math.round(8 * panel.theme.scale)
-        radius: Math.round(6 * panel.theme.scale)
+        width: candRow.implicitWidth + Math.round(10 * panel.theme.scale)
+        height: candRow.implicitHeight + Math.round(5 * panel.theme.scale)
+        radius: Math.round(5 * panel.theme.scale)
         color: active ? panel.theme.surfaceVariant : "transparent"
         border.width: panel.cursor === index ? 1 : 0
         border.color: panel.theme.primary

@@ -23,7 +23,9 @@
 // 帧格式（帧通道）：FRM u32le w u32le h u32le size '\n' BGRA8888 预乘。
 
 #include <QGuiApplication>
+#include <QCoreApplication>
 #include <QImage>
+#include <QMouseEvent>
 #include <QJsonDocument>
 #include <QJsonObject>
 #include <QQuickItem>
@@ -170,6 +172,8 @@ int main(int argc, char **argv) {
 
     QQuickRenderControl renderControl;
     QQuickWindow window(&renderControl); // 永 map：离屏渲染无平台窗口
+    // 窗口底色必须透明（默认白）：Card/Panel 圆角外的四角露出的是这层
+    window.setColor(Qt::transparent);
     QQmlEngine qmlEngine;
     HostBridge hostBridge;
     qmlEngine.rootContext()->setContextProperty(QStringLiteral("Host"),
@@ -223,6 +227,48 @@ int main(int argc, char **argv) {
         }
     };
 
+    // panel/pointer：popup 表面指针 → 合成 Qt 鼠标事件进场景（relay 候选
+    // hover/点击选择；QML 侧 Panel/Card 的 MouseArea 与 select/hover 回流
+    // 本来就在，缺的只是事件注入）。坐标 = 表面逻辑坐标，scale=1 与帧像
+    // 素 1:1
+    auto handlePointerLine = [&window](const QByteArray &line) -> bool {
+        if (line.size() < 2 || line.front() != '{') {
+            return false;
+        }
+        QJsonParseError perr{};
+        const auto doc = QJsonDocument::fromJson(line, &perr);
+        if (perr.error != QJsonParseError::NoError || !doc.isObject()) {
+            return false;
+        }
+        const auto obj = doc.object();
+        if (obj[QLatin1String("method")].toString() !=
+            QLatin1String("panel/pointer")) {
+            return false;
+        }
+        const auto a = obj[QLatin1String("args")].toObject();
+        const QString kind = a[QLatin1String("kind")].toString();
+        const QPointF pos(a[QLatin1String("x")].toDouble(),
+                          a[QLatin1String("y")].toDouble());
+        QEvent::Type type = QEvent::None;
+        Qt::MouseButton button = Qt::NoButton;
+        Qt::MouseButtons buttons = Qt::NoButton;
+        if (kind == QLatin1String("motion")) {
+            type = QEvent::MouseMove;
+        } else if (kind == QLatin1String("press")) {
+            type = QEvent::MouseButtonPress;
+            button = Qt::LeftButton;
+            buttons = Qt::LeftButton;
+        } else if (kind == QLatin1String("release")) {
+            type = QEvent::MouseButtonRelease;
+            button = Qt::LeftButton;
+        } else {
+            return true; // enter/leave：Qt 由 move 自合成
+        }
+        QMouseEvent ev(type, pos, pos, button, buttons, Qt::NoModifier);
+        QCoreApplication::sendEvent(&window, &ev);
+        return true;
+    };
+
     auto onCtrlReadable = [&]() {
         char chunk[4096];
         for (;;) {
@@ -234,6 +280,9 @@ int main(int argc, char **argv) {
                     QByteArray line = ctrlBuf.left(pos);
                     ctrlBuf.remove(0, pos + 1);
                     if (line.trimmed().isEmpty()) {
+                        continue;
+                    }
+                    if (handlePointerLine(line)) {
                         continue;
                     }
                     QMetaObject::invokeMethod(rootItem, "handleLine",
