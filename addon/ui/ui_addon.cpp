@@ -438,12 +438,6 @@ void AiInputUi::update(UserInterfaceComponent component,
     }
     cands = "[" + cands + "]";
 
-    // 面板数据落地日志（rime 预编辑为空的取证：classicui 有而本面板无时
-    // 对比此行即可定位丢在前端翻译还是渲染）
-    FCITX_INFO() << "AiInputUi: [panel-data] preedit=" << preedit
-                 << " auxUp=" << auxUp << " auxDown=" << auxDown
-                 << " cands=" << cands.substr(0, 160);
-
     bool hasPrev = false, hasNext = false;
     if (list) {
         if (auto *pageable = list->toPageable()) {
@@ -461,6 +455,12 @@ void AiInputUi::update(UserInterfaceComponent component,
     auto auxUp = panel.auxUp().toString();
     auto auxDown = panel.auxDown().toString();
     auto imName = instance_->currentInputMethod();
+
+    // 面板数据落地日志（rime 预编辑为空的取证：classicui 有而本面板无时
+    // 对比此行即可定位丢在前端翻译还是渲染）
+    FCITX_INFO() << "AiInputUi: [panel-data] preedit=" << preedit
+                 << " auxUp=" << auxUp << " auxDown=" << auxDown
+                 << " cands=" << cands.substr(0, 160);
 
     uiBus_.panelUpdate(preedit, auxUp, auxDown, cands, cursor, layout,
                        hasPrev, hasNext, 0, imName);
