@@ -15,6 +15,8 @@
 #include <time.h>
 #include <unistd.h>
 
+#include <dlfcn.h>
+
 #include <fstream>
 #include <iterator>
 
@@ -214,11 +216,33 @@ AiInputUi::AiInputUi(Instance *instance) : instance_(instance) {
                 // relay 模式（纯 QML 档）默认离屏渲染宿主——quickshell 的
                 // grab 管线依赖合成器 expose，invisible 窗口回调丢失（
                 // wip/qml-frame-relay 存档）；direct 模式（双卡对比）仍
-                // quickshell 直显。宿主/QML 路径编译期注入（跨发行版
-                // libdir：Arch=lib、Debian=lib/<triplet>）
-                cmd = !flutterCard_
-                          ? AIINPUT_CARD_HOST_PATH " --qml-dir " AIINPUT_CARD_QML_DIR
-                          : "qs -p /usr/share/fcitx5-aiinput/card-qml";
+                // quickshell 直显。宿主与本 .so 同目录（install 规则同往
+                // libdir/fcitx5），/proc/self/exe 自定位 = 任意 install
+                // 前缀/容器挂载都成立（编译期烤 CMAKE_INSTALL_PREFIX 会
+                // 在非 /usr 构建里指回构建机路径——容器 relayhost13 实锤）
+                if (!flutterCard_) {
+                    // dladdr 取本 .so 路径（/proc/self/exe 是 fcitx5 主程
+                    // 序，不是本库——容器 relayhost14 实锤 /usr/bin 误指）
+                    Dl_info info{};
+                    if (dladdr(reinterpret_cast<void *>(&AiInputUi::engine),
+                               &info) &&
+                        info.dli_fname) {
+                        std::string dir(info.dli_fname);
+                        auto slash = dir.rfind('/');
+                        if (slash != std::string::npos) {
+                            dir.resize(slash);
+                            cmd = dir + "/aiinput-card-host --qml-dir " +
+                                  dir + "/../../share/fcitx5-aiinput/card-qml";
+                        }
+                    }
+                    if (cmd.empty()) {
+                        // dladdr 失效的兜底（/usr 前缀安装时即正确值）
+                        cmd = AIINPUT_CARD_HOST_PATH " --qml-dir "
+                              AIINPUT_CARD_QML_DIR;
+                    }
+                } else {
+                    cmd = "qs -p /usr/share/fcitx5-aiinput/card-qml";
+                }
             }
             socketUi_ = std::make_unique<SocketUi>(
                 instance_, sock, cmd, !flutterCard_,
@@ -261,6 +285,24 @@ AiInputUi::AiInputUi(Instance *instance) : instance_(instance) {
                     handleFrameBgra(w, h, data, len);
                 });
         }
+    }
+
+    // 定位策略拉取：引擎构造期推送在本 addon 加载前发生（实测竞态 2.3ms
+    // 差，推送静默丢弃）→ dbusFollow 停默认 false、D-Bus 前端应用跟随全
+    // 灭。构造期直接查引擎实测拿不到（addon 装载阶段内查询不可靠），挪
+    // 到事件循环首拍；引擎缺席 = 引擎稍后 reloadConfig 补发
+    policyPullTimer_ = instance_->eventLoop().addTimeEvent(
+        CLOCK_MONOTONIC, nowUs() + 100000, 0,
+        [this](EventSourceTime *, uint64_t) {
+            auto *e = engine();
+            FCITX_INFO() << "AiInputUi: [policy-pull] engine=" << e;
+            if (e) {
+                e->call<IAiInputEngine::syncUiPolicy>();
+            }
+            return false; // 一次性
+        });
+    if (policyPullTimer_) {
+        policyPullTimer_->setOneShot();
     }
 
     FCITX_INFO() << "AiInputUi: UI addon loaded";
@@ -451,7 +493,11 @@ void AiInputUi::uiHide() {
 
 void AiInputUi::uiSetPolicy(std::string mode, std::string fallbackApps,
                             bool dbusFollow) {
-    // 定位策略热更新（引擎 reloadConfig/setConfig 后下发）
+    // 定位策略热更新（引擎 reloadConfig/setConfig 后下发；syncUiPolicy 拉
+    // 取同款）。带值日志：加载竞态是否修复的判定锚点
+    FCITX_INFO() << "AiInputUi: [policy] mode=" << mode
+                 << " fallbackApps=" << fallbackApps
+                 << " dbusFollow=" << dbusFollow;
     if (popup_) {
         popup_->setPositionPolicy(mode, fallbackApps);
         popup_->setDbusFollow(dbusFollow);

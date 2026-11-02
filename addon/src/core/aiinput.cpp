@@ -775,6 +775,16 @@ void AiInputEngine::sendFontToUi() {
     }).detach();
 }
 
+// 定位策略重推（UI addon 加载完拉取）：构造期推送因加载顺序竞态不可靠
+//（引擎先于 aiinput-ui 加载时 ui() 为空、推送静默丢弃）
+void AiInputEngine::syncUiPolicy() {
+    if (auto *u = ui()) {
+        u->call<IAiInputUi::uiSetPolicy>(
+            config_.positionMode.value(), config_.positionFallbackApps.value(),
+            config_.dbusPosition.value() == "follow");
+    }
+}
+
 // —— Dart 命令回流（UI addon 经 IAiInputEngine::uiCommand 调入）——
 // resize 与 select{panel:true} 由 UI addon 本地处理，不到这里；
 // 到这的只有 select（语音候选）/hover/ready

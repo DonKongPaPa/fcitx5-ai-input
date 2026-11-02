@@ -496,6 +496,16 @@ VoicePopup::VoicePopup(Instance *instance) : instance_(instance) {
                               bcr.height());
             }
             std::lock_guard<std::mutex> lock(mutex_);
+            // 门条件日志：非零矩形且重锚未生效时的判定现场（贴光标锚定
+            // 日志只记落点变化，门没过时这里是唯一证据）
+            if (bcr.height() > 0 && !(dbusFollow_ && overlayFallback_ &&
+                                      ic == icRef_.get() && layerSurface_)) {
+                FCITX_INFO() << "VoicePopup: [rect-watch] 未重锚 dbusFollow_="
+                             << dbusFollow_ << " overlay=" << overlayFallback_
+                             << " icMatch=" << (ic == icRef_.get())
+                             << " layer=" << (layerSurface_ != nullptr)
+                             << " x11=" << x11Mode_;
+            }
             if (dbusFollow_ && overlayFallback_ && ic == icRef_.get()) {
                 if (!x11Mode_) {
                     // 首次 FocusIn 时 program 未到（空串）会先落 layer：

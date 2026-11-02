@@ -102,6 +102,7 @@ private:
     TrackableObjectReference<InputContext> panelIcRef_;
     std::unique_ptr<FlutterEngineHost> flutter_;
     std::unique_ptr<EventSourceTime> warmupTimer_; // 加载后预热引擎+popup
+    std::unique_ptr<EventSourceTime> policyPullTimer_; // 加载后拉定位策略
     std::unique_ptr<EventSourceTime> metricsTimer_;
     int pendingMW_ = 64, pendingMH_ = 64;
 };

@@ -17,16 +17,11 @@ call() { timeout 30 gdbus call --session --dest org.fcitx.Fcitx5 \
 shot() { WAYLAND_DISPLAY="$CAGE_SOCK" timeout 10 grim "$1" 2>/dev/null || true; }
 
 echo "== 0) 写纯 QML relay 配置并重启 fcitx5"
+# testapp 必须走原生 text-input-v3（waylandim 前端）；IM 模块变量会把
+# testapp 拉去 D-Bus 前端（case-driver 同款纪律）
+unset GTK_IM_MODULE QT_IM_MODULE SDL_IM_MODULE XMODIFIERS
 mkdir -p "$HOME/.config/fcitx5/conf"
 printf 'FlutterCard=False\nQmlCard=True\n' > "$HOME/.config/fcitx5/conf/aiinput.config"
-# socket 文件存在性轮询（忙轮询：bind 后文件哪怕存在 1μs 也会被抓到）
-( T0=$(date +%s)
-  while [ $(( $(date +%s) - T0 )) -lt 45 ]; do
-      if [ -e /run/user/1000/aiinput-card.sock ]; then
-          echo "$(date +%T.%3N) EXISTS"
-      fi
-  done ) >"$OUT_DIR/sock-poll.log" 2>&1 &
-POLL_PID=$!
 pkill -x fcitx5 2>/dev/null || true
 sleep 1
 # STRACE_FCHEB（诊断轮可选）：罩住 fcitx5 重启，抓 socket 路径的 unlink 凶手
@@ -157,4 +152,3 @@ echo "-- 存活："
 call State || true
 # RELAY_HOLD：活体诊断窗口（诊断场景保持合成器/fcitx5 不退场）
 sleep "${RELAY_HOLD:-0}"
-kill "$POLL_PID" 2>/dev/null || true

@@ -102,6 +102,9 @@ public:
     // 时拼音面板不覆盖语音卡片
     bool voiceSessionActive() { return state_ != State::Idle; }
     FCITX_ADDON_EXPORT_FUNCTION(AiInputEngine, voiceSessionActive);
+    // 定位策略重推（ui addon 加载完拉取；构造期推送因加载顺序竞态不可靠）
+    void syncUiPolicy();
+    FCITX_ADDON_EXPORT_FUNCTION(AiInputEngine, syncUiPolicy);
 
     // configtool 设置页：Configuration 自动生成 UI。注意保存链路是
     // D-Bus SetConfig → setConfig()（基类默认 no-op，不实现则 configtool

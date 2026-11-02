@@ -57,5 +57,10 @@ FCITX_ADDON_DECLARE_FUNCTION(AiInputEngine, uiCommand,
 // update() 让位判定：语音会话（Recording/Result/Candidates）活跃时
 // 拼音面板不覆盖语音卡片
 FCITX_ADDON_DECLARE_FUNCTION(AiInputEngine, voiceSessionActive, bool());
+// 定位策略重推（uiSetPolicy）：M1 拆分后引擎构造先于 UI addon 加载
+//（实测 2.3ms 差），构造期推送被静默丢弃 → popup 的 dbusFollow 停在
+// 默认 false、D-Bus 前端应用（DMS/WPS）近似跟随全灭。UI addon 加载完
+// 主动拉取一次，消除对加载顺序的依赖
+FCITX_ADDON_DECLARE_FUNCTION(AiInputEngine, syncUiPolicy, void());
 
 #endif // _FCITX5_AIINPUT_HUB_UI_SPLIT_IFACE_H_
