@@ -22,6 +22,7 @@ namespace fcitx {
 
 class VoicePopup;
 class FlutterEngineHost;
+class AiInputTray; // addon/ui/tray_menu.h（本类成员，析构在 cpp 全类型处）
 
 /**
  * aiinput-ui：语音卡片的 UI addon（Category=UI，UserInterface 实现）。
@@ -105,6 +106,20 @@ private:
     std::shared_ptr<CandidateList> panelCandidates_;
     TrackableObjectReference<InputContext> panelIcRef_;
     std::string panelLayout_ = "auto"; // PanelLayout 钉死（auto=跟随提示）
+
+    // —— 托盘（tray_menu）——
+    Instance *instance() const { return instance_; } // tray_menu 回调用
+    bool availableOverride() const { return uiDisabled_; }
+    void markBug();     // 菜单：上次输入打 bug 标记（写 buglog）
+    void toggleCard();  // 菜单：Flutter⇄QML 卡（写配置 + 重启 fcitx5）
+    void toggleUi();    // 菜单：aiinput⇄classicui（available 翻转，零重启）
+    std::string cardToggleLabel() const;
+    std::string uiToggleLabel() const;
+    void pushRecentLog(std::string line); // buglog 环形取证
+    std::vector<std::string> recentLog_;
+    bool uiDisabled_ = false; // 托盘切到 classicui 对比时置位
+    friend class AiInputTray;
+    std::unique_ptr<AiInputTray> tray_;
     std::unique_ptr<FlutterEngineHost> flutter_;
     std::unique_ptr<EventSourceTime> warmupTimer_; // 加载后预热引擎+popup
     std::unique_ptr<EventSourceTime> policyPullTimer_; // 加载后拉定位策略

@@ -1829,8 +1829,14 @@ void VoicePopup::showPanel(InputContext *ic) {
         return;
     }
     if (x11Mode_) {
-        // X OR 卡片是语音卡路径；候选窗的 X 应用覆盖为已知缺口
-        //（与拆分前一致——拆分前候选窗 surface 从未 map，无此路径）
+        // X OR 窗点亮（relay 帧经 pushFrameRelay-X11 上屏）：光标矩形
+        // 移窗（GTK/Qt 的 X 应用给 X 物理坐标；D-Bus 前端给窗口局部坐
+        // 标，rectIsXPhysical 分流在 anchorOverlayLocked/ensurePopup）
+        if (ic->cursorRect().height() > 0) {
+            xLastRect_ = ic->cursorRect();
+            moveX11WindowLocked(ic->cursorRect());
+        }
+        visible_ = true;
         return;
     }
     panelIc_ = ic->watch();
@@ -2073,31 +2079,44 @@ void VoicePopup::pushFrameRelay(int w, int h, const uint8_t *bgra) {
     if (w <= 0 || h <= 0 || w > 4096 || h > 4096) {
         return;
     }
-    if (!surface_ || x11Mode_ || !buffers_[0] ||
+    // 逻辑尺寸同步先行：X11 分支的物理尺寸校验依赖 logicalW_/H_
+    {
+        const double scRelay = scale();
+        const int lwRelay = static_cast<int>(w / scRelay + 0.5);
+        const int lhRelay = static_cast<int>(h / scRelay + 0.5);
+        if (lwRelay != logicalW_ || lhRelay != logicalH_) {
+            logicalW_ = lwRelay;
+            logicalH_ = lhRelay;
+            if (topMode_ && layerSurface_) {
+                zwlr_layer_surface_v1_set_size(layerSurface_, lwRelay,
+                                               lhRelay);
+            }
+            if (overlayFallback_ && dbusFollow_) {
+                anchorOverlayLocked(icRef_.get());
+            }
+        }
+    }
+    // X 应用（WPS 等）走 X OR 窗：relay 帧此前在 x11Mode_ 直接丢弃
+    //（黑框一闪即 OR 窗空壳 map 后无帧）——镜像 pushFrameBGRA-X11
+    if (x11Mode_) {
+        if (!visible_ || decisionPending_ || xBroken_) {
+            return;
+        }
+        const double sc = scale();
+        const int pw = static_cast<int>(logicalW_ * sc + 0.5);
+        const int ph = static_cast<int>(logicalH_ * sc + 0.5);
+        if (pw > 0 && (w != pw || h != ph)) {
+            return;
+        }
+        pushFrameX11Locked(bgra, w, h);
+        return;
+    }
+    if (!surface_ || !buffers_[0] ||
         (topMode_ ? !layerSurface_ : !popup_)) {
         return;
     }
     if (w != width_ || h != height_) {
         resizeLocked(w, h);
-    }
-    // relay 路径的逻辑尺寸同步：Flutter 路径由 Dart resize 消息经
-    // setLogicalSize 单点负责，relay 没有 Dart——逻辑尺寸若不跟帧走，
-    // layer surface 的 set_size 永远停在创建默认值（360x200），与提交
-    // buffer 长期不匹配（layer-shell 客户端 bug），合成器对不匹配的摆
-    // 放未定义（容器 niri 实测：帧内容下移 28px 且只显示 108/165）
-    const double scRelay = scale();
-    const int lwRelay = static_cast<int>(w / scRelay + 0.5);
-    const int lhRelay = static_cast<int>(h / scRelay + 0.5);
-    if (lwRelay != logicalW_ || lhRelay != logicalH_) {
-        logicalW_ = lwRelay;
-        logicalH_ = lhRelay;
-        if (topMode_ && layerSurface_) {
-            zwlr_layer_surface_v1_set_size(layerSurface_, lwRelay, lhRelay);
-        }
-        // 尺寸变化影响翻转/钳制算术：按新卡高重锚
-        if (overlayFallback_ && dbusFollow_) {
-            anchorOverlayLocked(icRef_.get());
-        }
     }
     if (topMode_ && !layerConfigured_) {
         return;

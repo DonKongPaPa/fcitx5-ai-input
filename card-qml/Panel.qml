@@ -36,6 +36,17 @@ Rectangle {
     // 面板最大宽：长 preedit/长候选（通配输入）把内容宽撑到爆屏——封顶后
     // preedit/候选折行、条目省略（classicui 同策略）
     readonly property int maxW: Math.round(640 * theme.scale)
+    // 光标候选滚动偏移：以光标候补为中心，钳入 [0, 条宽-可视宽]
+    readonly property int candScroll: {
+        var it = candRepeater.itemAt(panel.cursor)
+        if (!it || it.x < 0) {
+            return 0
+        }
+        var vis = Math.min(candStrip.implicitWidth, maxW - 2 * pad)
+        var center = it.x + it.width / 2
+        var maxOff = Math.max(0, candStrip.implicitWidth - vis)
+        return Math.max(0, Math.min(Math.round(center - vis / 2), maxOff))
+    }
     implicitWidth: Math.min(content.implicitWidth + 2 * pad, maxW)
     implicitHeight: content.implicitHeight + 2 * pad
     radius: theme.radius
@@ -105,15 +116,22 @@ Rectangle {
             font.pixelSize: panel.theme.fontSize
         }
 
-        // 候选排列恒为两态之一（horizontal=Flow 可折行 / vertical=Column），
-        // 宽度受 maxW 封顶；长候选条目省略号截断（份额×N 通配输入实测反馈）
-        Flow {
-            width: panel.maxW - 2 * pad
+        // 候选排列恒为两态之一：horizontal = 单行条（宽度封顶内截断 +
+        // 光标候补自动滚入，不省略）；vertical = 纵列。份额×N 通配实测反馈
+        Item {
+            width: parent.width
+            height: candStrip.implicitHeight
+            clip: true
             visible: panel.layoutMode === "horizontal"
-            spacing: Math.round(4 * panel.theme.scale)
-            Repeater {
-                model: panel.candidates
-                delegate: PanelCand {}
+            Row {
+                id: candStrip
+                x: -panel.candScroll
+                spacing: Math.round(4 * panel.theme.scale)
+                Repeater {
+                    id: candRepeater
+                    model: panel.candidates
+                    delegate: PanelCand {}
+                }
             }
         }
 
@@ -174,11 +192,6 @@ Rectangle {
                 color: panel.theme.textOnSurface
                 font.family: panel.theme.fontFamily
                 font.pixelSize: panel.theme.fontSize
-                // 长候选省略截断（通配输入的份额×N 实测反馈）
-                elide: Text.ElideRight
-                maximumLineCount: 1
-                width: Math.min(implicitWidth,
-                                Math.round(280 * panel.theme.scale))
             }
             Text {
                 anchors.verticalCenter: parent.verticalCenter

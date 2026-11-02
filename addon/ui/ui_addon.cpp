@@ -2,6 +2,7 @@
 
 #include "flutter_engine.h"
 #include "popup_surface.h"
+#include "tray_menu.h"
 
 #include <fcitx-utils/log.h>
 #include <fcitx/addonmanager.h>
@@ -25,6 +26,10 @@
 #include <chrono>
 #include <cstdlib>
 #include <cstring>
+#include <filesystem>
+
+#include <dbus_public.h> // Arch Fcitx5ModuleDBus config 根=叶子目录
+#include <fcitx/userinterfacemanager.h>
 
 #include "json_util.h"
 #include "proto_line.h"
@@ -303,6 +308,10 @@ AiInputUi::AiInputUi(Instance *instance) : instance_(instance) {
         }
     }
 
+    // 自有托盘（对比工具条）：bug 标记 / 卡切换 / UI 切换。与 fcitx5 内
+    // 建 SNI（classicui 持有，本 UI 活跃时被其 suspend disable）并存
+    tray_ = std::make_unique<AiInputTray>(this);
+
     // 定位策略拉取：引擎构造期推送在本 addon 加载前发生（实测竞态 2.3ms
     // 差，推送静默丢弃）→ dbusFollow 停默认 false、D-Bus 前端应用跟随全
     // 灭。构造期直接查引擎实测拿不到（addon 装载阶段内查询不可靠），挪
@@ -471,9 +480,14 @@ void AiInputUi::update(UserInterfaceComponent component,
 }
 
 bool AiInputUi::available() {
-    // 无条件 true：Flutter 引擎 5s 预热期间 UI 选择不能跳过我们——
-    // classicui 的 available() 同样恒 true。引擎未就绪时面板暂不渲染
-    //（send 落空），就绪后下一次引擎 update() 即出面板
+    // 托盘「切换 classicui 对比」置位时让位（manager 重选落到 classicui，
+    // 其托盘/候选窗照常回来；复位即切回本 UI，零重启）
+    if (uiDisabled_) {
+        return false;
+    }
+    // 恒 true：Flutter 引擎 5s 预热期间 UI 选择不能跳过我们——classicui
+    // 同款。引擎未就绪时面板暂不渲染（send 落空），就绪后下一次引擎
+    // update() 即出面板
     return true;
 }
 
@@ -712,6 +726,122 @@ void AiInputUi::deferredMetrics(int w, int h) {
     }
 }
 
-} // namespace fcitx
 
 FCITX_ADDON_FACTORY(fcitx::AiInputUiFactory)
+
+// —— 托盘菜单动作（tray_menu 回调）——————————————————————
+
+void AiInputUi::pushRecentLog(std::string line) {
+    // bug 取证环形缓冲：最近 60 条（envelope/面板数据/caret）
+    auto now = std::chrono::system_clock::now();
+    auto tms = std::chrono::duration_cast<std::chrono::milliseconds>(
+                   now.time_since_epoch())
+                   .count();
+    recentLog_.push_back("[" + std::to_string(tms) + "] " + std::move(line));
+    if (recentLog_.size() > 60) {
+        recentLog_.erase(recentLog_.begin());
+    }
+}
+
+void AiInputUi::markBug() {
+    // 标记上次输入为 bug：把环形缓冲 + 当下状态落 buglog.txt（提交 issue
+    // 时整段贴走即可）
+    std::string path;
+    if (const char *xdg = getenv("XDG_DATA_HOME"); xdg && *xdg) {
+        path = xdg;
+    } else if (const char *home = getenv("HOME"); home && *home) {
+        path = std::string(home) + "/.local/share";
+    }
+    path += "/fcitx5-aiinput";
+    std::filesystem::create_directories(path);
+    path += "/buglog.txt";
+    std::ofstream f(path, std::ios::app);
+    if (!f) {
+        FCITX_WARN() << "AiInputUi: buglog 写入失败 " << path;
+        return;
+    }
+    const auto bugNow = std::chrono::system_clock::now();
+    f << "==== BUG MARK "
+      << std::chrono::duration_cast<std::chrono::seconds>(
+             bugNow.time_since_epoch())
+             .count()
+       << " (v" << AIINPUT_VERSION_STRING << ", card="
+       << (flutterCard_ ? "flutter" : "qml-relay")
+       << ", layout=" << panelLayout_
+       << ", ui=" << (uiDisabled_ ? "classicui-compare" : "aiinput") << ") ====\n";
+    for (auto &l : recentLog_) {
+        f << l << "\n";
+    }
+    f << "\n";
+    FCITX_INFO() << "AiInputUi: [bugmark] 已写 " << path << "（"
+                 << recentLog_.size() << " 条）";
+}
+
+void AiInputUi::toggleCard() {
+    // Flutter⇄QML：写一对互补键后整进程重启（卡基建在构造期，Restart
+    // 是唯一干净路径；对比场景可接受 1s 断线）
+    std::string newFlutter = flutterCard_ ? "False" : "True";
+    std::string newQml = flutterCard_ ? "True" : "False";
+    std::string path;
+    if (const char *home = getenv("HOME"); home && *home) {
+        path = std::string(home) + "/.config/fcitx5/conf/aiinput.config";
+    }
+    {
+        std::ifstream in(path);
+        std::ostringstream body;
+        std::string line;
+        bool sawF = false, sawQ = false;
+        // 顶层键统一前置（避开 [TriggerKeys] 组捕获——三次踩过的坑）
+        body << "FlutterCard=" << newFlutter << "\n"
+             << "QmlCard=" << newQml << "\n";
+        while (std::getline(in, line)) {
+            if (line.rfind("FlutterCard=", 0) == 0) {
+                sawF = true;
+                continue;
+            }
+            if (line.rfind("QmlCard=", 0) == 0) {
+                sawQ = true;
+                continue;
+            }
+            body << line << "\n";
+        }
+        (void)sawF;
+        (void)sawQ;
+        std::ofstream out(path, std::ios::trunc);
+        out << body.str();
+    }
+    FCITX_INFO() << "AiInputUi: [toggle-card] FlutterCard=" << newFlutter
+                 << " QmlCard=" << newQml << "，重启 fcitx5 生效";
+    if (auto *dbusMod =
+            instance_->addonManager().addon("dbus", true)) {
+        if (auto *bus = dbusMod->call<IDBusModule::bus>()) {
+            auto call = bus->createMethodCall("org.fcitx.Fcitx5",
+                                              "/controller",
+                                              "org.fcitx.Fcitx.Controller1",
+                                              "Restart");
+            call.callAsync(0, [](dbus::Message &) { return true; });
+            bus->flush();
+        }
+    }
+}
+
+void AiInputUi::toggleUi() {
+    // aiinput⇄classicui：available() 翻转 + 管理器重选（零重启，托盘/候选
+    // 窗都随之切换）
+    uiDisabled_ = !uiDisabled_;
+    FCITX_INFO() << "AiInputUi: [toggle-ui] "
+                 << (uiDisabled_ ? "→ classicui 对比" : "→ aiinput");
+    instance_->userInterfaceManager().updateAvailability();
+}
+
+std::string AiInputUi::cardToggleLabel() const {
+    return std::string("切换到 ") + (flutterCard_ ? "QML 卡" : "Flutter 卡") +
+           "（当前：" + (flutterCard_ ? "Flutter" : "QML") + "，重启生效）";
+}
+
+std::string AiInputUi::uiToggleLabel() const {
+    return std::string("切换到 ") + (uiDisabled_ ? "aiinput" : "classicui") +
+           " 候选（当前：" + (uiDisabled_ ? "classicui" : "aiinput") + "）";
+}
+
+} // namespace fcitx
