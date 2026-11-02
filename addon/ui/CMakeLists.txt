@@ -6,6 +6,7 @@ add_library(aiinputui MODULE)
 target_sources(aiinputui PRIVATE
     ui_addon.cpp
     socket_ui.cpp
+    tray_menu.cpp
     surfaces/popup_surface.cpp
     embedder/flutter_engine.cpp
     ../src/hub/ui_bus.cpp

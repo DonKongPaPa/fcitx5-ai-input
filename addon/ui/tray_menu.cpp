@@ -6,7 +6,7 @@
 #include <fcitx-utils/log.h>
 #include <fcitx/addonmanager.h>
 #include <fcitx/instance.h>
-#include <fcitx/modules/dbus/dbus_public.h>
+#include <dbus_public.h> // Arch Fcitx5ModuleDBus config 根=叶子目录
 
 #include <algorithm>
 #include <fstream>
@@ -92,9 +92,9 @@ void AiInputTray::registerSNI() {
     call << privateBus_->uniqueName();
     pendingRegisterCall_ = call.callAsync(0, [this](dbus::Message &msg) {
         std::unique_ptr<dbus::Slot> call = std::move(pendingRegisterCall_);
-        setRegistered(!msg.isError());
-        FCITX_INFO() << "AiInputTray: SNI 注册 " << (registered_ ? "成功"
-                                                                : "失败");
+        registered_ = !msg.isError();
+        FCITX_INFO() << "AiInputTray: SNI 注册 "
+                     << (registered_ ? "成功" : "失败");
         return true;
     });
     privateBus_->flush();
@@ -132,8 +132,8 @@ dbus::Variant AiInputMenu::getProperty(int32_t id, const std::string &name) {
     MenuProperties properties;
     fillProperties(id, properties);
     for (auto &p : properties) {
-        if (p.first == name) {
-            return p.second;
+        if (p.key() == name) {
+            return p.value();
         }
     }
     return dbus::Variant();
@@ -157,7 +157,7 @@ void AiInputMenu::fillLayoutItem(
     }
 }
 
-std::tuple<uint32_t, AiInputMenu::MenuLayout>
+std::tuple<uint32_t, MenuLayout>
 AiInputMenu::getLayout(int32_t parentId, int32_t depth,
                        const std::vector<std::string> &propertyNames) {
     std::unordered_set<std::string> names(propertyNames.begin(),

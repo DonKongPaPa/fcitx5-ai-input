@@ -76,6 +76,15 @@ public:
     FCITX_ADDON_EXPORT_FUNCTION(AiInputUi, uiResolvePending);
     FCITX_ADDON_EXPORT_FUNCTION(AiInputUi, uiPrimePreedit);
 
+    // —— 托盘（tray_menu 回调，menu vtable 类非 friend 须公开）——
+    Instance *instance() const { return instance_; }
+    void markBug();     // 菜单：上次输入打 bug 标记（写 buglog）
+    void toggleCard();  // 菜单：Flutter⇄QML 卡（写配置 + 重启 fcitx5）
+    void toggleUi();    // 菜单：aiinput⇄classicui（available 翻转，零重启）
+    std::string cardToggleLabel() const;
+    std::string uiToggleLabel() const;
+    void pushRecentLog(std::string line); // buglog 环形取证
+
 private:
     // 引擎 addon 现取（缺席返回 null——拆分契约：静默降级不报错）
     AddonInstance *engine() const;
@@ -107,15 +116,8 @@ private:
     TrackableObjectReference<InputContext> panelIcRef_;
     std::string panelLayout_ = "auto"; // PanelLayout 钉死（auto=跟随提示）
 
-    // —— 托盘（tray_menu）——
-    Instance *instance() const { return instance_; } // tray_menu 回调用
-    bool availableOverride() const { return uiDisabled_; }
-    void markBug();     // 菜单：上次输入打 bug 标记（写 buglog）
-    void toggleCard();  // 菜单：Flutter⇄QML 卡（写配置 + 重启 fcitx5）
-    void toggleUi();    // 菜单：aiinput⇄classicui（available 翻转，零重启）
-    std::string cardToggleLabel() const;
-    std::string uiToggleLabel() const;
-    void pushRecentLog(std::string line); // buglog 环形取证
+
+private:
     std::vector<std::string> recentLog_;
     bool uiDisabled_ = false; // 托盘切到 classicui 对比时置位
     friend class AiInputTray;
