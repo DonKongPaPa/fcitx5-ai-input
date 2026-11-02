@@ -21,7 +21,14 @@ echo "== 0) 写纯 QML relay 配置并重启 fcitx5"
 # testapp 拉去 D-Bus 前端（case-driver 同款纪律）
 unset GTK_IM_MODULE QT_IM_MODULE SDL_IM_MODULE XMODIFIERS
 mkdir -p "$HOME/.config/fcitx5/conf"
-printf 'FlutterCard=False\nQmlCard=True\n' > "$HOME/.config/fcitx5/conf/aiinput.config"
+# FLUTTER_AB=1：同场景 Flutter 卡对照（配置与截图前缀切换，锚定序列不变）
+if [ -n "${FLUTTER_AB:-}" ]; then
+    printf 'FlutterCard=True\n' > "$HOME/.config/fcitx5/conf/aiinput.config"
+    SHOT_PREFIX="flutter"
+else
+    printf 'FlutterCard=False\nQmlCard=True\n' > "$HOME/.config/fcitx5/conf/aiinput.config"
+    SHOT_PREFIX="relay"
+fi
 pkill -x fcitx5 2>/dev/null || true
 sleep 1
 # STRACE_FCHEB（诊断轮可选）：罩住 fcitx5 重启，抓 socket 路径的 unlink 凶手
@@ -62,9 +69,9 @@ if ! grep -aq "帧通道已连接" "$FCITX_LOG"; then
         stat /run/user/1000/aiinput-card.sock 2>&1 || true
         echo "== mount namespace 三方对照："
         echo "driver : $(readlink /proc/self/ns/mnt 2>&1)"
-        F5PID="$(pgrep -x fcitx5 | tail -1)"
+        F5PID="$(pgrep -x fcitx5 | tail -1)" || true
         echo "fcitx5($F5PID): $(readlink /proc/$F5PID/ns/mnt 2>&1)"
-        HPID="$(pgrep -f aiinput-card-host | tail -1)"
+        HPID="$(pgrep -f aiinput-card-host | tail -1)" || true
         echo "host($HPID): $(readlink /proc/$HPID/ns/mnt 2>&1)"
         echo "== fcitx5 mountinfo /run 行："
         grep " /run" "/proc/$F5PID/mountinfo" 2>&1 || true
@@ -124,17 +131,17 @@ IC_PID=$!
 
 # 时序对齐：rect+400ms press → 450ms 阈值 → recording（~t+2.5s 截语音帧）
 sleep 3
-shot "$OUT_DIR/relay-voice.png"
+shot "$OUT_DIR/${SHOT_PREFIX:-relay}-voice.png"
 # release→tail→asr final→Esc→pinyin 5 键（~t+9.5s 起候选）；~t+11/12.2/13.4
 # 三次 rect 重锚——t+11.2/12.4/13.6 各截一张
 sleep 5
-shot "$OUT_DIR/relay-panel-posA.png"
+shot "$OUT_DIR/${SHOT_PREFIX:-relay}-panel-posA.png"
 sleep 1.2
-shot "$OUT_DIR/relay-panel-posB.png"
+shot "$OUT_DIR/${SHOT_PREFIX:-relay}-panel-posB.png"
 sleep 1.2
-shot "$OUT_DIR/relay-panel-posC.png"
+shot "$OUT_DIR/${SHOT_PREFIX:-relay}-panel-posC.png"
 sleep 1.2
-shot "$OUT_DIR/relay-panel-posD.png"
+shot "$OUT_DIR/${SHOT_PREFIX:-relay}-panel-posD.png"
 wait "$IC_PID" 2>/dev/null || true
 
 echo "== 4) 帧证据与异常扫描"

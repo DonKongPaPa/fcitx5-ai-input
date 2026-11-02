@@ -2080,6 +2080,25 @@ void VoicePopup::pushFrameRelay(int w, int h, const uint8_t *bgra) {
     if (w != width_ || h != height_) {
         resizeLocked(w, h);
     }
+    // relay 路径的逻辑尺寸同步：Flutter 路径由 Dart resize 消息经
+    // setLogicalSize 单点负责，relay 没有 Dart——逻辑尺寸若不跟帧走，
+    // layer surface 的 set_size 永远停在创建默认值（360x200），与提交
+    // buffer 长期不匹配（layer-shell 客户端 bug），合成器对不匹配的摆
+    // 放未定义（容器 niri 实测：帧内容下移 28px 且只显示 108/165）
+    const double scRelay = scale();
+    const int lwRelay = static_cast<int>(w / scRelay + 0.5);
+    const int lhRelay = static_cast<int>(h / scRelay + 0.5);
+    if (lwRelay != logicalW_ || lhRelay != logicalH_) {
+        logicalW_ = lwRelay;
+        logicalH_ = lhRelay;
+        if (topMode_ && layerSurface_) {
+            zwlr_layer_surface_v1_set_size(layerSurface_, lwRelay, lhRelay);
+        }
+        // 尺寸变化影响翻转/钳制算术：按新卡高重锚
+        if (overlayFallback_ && dbusFollow_) {
+            anchorOverlayLocked(icRef_.get());
+        }
+    }
     if (topMode_ && !layerConfigured_) {
         return;
     }

@@ -30,6 +30,9 @@ Item {
     Card {
         id: card
         theme: themeObj
+        // idle 不画（shell.qml 靠窗口退场隐藏 idle 胶囊，headless 无窗口
+        // ——不隐藏会把 idle 提示叠画面板帧，实测幽灵字）
+        visible: mode !== "idle"
         onSelectRequested: index => Host.sendEnvelope("select",
                                                       { index: index })
         onHoverRequested: row => Host.sendEnvelope("hover", { row: row })
